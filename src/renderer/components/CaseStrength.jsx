@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { colors, shadows, spacing, typography, radius } from '../styles/tokens';
 
-export default function CaseStrength({ analysis, onClose }) {
+export default function CaseStrength({ analysis, jurisdiction = 'both', onClose }) {
   const [expandedPrecedent, setExpandedPrecedent] = useState(null);
 
   if (!analysis) return null;
@@ -15,7 +15,7 @@ export default function CaseStrength({ analysis, onClose }) {
         <div style={styles.header}>
           <div>
             <h2 style={styles.title}>Case Strength Analysis</h2>
-            <p style={styles.subtitle}>Based on federal employment law precedents</p>
+            <p style={styles.subtitle}>Based on {jurisdiction === 'federal' ? 'federal' : jurisdiction === 'state' ? 'Florida / 11th Circuit' : 'federal and state'} employment law precedents</p>
           </div>
           <button style={styles.closeBtn} onClick={onClose}>&times;</button>
         </div>

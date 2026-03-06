@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS case_context (
   hire_date DATE,
   protected_activities_json TEXT,
   case_type TEXT,
+  jurisdiction TEXT CHECK(jurisdiction IN ('federal', 'state', 'both')) DEFAULT 'both',
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

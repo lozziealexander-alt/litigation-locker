@@ -53,6 +53,20 @@ contextBridge.exposeInMainWorld('api', {
     getMembers: (groupId) => ipcRenderer.invoke('groups:getMembers', groupId)
   },
 
+  // Jurisdiction
+  jurisdiction: {
+    get: () => ipcRenderer.invoke('jurisdiction:get'),
+    set: (value) => ipcRenderer.invoke('jurisdiction:set', value)
+  },
+
+  // Incident operations
+  incidents: {
+    list: () => ipcRenderer.invoke('incidents:list'),
+    create: (data) => ipcRenderer.invoke('incidents:create', data),
+    update: (id, updates) => ipcRenderer.invoke('incidents:update', id, updates),
+    delete: (id) => ipcRenderer.invoke('incidents:delete', id)
+  },
+
   // Timeline operations
   timeline: {
     get: () => ipcRenderer.invoke('timeline:get'),
@@ -61,7 +75,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Precedent analysis
   precedents: {
-    analyze: () => ipcRenderer.invoke('precedents:analyze'),
+    analyze: (jurisdiction) => ipcRenderer.invoke('precedents:analyze', jurisdiction),
     getDocumentBadges: (docId) => ipcRenderer.invoke('precedents:getDocumentBadges', docId)
   },
 

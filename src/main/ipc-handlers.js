@@ -1,5 +1,6 @@
 const { ipcMain, dialog } = require('electron');
 const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
 const keyManager = require('./crypto/key-derivation');
 const { burn, verifyBurn } = require('./crypto/kill-switch');
 const db = require('./database/init');
@@ -7,6 +8,7 @@ const { processFiles } = require('./ingest/file-processor');
 const { analyzeConnections, detectEscalationPattern } = require('./analysis/timeline-connections');
 const { analyzeAllPrecedents, getDocumentPrecedentBadges } = require('./analysis/precedent-matcher');
 const { classifyEvidence } = require('./ingest/evidence-classifier');
+const { detectIncidents, computeSeverity } = require('./analysis/incident-detector');
 
 // Track currently open case
 let currentCaseDb = null;
@@ -166,8 +168,20 @@ function registerIpcHandlers() {
         inserted.push(docToSummary(doc));
       }
 
-      console.log('[IPC] inserted', inserted.length, 'documents successfully');
-      return { success: true, documents: inserted, errors };
+      // Detect potential incidents from ingested documents
+      const allDetectedIncidents = [];
+      for (const doc of documents) {
+        const allText = [doc.extracted_text, doc.ocr_text].filter(Boolean).join('\n');
+        if (allText) {
+          const detected = detectIncidents(allText, doc.document_date, doc.id);
+          if (detected.length > 0) {
+            allDetectedIncidents.push(...detected);
+          }
+        }
+      }
+
+      console.log('[IPC] inserted', inserted.length, 'documents,', allDetectedIncidents.length, 'potential incidents detected');
+      return { success: true, documents: inserted, errors, detectedIncidents: allDetectedIncidents };
     } catch (error) {
       console.error('[IPC] documents:ingest EXCEPTION:', error.message, error.stack);
       return { success: false, error: error.message };
@@ -475,10 +489,19 @@ function registerIpcHandlers() {
 
   // ==================== PRECEDENTS ====================
 
-  ipcMain.handle('precedents:analyze', async () => {
+  ipcMain.handle('precedents:analyze', async (event, jurisdictionOverride) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
+      }
+
+      // Get jurisdiction from case_context or use override
+      let jurisdiction = jurisdictionOverride || 'both';
+      if (!jurisdictionOverride) {
+        const ctx = currentCaseDb.prepare(
+          "SELECT jurisdiction FROM case_context WHERE id = 1"
+        ).get();
+        jurisdiction = ctx?.jurisdiction || 'both';
       }
 
       const documents = currentCaseDb.prepare(`
@@ -490,13 +513,12 @@ function registerIpcHandlers() {
         ORDER BY document_date ASC
       `).all();
 
-      // We don't have actors/incidents tables populated yet
       const incidents = [];
       const actors = [];
 
-      const analysis = analyzeAllPrecedents(documents, incidents, actors);
+      const analysis = analyzeAllPrecedents(documents, incidents, actors, jurisdiction);
 
-      return { success: true, analysis };
+      return { success: true, analysis, jurisdiction };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -688,6 +710,196 @@ function registerIpcHandlers() {
         UPDATE documents SET group_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?
       `).run(docId);
 
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== INCIDENTS ====================
+
+  ipcMain.handle('incidents:list', async () => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const incidents = currentCaseDb.prepare(`
+        SELECT * FROM incidents
+        ORDER BY incident_date DESC, created_at DESC
+      `).all();
+
+      return { success: true, incidents };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('incidents:create', async (event, incidentData) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const id = uuidv4();
+
+      // Read jurisdiction for severity computation
+      const ctx = currentCaseDb.prepare(
+        "SELECT jurisdiction FROM case_context WHERE id = 1"
+      ).get();
+      const jurisdiction = ctx?.jurisdiction || 'both';
+
+      // Compute severity with factors
+      const severityResult = computeSeverity(incidentData, incidentData.context || {}, jurisdiction);
+
+      const stmt = currentCaseDb.prepare(`
+        INSERT INTO incidents (
+          id, title, description, incident_date, date_confidence,
+          incident_type, base_severity, computed_severity, severity_factors_json,
+          involves_retaliation, days_after_protected_activity
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      stmt.run(
+        id,
+        incidentData.title,
+        incidentData.description || '',
+        incidentData.date,
+        incidentData.dateConfidence || 'exact',
+        incidentData.type,
+        incidentData.severity || incidentData.suggestedSeverity,
+        severityResult.computedSeverity,
+        JSON.stringify(severityResult.factors),
+        incidentData.involvesRetaliation ? 1 : 0,
+        incidentData.daysAfterProtectedActivity || null
+      );
+
+      // Link to source document if provided
+      if (incidentData.sourceDocumentId) {
+        const linkStmt = currentCaseDb.prepare(`
+          INSERT INTO incident_documents (incident_id, document_id, relationship)
+          VALUES (?, ?, 'source')
+        `);
+        linkStmt.run(id, incidentData.sourceDocumentId);
+      }
+
+      return {
+        success: true,
+        incident: {
+          id,
+          title: incidentData.title,
+          description: incidentData.description || '',
+          incident_date: incidentData.date,
+          incident_type: incidentData.type,
+          base_severity: incidentData.severity || incidentData.suggestedSeverity,
+          computed_severity: severityResult.computedSeverity,
+          severity_factors: severityResult.factors
+        }
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('incidents:update', async (event, incidentId, updates) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const fields = [];
+      const values = [];
+
+      if (updates.title !== undefined) {
+        fields.push('title = ?');
+        values.push(updates.title);
+      }
+      if (updates.description !== undefined) {
+        fields.push('description = ?');
+        values.push(updates.description);
+      }
+      if (updates.date !== undefined) {
+        fields.push('incident_date = ?');
+        values.push(updates.date);
+      }
+      if (updates.severity !== undefined) {
+        fields.push('base_severity = ?');
+        values.push(updates.severity);
+      }
+      if (updates.type !== undefined) {
+        fields.push('incident_type = ?');
+        values.push(updates.type);
+      }
+
+      fields.push('updated_at = datetime("now")');
+      values.push(incidentId);
+
+      const stmt = currentCaseDb.prepare(
+        `UPDATE incidents SET ${fields.join(', ')} WHERE id = ?`
+      );
+      stmt.run(...values);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('incidents:delete', async (event, incidentId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      // Delete links first
+      currentCaseDb.prepare('DELETE FROM incident_documents WHERE incident_id = ?').run(incidentId);
+      currentCaseDb.prepare('DELETE FROM incident_actors WHERE incident_id = ?').run(incidentId);
+
+      // Delete incident
+      currentCaseDb.prepare('DELETE FROM incidents WHERE id = ?').run(incidentId);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== JURISDICTION ====================
+
+  ipcMain.handle('jurisdiction:get', async () => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+      const row = currentCaseDb.prepare(
+        "SELECT jurisdiction FROM case_context WHERE id = 1"
+      ).get();
+      return { success: true, jurisdiction: row?.jurisdiction || 'both' };
+    } catch (error) {
+      return { success: true, jurisdiction: 'both' };
+    }
+  });
+
+  ipcMain.handle('jurisdiction:set', async (event, jurisdiction) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+      if (!['federal', 'state', 'both'].includes(jurisdiction)) {
+        return { success: false, error: 'Invalid jurisdiction value' };
+      }
+      const existing = currentCaseDb.prepare(
+        "SELECT id FROM case_context WHERE id = 1"
+      ).get();
+      if (existing) {
+        currentCaseDb.prepare(
+          "UPDATE case_context SET jurisdiction = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1"
+        ).run(jurisdiction);
+      } else {
+        currentCaseDb.prepare(
+          "INSERT INTO case_context (id, jurisdiction) VALUES (1, ?)"
+        ).run(jurisdiction);
+      }
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };

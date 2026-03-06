@@ -146,6 +146,13 @@ function openCase(caseId) {
     `);
   }
 
+  // Add jurisdiction column to case_context (jurisdiction toggle)
+  const contextColumns = caseDb.prepare("PRAGMA table_info(case_context)").all();
+  const contextColumnNames = contextColumns.map(c => c.name);
+  if (!contextColumnNames.includes('jurisdiction')) {
+    caseDb.exec("ALTER TABLE case_context ADD COLUMN jurisdiction TEXT DEFAULT 'both'");
+  }
+
   return caseDb;
 }
 

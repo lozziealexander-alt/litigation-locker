@@ -452,15 +452,32 @@ const PRECEDENTS = {
 /**
  * Analyze case evidence against all precedents
  */
-function analyzeAllPrecedents(documents, incidents = [], actors = []) {
+function analyzeAllPrecedents(documents, incidents = [], actors = [], jurisdiction = 'both') {
   const results = {};
 
   for (const [key, precedent] of Object.entries(PRECEDENTS)) {
-    results[key] = analyzePrecedent(precedent, documents, incidents, actors);
+    // Filter precedents by jurisdiction
+    const precJurisdiction = precedent.jurisdiction || 'federal';
+    if (jurisdiction === 'federal' && precJurisdiction === 'FL') continue;
+    if (jurisdiction === 'state' && precJurisdiction === 'federal') continue;
+
+    results[key] = analyzePrecedent(precedent, documents, incidents, actors, jurisdiction);
   }
 
-  // Calculate overall case strength — include FL precedents when relevant
-  const keyPrecedents = ['burlington_northern', 'harris'];
+  // Build key precedents based on jurisdiction
+  const keyPrecedents = [];
+  if (jurisdiction !== 'state') {
+    keyPrecedents.push('burlington_northern', 'harris');
+  }
+  if (jurisdiction !== 'federal') {
+    if (results.harper_fcra) keyPrecedents.push('harper_fcra');
+    if (results.thomas_proximity) keyPrecedents.push('thomas_proximity');
+  }
+  // Fallback: ensure at least one key precedent
+  if (keyPrecedents.length === 0) {
+    const firstKey = Object.keys(results)[0];
+    if (firstKey) keyPrecedents.push(firstKey);
+  }
 
   // Add whistleblower precedent if whistleblower evidence present
   const hasWhistleblower = documents.some(d =>
@@ -477,18 +494,19 @@ function analyzeAllPrecedents(documents, incidents = [], actors = []) {
   return {
     precedents: results,
     caseStrength: Math.round(avgAlignment),
-    primaryPrecedent: determinePrimaryPrecedent(results, documents)
+    primaryPrecedent: determinePrimaryPrecedent(results, documents),
+    jurisdiction
   };
 }
 
 /**
  * Analyze single precedent
  */
-function analyzePrecedent(precedent, documents, incidents, actors) {
+function analyzePrecedent(precedent, documents, incidents, actors, jurisdiction = 'both') {
   const elementResults = {};
 
   for (const element of precedent.elements) {
-    elementResults[element.id] = analyzeElement(element, documents, incidents, actors);
+    elementResults[element.id] = analyzeElement(element, documents, incidents, actors, jurisdiction);
   }
 
   // Calculate alignment
@@ -521,7 +539,7 @@ function analyzePrecedent(precedent, documents, incidents, actors) {
 /**
  * Analyze single element
  */
-function analyzeElement(element, documents, incidents, actors) {
+function analyzeElement(element, documents, incidents, actors, jurisdiction = 'both') {
   let satisfied = false;
   let evidence = [];
   let note = '';
@@ -581,17 +599,23 @@ function analyzeElement(element, documents, incidents, actors) {
     satisfied = (incidentDocs.length + incidents.length) >= element.minIncidents;
   }
 
-  // Check filing deadline
+  // Check filing deadline (jurisdiction-aware)
   if (element.checkType === 'filing_deadline') {
     const now = new Date();
-    const fchrCutoff = new Date(now.getTime() - (365 * 24 * 60 * 60 * 1000));
+    const deadlineDays = jurisdiction === 'federal' ? 300 :
+                         jurisdiction === 'state' ? 365 :
+                         Math.max(300, 365); // 'both' uses more protective window
+    const cutoff = new Date(now.getTime() - (deadlineDays * 24 * 60 * 60 * 1000));
 
     const timelyDocs = documents.filter(d =>
-      d.document_date && new Date(d.document_date) > fchrCutoff
+      d.document_date && new Date(d.document_date) > cutoff
     );
     satisfied = timelyDocs.length > 0;
     if (satisfied) {
-      note = 'Events within FCHR 365-day filing window';
+      const windowLabel = jurisdiction === 'federal' ? 'EEOC 300-day' :
+                          jurisdiction === 'state' ? 'FCHR 365-day' :
+                          'EEOC/FCHR';
+      note = `Events within ${windowLabel} filing window`;
     }
   }
 
@@ -701,13 +725,15 @@ function determinePrimaryPrecedent(results, documents) {
 /**
  * Get precedent badges for a specific document
  */
-function getDocumentPrecedentBadges(document, allResults) {
+function getDocumentPrecedentBadges(document, allResults, jurisdiction = 'both') {
   const badges = [];
   const type = document.evidence_type;
   const secondary = document.evidence_secondary;
+  const showFederal = jurisdiction !== 'state';
+  const showState = jurisdiction !== 'federal';
 
-  // Burlington Northern - if it's protected activity or adverse action
-  if (['PROTECTED_ACTIVITY', 'ADVERSE_ACTION'].includes(type)) {
+  // Burlington Northern - if it's protected activity or adverse action (federal)
+  if (showFederal && ['PROTECTED_ACTIVITY', 'ADVERSE_ACTION'].includes(type)) {
     const bn = allResults.precedents?.burlington_northern;
     if (bn) {
       badges.push({
@@ -720,8 +746,8 @@ function getDocumentPrecedentBadges(document, allResults) {
     }
   }
 
-  // Harris - if it's an incident
-  if (type === 'INCIDENT') {
+  // Harris - if it's an incident (federal)
+  if (showFederal && type === 'INCIDENT') {
     const harris = allResults.precedents?.harris;
     if (harris) {
       badges.push({
@@ -734,8 +760,8 @@ function getDocumentPrecedentBadges(document, allResults) {
     }
   }
 
-  // Harper FCRA - discrimination with adverse action or pay/comparator evidence
-  if (['ADVERSE_ACTION', 'PAY_RECORD', 'SUPPORTING'].includes(type) || ['ADVERSE_ACTION', 'PAY_RECORD'].includes(secondary)) {
+  // Harper FCRA - discrimination with adverse action or pay/comparator evidence (state)
+  if (showState && (['ADVERSE_ACTION', 'PAY_RECORD', 'SUPPORTING'].includes(type) || ['ADVERSE_ACTION', 'PAY_RECORD'].includes(secondary))) {
     const harper = allResults.precedents?.harper_fcra;
     if (harper && harper.alignmentPercent > 30) {
       badges.push({
@@ -748,8 +774,8 @@ function getDocumentPrecedentBadges(document, allResults) {
     }
   }
 
-  // Lewis Mosaic - incidents, adverse actions, or responses showing pretext
-  if (['INCIDENT', 'ADVERSE_ACTION', 'RESPONSE', 'CLAIM_AGAINST_YOU'].includes(type)) {
+  // Lewis Mosaic - incidents, adverse actions, or responses showing pretext (state)
+  if (showState && ['INCIDENT', 'ADVERSE_ACTION', 'RESPONSE', 'CLAIM_AGAINST_YOU'].includes(type)) {
     const lewis = allResults.precedents?.lewis_mosaic;
     if (lewis && lewis.alignmentPercent > 30) {
       badges.push({
@@ -762,8 +788,8 @@ function getDocumentPrecedentBadges(document, allResults) {
     }
   }
 
-  // Monaghan - retaliatory harassment (protected activity or retaliatory incidents)
-  if (['PROTECTED_ACTIVITY', 'INCIDENT'].includes(type) || secondary === 'INCIDENT') {
+  // Monaghan - retaliatory harassment (state)
+  if (showState && (['PROTECTED_ACTIVITY', 'INCIDENT'].includes(type) || secondary === 'INCIDENT')) {
     const monaghan = allResults.precedents?.monaghan_retaliation;
     if (monaghan && monaghan.alignmentPercent > 30) {
       badges.push({
@@ -776,8 +802,8 @@ function getDocumentPrecedentBadges(document, allResults) {
     }
   }
 
-  // Thomas Proximity - protected activity or adverse action (strict timing)
-  if (['PROTECTED_ACTIVITY', 'ADVERSE_ACTION'].includes(type)) {
+  // Thomas Proximity - protected activity or adverse action (state, strict timing)
+  if (showState && ['PROTECTED_ACTIVITY', 'ADVERSE_ACTION'].includes(type)) {
     const thomas = allResults.precedents?.thomas_proximity;
     if (thomas && thomas.alignmentPercent > 30) {
       badges.push({
@@ -790,8 +816,8 @@ function getDocumentPrecedentBadges(document, allResults) {
     }
   }
 
-  // Sierminski Whistleblower - protected activity or adverse action in whistleblower context
-  if (['PROTECTED_ACTIVITY', 'ADVERSE_ACTION', 'REQUEST_FOR_HELP'].includes(type)) {
+  // Sierminski Whistleblower - protected activity or adverse action (state)
+  if (showState && ['PROTECTED_ACTIVITY', 'ADVERSE_ACTION', 'REQUEST_FOR_HELP'].includes(type)) {
     const sierminski = allResults.precedents?.sierminski_whistleblower;
     if (sierminski && sierminski.alignmentPercent > 30) {
       badges.push({
@@ -804,8 +830,8 @@ function getDocumentPrecedentBadges(document, allResults) {
     }
   }
 
-  // Gessner - supporting evidence of actual violation in whistleblower context
-  if (['SUPPORTING', 'PROTECTED_ACTIVITY'].includes(type)) {
+  // Gessner - supporting evidence of actual violation (state)
+  if (showState && ['SUPPORTING', 'PROTECTED_ACTIVITY'].includes(type)) {
     const gessner = allResults.precedents?.gessner_actual_violation;
     if (gessner && gessner.alignmentPercent > 30) {
       badges.push({
@@ -818,8 +844,8 @@ function getDocumentPrecedentBadges(document, allResults) {
     }
   }
 
-  // Muldrow - any adverse action (broadened definition)
-  if (type === 'ADVERSE_ACTION') {
+  // Muldrow - any adverse action, broadened definition (federal)
+  if (showFederal && type === 'ADVERSE_ACTION') {
     const muldrow = allResults.precedents?.muldrow_some_harm;
     if (muldrow && muldrow.alignmentPercent > 30) {
       badges.push({

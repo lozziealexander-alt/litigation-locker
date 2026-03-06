@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { useTheme } from '../styles/ThemeContext';
-import { colors, shadows, spacing, typography, radius, getEvidenceColor } from '../styles/tokens';
+import { colors, shadows, spacing, typography, radius, getEvidenceColor, getSeverityColor } from '../styles/tokens';
 import CaseStrength from '../components/CaseStrength';
+import IncidentApproval from '../components/IncidentApproval';
 
 // Evidence type icons
 const EVIDENCE_ICONS = {
@@ -52,6 +53,10 @@ export default function Timeline({ onSelectDocument }) {
   const [showCaseStrength, setShowCaseStrength] = useState(false);
   const [isIngesting, setIsIngesting] = useState(false);
   const [ingestProgress, setIngestProgress] = useState('');
+  const [incidents, setIncidents] = useState([]);
+  const [pendingIncidents, setPendingIncidents] = useState([]);
+  const [showIncidentApproval, setShowIncidentApproval] = useState(false);
+  const [jurisdiction, setJurisdiction] = useState('both'); // 'federal' | 'state' | 'both'
   const [zoomLevel, setZoomLevel] = useState('day'); // 'year' | 'month' | 'day' | 'hour'
   const [linePositions, setLinePositions] = useState([]);
   const [svgDimensions, setSvgDimensions] = useState({ width: 0, height: 0 });
@@ -126,6 +131,11 @@ export default function Timeline({ onSelectDocument }) {
         setIsIngesting(false);
         setIngestProgress('');
         if (result.success) {
+          // Check for detected incidents
+          if (result.detectedIncidents && result.detectedIncidents.length > 0) {
+            setPendingIncidents(result.detectedIncidents);
+            setShowIncidentApproval(true);
+          }
           loadTimeline();
         } else {
           console.error('[Timeline] ingest failed:', result.error);
@@ -159,10 +169,12 @@ export default function Timeline({ onSelectDocument }) {
   async function loadTimeline() {
     setLoading(true);
     try {
-      const [timelineResult, connectionsResult, precedentResult] = await Promise.all([
+      const [timelineResult, connectionsResult, precedentResult, incidentsResult, jurisdictionResult] = await Promise.all([
         window.api.timeline.get(),
         window.api.timeline.getConnections(),
-        window.api.precedents.analyze()
+        window.api.precedents.analyze(),
+        window.api.incidents.list(),
+        window.api.jurisdiction.get()
       ]);
 
       if (timelineResult.success) {
@@ -189,6 +201,12 @@ export default function Timeline({ onSelectDocument }) {
       }
       if (precedentResult.success) {
         setPrecedentAnalysis(precedentResult.analysis);
+      }
+      if (incidentsResult.success) {
+        setIncidents(incidentsResult.incidents || []);
+      }
+      if (jurisdictionResult.success) {
+        setJurisdiction(jurisdictionResult.jurisdiction);
       }
     } catch (err) {
       console.error('[Timeline] loadTimeline error:', err);
@@ -327,6 +345,16 @@ export default function Timeline({ onSelectDocument }) {
     if (idx > 0) setZoomLevel(ZOOM_LEVELS[idx - 1]);
   }
 
+  async function handleJurisdictionChange(newJurisdiction) {
+    setJurisdiction(newJurisdiction);
+    await window.api.jurisdiction.set(newJurisdiction);
+    // Re-run precedent analysis with new jurisdiction
+    const precedentResult = await window.api.precedents.analyze(newJurisdiction);
+    if (precedentResult.success) {
+      setPrecedentAnalysis(precedentResult.analysis);
+    }
+  }
+
   async function handleImportFiles() {
     try {
       console.log('[Timeline] handleImportFiles called');
@@ -350,6 +378,11 @@ export default function Timeline({ onSelectDocument }) {
           const errMsgs = ingestResult.errors.map(e => `${e.file}: ${e.error}`).join('\n');
           console.warn('[Timeline] import partial errors:', errMsgs);
           alert(`Imported ${imported} file${imported !== 1 ? 's' : ''}. ${errCount} file${errCount !== 1 ? 's' : ''} had errors:\n${errMsgs}`);
+        }
+        // Check for detected incidents
+        if (ingestResult.detectedIncidents && ingestResult.detectedIncidents.length > 0) {
+          setPendingIncidents(ingestResult.detectedIncidents);
+          setShowIncidentApproval(true);
         }
         loadTimeline();
       } else {
@@ -382,6 +415,31 @@ export default function Timeline({ onSelectDocument }) {
       alert('Re-classify error: ' + err.message);
     }
   }
+
+  // ---- Incident approval handlers ----
+  async function handleApproveIncident(incidentData) {
+    const result = await window.api.incidents.create(incidentData);
+    if (result.success) {
+      setIncidents(prev => [...prev, result.incident]);
+    }
+  }
+
+  function handleDismissIncident(incident) {
+    console.log('[Timeline] Dismissed incident:', incident.suggestedTitle);
+  }
+
+  // Merge incidents into timeline groups for rendering
+  const incidentsByDate = useMemo(() => {
+    const map = {};
+    for (const inc of incidents) {
+      if (inc.incident_date) {
+        const dateKey = inc.incident_date.split('T')[0];
+        if (!map[dateKey]) map[dateKey] = [];
+        map[dateKey].push(inc);
+      }
+    }
+    return map;
+  }, [incidents]);
 
   function getEventConnections(eventId) {
     return connections.filter(c =>
@@ -455,6 +513,27 @@ export default function Timeline({ onSelectDocument }) {
               Case: {precedentAnalysis.caseStrength}%
             </button>
           )}
+
+          {/* Jurisdiction toggle */}
+          <div style={styles.jurisdictionToggle}>
+            {['federal', 'state', 'both'].map(j => (
+              <button
+                key={j}
+                style={{
+                  ...styles.jurisdictionBtn,
+                  ...(jurisdiction === j ? styles.jurisdictionBtnActive : {})
+                }}
+                onClick={() => handleJurisdictionChange(j)}
+                title={
+                  j === 'federal' ? 'Federal law only (Title VII, EEOC 300-day)' :
+                  j === 'state' ? 'Florida / 11th Circuit (FCRA, FCHR 365-day)' :
+                  'Both federal and state standards'
+                }
+              >
+                {j === 'federal' ? 'Federal' : j === 'state' ? 'State' : 'Both'}
+              </button>
+            ))}
+          </div>
 
           {/* Semantic zoom controls */}
           {timeline.length > 0 && (
@@ -738,6 +817,36 @@ export default function Timeline({ onSelectDocument }) {
                       );
                     })
                   )}
+
+                  {/* Incident cards for this date group */}
+                  {(zoomLevel === 'day' || zoomLevel === 'hour') && (incidentsByDate[group.key] || []).map(incident => (
+                    <div
+                      key={`incident-${incident.id}`}
+                      style={{
+                        ...styles.incidentCard,
+                        borderLeftColor: getSeverityColor(incident.computed_severity || incident.base_severity)
+                      }}
+                    >
+                      <div style={styles.incidentTypeLabel}>
+                        {incident.incident_type?.replace(/_/g, ' ')}
+                      </div>
+                      <div style={styles.incidentTitle}>
+                        {incident.title}
+                      </div>
+                      {incident.description && (
+                        <div style={styles.incidentDesc}>
+                          {incident.description.slice(0, 120)}{incident.description.length > 120 ? '...' : ''}
+                        </div>
+                      )}
+                      <div style={{
+                        ...styles.severityBadge,
+                        background: getSeverityColor(incident.computed_severity || incident.base_severity) + '20',
+                        color: getSeverityColor(incident.computed_severity || incident.base_severity)
+                      }}>
+                        {incident.computed_severity || incident.base_severity}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             ))}
@@ -785,7 +894,22 @@ export default function Timeline({ onSelectDocument }) {
       {showCaseStrength && (
         <CaseStrength
           analysis={precedentAnalysis}
+          jurisdiction={jurisdiction}
           onClose={() => setShowCaseStrength(false)}
+        />
+      )}
+
+      {/* Incident approval modal */}
+      {showIncidentApproval && pendingIncidents.length > 0 && (
+        <IncidentApproval
+          incidents={pendingIncidents}
+          jurisdiction={jurisdiction}
+          onApprove={handleApproveIncident}
+          onDismiss={handleDismissIncident}
+          onClose={() => {
+            setShowIncidentApproval(false);
+            setPendingIncidents([]);
+          }}
         />
       )}
     </div>
@@ -1009,6 +1133,34 @@ function getStyles() {
     },
     caseStrengthIcon: {
       fontSize: typography.fontSize.base
+    },
+
+    // Jurisdiction toggle
+    jurisdictionToggle: {
+      display: 'flex',
+      alignItems: 'center',
+      background: colors.surfaceAlt,
+      borderRadius: radius.md,
+      border: `1px solid ${colors.border}`,
+      padding: '2px',
+      gap: '1px'
+    },
+    jurisdictionBtn: {
+      padding: `${spacing.xs} ${spacing.sm}`,
+      background: 'none',
+      border: 'none',
+      borderRadius: radius.sm,
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.medium,
+      color: colors.textMuted,
+      cursor: 'pointer',
+      transition: 'all 0.15s ease',
+      whiteSpace: 'nowrap'
+    },
+    jurisdictionBtnActive: {
+      background: colors.primary,
+      color: colors.textInverse,
+      fontWeight: typography.fontWeight.semibold
     },
 
     // Zoom controls
@@ -1496,6 +1648,45 @@ function getStyles() {
       fontSize: typography.fontSize.lg,
       fontWeight: typography.fontWeight.semibold,
       color: colors.primary
+    },
+
+    // Incident cards
+    incidentCard: {
+      background: colors.surface,
+      borderRadius: radius.md,
+      padding: spacing.md,
+      borderLeft: `4px solid ${colors.severityModerate}`,
+      boxShadow: shadows.sm,
+      cursor: 'default',
+      marginTop: spacing.sm
+    },
+    incidentTypeLabel: {
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.semibold,
+      textTransform: 'uppercase',
+      letterSpacing: '0.5px',
+      color: colors.textMuted,
+      marginBottom: spacing.xs
+    },
+    incidentTitle: {
+      fontSize: typography.fontSize.sm,
+      fontWeight: typography.fontWeight.medium,
+      color: colors.textPrimary,
+      marginBottom: spacing.xs
+    },
+    incidentDesc: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textSecondary,
+      lineHeight: typography.lineHeight.relaxed,
+      marginBottom: spacing.sm
+    },
+    severityBadge: {
+      display: 'inline-block',
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.semibold,
+      padding: `2px ${spacing.sm}`,
+      borderRadius: radius.sm,
+      textTransform: 'capitalize'
     }
   };
 }
