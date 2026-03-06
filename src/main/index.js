@@ -55,9 +55,13 @@ app.on('will-quit', async () => {
   await terminateOcr();
 });
 
-// Security: Prevent navigation to external URLs
+// Security: Prevent navigation to external URLs (allow file: for local loads)
 app.on('web-contents-created', (event, contents) => {
   contents.on('will-navigate', (event, navigationUrl) => {
+    // Block all navigations — drops are handled by the renderer's JS, not navigation
     event.preventDefault();
   });
+
+  // Prevent new windows from opening
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
 });

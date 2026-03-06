@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; img-src 'self' data:; object-src 'self' data:; frame-src 'self' data:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; img-src 'self' data:; object-src 'self' data:; frame-src 'self' data:">
   <title>Litigation Locker</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #1a1a2e;
-      color: #f5f0eb;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+      background: #FAFAF8;
+      color: #1A1A1A;
       overflow: hidden;
     }
     #root { height: 100vh; }
-    button:hover { filter: brightness(1.1); }
+    button:hover { filter: brightness(1.05); }
     select { cursor: pointer; }
     @keyframes spin {
       to { transform: rotate(360deg); }
@@ -23,6 +23,11 @@
 </head>
 <body>
   <div id="root"></div>
+  <script>
+    // Allow drops by preventing default dragover (required for drop events to fire).
+    // Drop prevention is handled per-component; this is just the safety net.
+    document.addEventListener('dragover', function(e) { e.preventDefault(); });
+  </script>
   <script src="./bundle.js"></script>
 </body>
 </html>

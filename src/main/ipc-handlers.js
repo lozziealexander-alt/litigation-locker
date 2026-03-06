@@ -1,8 +1,10 @@
 const { ipcMain, dialog } = require('electron');
+const fs = require('fs');
 const keyManager = require('./crypto/key-derivation');
 const { burn, verifyBurn } = require('./crypto/kill-switch');
 const db = require('./database/init');
 const { processFiles } = require('./ingest/file-processor');
+const { analyzeConnections, detectEscalationPattern } = require('./analysis/timeline-connections');
 
 // Track currently open case
 let currentCaseDb = null;
@@ -89,8 +91,10 @@ function registerIpcHandlers() {
       closeCurrentCase();
       currentCaseDb = db.openCase(caseId);
       currentCaseId = caseId;
+      console.log('[IPC] cases:open success, caseId:', caseId, 'db:', !!currentCaseDb);
       return { success: true };
     } catch (error) {
+      console.error('[IPC] cases:open error:', error.message);
       return { success: false, error: error.message };
     }
   });
@@ -102,13 +106,21 @@ function registerIpcHandlers() {
   // ==================== DOCUMENTS ====================
 
   ipcMain.handle('documents:ingest', async (event, filePaths) => {
+    console.log('[IPC] documents:ingest called, paths:', filePaths);
+    console.log('[IPC] currentCaseId:', currentCaseId, 'hasDb:', !!currentCaseDb);
     try {
       if (!currentCaseDb || !currentCaseId) {
+        console.log('[IPC] documents:ingest - no case open');
         return { success: false, error: 'No case is open' };
       }
 
       const caseKey = keyManager.deriveCaseKey(currentCaseId);
+      console.log('[IPC] caseKey derived, processing', filePaths.length, 'files...');
       const { documents, errors } = await processFiles(filePaths, caseKey);
+      console.log('[IPC] processFiles done:', documents.length, 'docs,', errors.length, 'errors');
+      if (errors.length > 0) {
+        console.log('[IPC] ingest errors:', JSON.stringify(errors));
+      }
 
       // Insert documents into case database
       const insertStmt = currentCaseDb.prepare(`
@@ -149,8 +161,10 @@ function registerIpcHandlers() {
         inserted.push(docToSummary(doc));
       }
 
+      console.log('[IPC] inserted', inserted.length, 'documents successfully');
       return { success: true, documents: inserted, errors };
     } catch (error) {
+      console.error('[IPC] documents:ingest EXCEPTION:', error.message, error.stack);
       return { success: false, error: error.message };
     }
   });
@@ -299,6 +313,7 @@ function registerIpcHandlers() {
   // ==================== FILE DIALOG ====================
 
   ipcMain.handle('dialog:openFiles', async () => {
+    console.log('[IPC] dialog:openFiles called');
     const result = await dialog.showOpenDialog({
       properties: ['openFile', 'multiSelections'],
       filters: [
@@ -309,7 +324,11 @@ function registerIpcHandlers() {
       ]
     });
 
-    if (result.canceled) return { canceled: true, filePaths: [] };
+    if (result.canceled) {
+      console.log('[IPC] dialog:openFiles - canceled');
+      return { canceled: true, filePaths: [] };
+    }
+    console.log('[IPC] dialog:openFiles - selected', result.filePaths.length, 'files:', result.filePaths);
     return { canceled: false, filePaths: result.filePaths };
   });
 
@@ -318,6 +337,7 @@ function registerIpcHandlers() {
   ipcMain.handle('timeline:get', async () => {
     try {
       if (!currentCaseDb) {
+        console.log('[IPC] timeline:get - no case DB open');
         return { success: false, error: 'No case is open' };
       }
 
@@ -340,15 +360,113 @@ function registerIpcHandlers() {
         ORDER BY ingested_at ASC
       `).all();
 
+      console.log('[IPC] timeline:get - dated:', docs.length, 'undated:', undated.length);
       return { success: true, dated: docs, undated };
     } catch (error) {
+      console.error('[IPC] timeline:get error:', error.message);
       return { success: false, error: error.message };
     }
   });
 
   ipcMain.handle('timeline:getConnections', async () => {
-    // Will be implemented in Session 3
-    return { success: true, connections: [] };
+    try {
+      if (!currentCaseDb) {
+        return { success: true, connections: [], escalation: null };
+      }
+
+      const documents = currentCaseDb.prepare(`
+        SELECT id, filename, evidence_type, document_date, document_date_confidence
+        FROM documents
+        WHERE document_date IS NOT NULL
+        ORDER BY document_date ASC
+      `).all();
+
+      // For now, we don't have incidents yet - that's a future session
+      const incidents = [];
+
+      const connections = analyzeConnections(documents, incidents);
+      const escalation = detectEscalationPattern(documents, incidents);
+
+      return { success: true, connections, escalation };
+    } catch (error) {
+      return { success: false, error: error.message, connections: [], escalation: null };
+    }
+  });
+
+  // ==================== DEBUG ====================
+
+  ipcMain.handle('debug:testIngest', async () => {
+    console.log('[DEBUG] testIngest called');
+    console.log('[DEBUG] currentCaseId:', currentCaseId, 'hasDb:', !!currentCaseDb);
+    try {
+      if (!currentCaseDb || !currentCaseId) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      // Create a test file
+      const testPath = '/tmp/litigation-locker-test-debug.txt';
+      fs.writeFileSync(testPath, 'This is a test document created on January 15, 2024. Meeting notes about the project review.');
+
+      const caseKey = keyManager.deriveCaseKey(currentCaseId);
+      console.log('[DEBUG] caseKey derived OK');
+
+      const { documents, errors } = await processFiles([testPath], caseKey);
+      console.log('[DEBUG] processFiles result:', documents.length, 'docs,', errors.length, 'errors');
+
+      if (errors.length > 0) {
+        console.log('[DEBUG] errors:', JSON.stringify(errors));
+        return { success: false, error: errors[0].error, errors };
+      }
+
+      if (documents.length === 0) {
+        return { success: false, error: 'No documents processed' };
+      }
+
+      // Try inserting into DB
+      const doc = documents[0];
+      const existing = currentCaseDb.prepare(
+        'SELECT id FROM documents WHERE sha256_hash = ?'
+      ).get(doc.sha256_hash);
+
+      if (existing) {
+        // Delete the existing one first for the test
+        currentCaseDb.prepare('DELETE FROM documents WHERE sha256_hash = ?').run(doc.sha256_hash);
+      }
+
+      const insertStmt = currentCaseDb.prepare(`
+        INSERT INTO documents (
+          id, filename, original_path, file_type, file_size, sha256_hash,
+          encrypted_content, metadata_json,
+          file_created_at, file_modified_at,
+          document_date, document_date_confidence, content_dates_json,
+          extracted_text, ocr_text, evidence_type
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?,
+          ?, ?,
+          ?, ?,
+          ?, ?, ?,
+          ?, ?, ?
+        )
+      `);
+
+      insertStmt.run(
+        doc.id, doc.filename, doc.original_path, doc.file_type, doc.file_size, doc.sha256_hash,
+        doc.encrypted_content, doc.metadata_json,
+        doc.file_created_at, doc.file_modified_at,
+        doc.document_date, doc.document_date_confidence, doc.content_dates_json,
+        doc.extracted_text, doc.ocr_text, doc.evidence_type
+      );
+
+      console.log('[DEBUG] INSERT SUCCESS!');
+
+      // Clean up test file
+      fs.unlinkSync(testPath);
+
+      return { success: true, document: docToSummary(doc) };
+    } catch (error) {
+      console.error('[DEBUG] testIngest EXCEPTION:', error.message, error.stack);
+      return { success: false, error: error.message, stack: error.stack };
+    }
   });
 }
 

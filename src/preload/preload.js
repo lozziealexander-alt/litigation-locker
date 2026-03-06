@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // Expose protected APIs to renderer
 contextBridge.exposeInMainWorld('api', {
@@ -46,5 +46,13 @@ contextBridge.exposeInMainWorld('api', {
   // File dialog
   dialog: {
     openFiles: () => ipcRenderer.invoke('dialog:openFiles')
+  },
+
+  // File utilities (Electron 22+ requires webUtils for drag-and-drop file paths)
+  getPathForFile: (file) => webUtils.getPathForFile(file),
+
+  // Debug
+  debug: {
+    testIngest: () => ipcRenderer.invoke('debug:testIngest')
   }
 });
