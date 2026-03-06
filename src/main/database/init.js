@@ -95,8 +95,22 @@ function openCase(caseId) {
     throw new Error(`Case not found: ${caseId}`);
   }
 
+  // Ensure the databases directory exists (may have been removed)
+  const dbDir = path.dirname(row.db_path);
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+  }
+
   const caseDb = new Database(row.db_path);
   caseDb.pragma(`key = "x'${caseKey.toString('hex')}'"`);
+
+  // If the DB file was just created (empty), apply schema
+  const tables = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+  if (tables.length === 0) {
+    const schemaPath = path.join(__dirname, 'schema.sql');
+    const schema = fs.readFileSync(schemaPath, 'utf8');
+    caseDb.exec(schema);
+  }
 
   return caseDb;
 }

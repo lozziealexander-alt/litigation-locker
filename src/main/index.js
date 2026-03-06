@@ -1,6 +1,7 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const { registerIpcHandlers } = require('./ipc-handlers');
+const { terminateOcr } = require('./ingest/ocr-engine');
 
 let mainWindow = null;
 
@@ -47,6 +48,11 @@ app.on('activate', () => {
   if (mainWindow === null) {
     createWindow();
   }
+});
+
+// Cleanup OCR worker on quit
+app.on('will-quit', async () => {
+  await terminateOcr();
 });
 
 // Security: Prevent navigation to external URLs

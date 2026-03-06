@@ -5,3 +5,4 @@ src/renderer/bundle.js
 *.db-wal
 *.db-shm
 *.db-journal
+eng.traineddata

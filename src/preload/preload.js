@@ -21,19 +21,30 @@ contextBridge.exposeInMainWorld('api', {
   cases: {
     list: () => ipcRenderer.invoke('cases:list'),
     create: (name) => ipcRenderer.invoke('cases:create', name),
-    open: (caseId) => ipcRenderer.invoke('cases:open', caseId)
+    open: (caseId) => ipcRenderer.invoke('cases:open', caseId),
+    current: () => ipcRenderer.invoke('cases:current')
   },
 
-  // Document operations (will be expanded in Session 1)
+  // Document operations
   documents: {
-    ingest: (filePaths, caseId) => ipcRenderer.invoke('documents:ingest', filePaths, caseId),
-    list: (caseId) => ipcRenderer.invoke('documents:list', caseId),
-    get: (docId, caseId) => ipcRenderer.invoke('documents:get', docId, caseId)
+    ingest: (filePaths) => ipcRenderer.invoke('documents:ingest', filePaths),
+    list: () => ipcRenderer.invoke('documents:list'),
+    get: (docId) => ipcRenderer.invoke('documents:get', docId),
+    updateContext: (docId, context) => ipcRenderer.invoke('documents:updateContext', docId, context),
+    updateDate: (docId, date, confidence) => ipcRenderer.invoke('documents:updateDate', docId, date, confidence),
+    updateType: (docId, evidenceType) => ipcRenderer.invoke('documents:updateType', docId, evidenceType),
+    rename: (docId, newFilename) => ipcRenderer.invoke('documents:rename', docId, newFilename),
+    getContent: (docId) => ipcRenderer.invoke('documents:getContent', docId)
   },
 
-  // Timeline operations (will be expanded in Session 2)
+  // Timeline operations
   timeline: {
-    get: (caseId) => ipcRenderer.invoke('timeline:get', caseId),
-    getConnections: (caseId) => ipcRenderer.invoke('timeline:getConnections', caseId)
+    get: () => ipcRenderer.invoke('timeline:get'),
+    getConnections: () => ipcRenderer.invoke('timeline:getConnections')
+  },
+
+  // File dialog
+  dialog: {
+    openFiles: () => ipcRenderer.invoke('dialog:openFiles')
   }
 });
