@@ -5,6 +5,8 @@ const { burn, verifyBurn } = require('./crypto/kill-switch');
 const db = require('./database/init');
 const { processFiles } = require('./ingest/file-processor');
 const { analyzeConnections, detectEscalationPattern } = require('./analysis/timeline-connections');
+const { analyzeAllPrecedents, getDocumentPrecedentBadges } = require('./analysis/precedent-matcher');
+const { classifyEvidence } = require('./ingest/evidence-classifier');
 
 // Track currently open case
 let currentCaseDb = null;
@@ -129,11 +131,13 @@ function registerIpcHandlers() {
           encrypted_content, metadata_json,
           file_created_at, file_modified_at,
           document_date, document_date_confidence, content_dates_json,
-          extracted_text, ocr_text, evidence_type
+          extracted_text, ocr_text, evidence_type,
+          evidence_confidence, evidence_secondary, evidence_scores_json
         ) VALUES (
           ?, ?, ?, ?, ?, ?,
           ?, ?,
           ?, ?,
+          ?, ?, ?,
           ?, ?, ?,
           ?, ?, ?
         )
@@ -156,7 +160,8 @@ function registerIpcHandlers() {
           doc.encrypted_content, doc.metadata_json,
           doc.file_created_at, doc.file_modified_at,
           doc.document_date, doc.document_date_confidence, doc.content_dates_json,
-          doc.extracted_text, doc.ocr_text, doc.evidence_type
+          doc.extracted_text, doc.ocr_text, doc.evidence_type,
+          doc.evidence_confidence, doc.evidence_secondary, doc.evidence_scores_json
         );
         inserted.push(docToSummary(doc));
       }
@@ -177,6 +182,7 @@ function registerIpcHandlers() {
 
       const docs = currentCaseDb.prepare(`
         SELECT id, filename, file_type, file_size, evidence_type,
+               evidence_confidence, evidence_secondary,
                document_date, document_date_confidence,
                file_created_at, file_modified_at,
                ingested_at, metadata_json, content_dates_json
@@ -202,7 +208,7 @@ function registerIpcHandlers() {
                file_created_at, file_modified_at,
                metadata_json, content_dates_json,
                extracted_text, ocr_text, user_context,
-               ingested_at, sha256_hash
+               group_id, ingested_at, sha256_hash
         FROM documents WHERE id = ?
       `).get(docId);
 
@@ -310,6 +316,66 @@ function registerIpcHandlers() {
     }
   });
 
+  // ==================== RECLASSIFY ====================
+
+  ipcMain.handle('documents:reclassify', async () => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const docs = currentCaseDb.prepare(`
+        SELECT id, filename, file_type, extracted_text, ocr_text, metadata_json
+        FROM documents
+      `).all();
+
+      const path = require('path');
+      const updateStmt = currentCaseDb.prepare(`
+        UPDATE documents
+        SET evidence_type = ?, evidence_confidence = ?, evidence_secondary = ?,
+            evidence_scores_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `);
+
+      let updated = 0;
+      for (const doc of docs) {
+        const allText = [doc.extracted_text, doc.ocr_text].filter(Boolean).join('\n');
+        const ext = path.extname(doc.filename || '').toLowerCase();
+
+        let meta = {};
+        try { meta = JSON.parse(doc.metadata_json || '{}'); } catch {}
+
+        const result = classifyEvidence({
+          filename: doc.filename || '',
+          ext,
+          mimeType: doc.file_type || '',
+          extractedText: allText,
+          metadata: meta,
+          contentDates: []
+        });
+
+        const confidence = result.confidence === 'high' ? 0.9 :
+                           result.confidence === 'medium' ? 0.6 :
+                           result.confidence === 'low' ? 0.3 : 0.1;
+
+        updateStmt.run(
+          result.primary,
+          confidence,
+          result.secondary,
+          JSON.stringify(result.allScores),
+          doc.id
+        );
+        updated++;
+      }
+
+      console.log(`[IPC] reclassify: updated ${updated} documents`);
+      return { success: true, updated };
+    } catch (error) {
+      console.error('[IPC] reclassify error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
   // ==================== FILE DIALOG ====================
 
   ipcMain.handle('dialog:openFiles', async () => {
@@ -343,9 +409,10 @@ function registerIpcHandlers() {
 
       const docs = currentCaseDb.prepare(`
         SELECT id, filename, file_type, file_size, evidence_type,
+               evidence_confidence, evidence_secondary,
                document_date, document_date_confidence,
                content_dates_json, user_context,
-               ingested_at
+               group_id, ingested_at
         FROM documents
         WHERE document_date IS NOT NULL
         ORDER BY document_date ASC
@@ -354,14 +421,27 @@ function registerIpcHandlers() {
       // Also get undated documents
       const undated = currentCaseDb.prepare(`
         SELECT id, filename, file_type, file_size, evidence_type,
-               document_date_confidence, user_context, ingested_at
+               evidence_confidence, evidence_secondary,
+               document_date_confidence, user_context,
+               group_id, ingested_at
         FROM documents
         WHERE document_date IS NULL
         ORDER BY ingested_at ASC
       `).all();
 
-      console.log('[IPC] timeline:get - dated:', docs.length, 'undated:', undated.length);
-      return { success: true, dated: docs, undated };
+      // Get pinned date entries for multi-date timeline appearances
+      const dateEntries = currentCaseDb.prepare(`
+        SELECT de.id as entry_id, de.entry_date, de.label, de.date_confidence,
+               d.id, d.filename, d.file_type, d.file_size,
+               d.evidence_type, d.evidence_confidence, d.evidence_secondary,
+               d.document_date_confidence, d.user_context, d.group_id, d.ingested_at
+        FROM document_date_entries de
+        JOIN documents d ON de.document_id = d.id
+        ORDER BY de.entry_date ASC
+      `).all();
+
+      console.log('[IPC] timeline:get - dated:', docs.length, 'undated:', undated.length, 'dateEntries:', dateEntries.length);
+      return { success: true, dated: docs, undated, dateEntries };
     } catch (error) {
       console.error('[IPC] timeline:get error:', error.message);
       return { success: false, error: error.message };
@@ -390,6 +470,227 @@ function registerIpcHandlers() {
       return { success: true, connections, escalation };
     } catch (error) {
       return { success: false, error: error.message, connections: [], escalation: null };
+    }
+  });
+
+  // ==================== PRECEDENTS ====================
+
+  ipcMain.handle('precedents:analyze', async () => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const documents = currentCaseDb.prepare(`
+        SELECT id, filename, file_type, file_size, evidence_type,
+               evidence_confidence, evidence_secondary,
+               document_date, document_date_confidence,
+               user_context
+        FROM documents
+        ORDER BY document_date ASC
+      `).all();
+
+      // We don't have actors/incidents tables populated yet
+      const incidents = [];
+      const actors = [];
+
+      const analysis = analyzeAllPrecedents(documents, incidents, actors);
+
+      return { success: true, analysis };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('precedents:getDocumentBadges', async (event, documentId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const documents = currentCaseDb.prepare(`
+        SELECT id, filename, file_type, file_size, evidence_type,
+               evidence_confidence, evidence_secondary,
+               document_date, document_date_confidence
+        FROM documents
+        ORDER BY document_date ASC
+      `).all();
+
+      const document = documents.find(d => d.id === documentId);
+
+      if (!document) {
+        return { success: false, error: 'Document not found' };
+      }
+
+      const analysis = analyzeAllPrecedents(documents, [], []);
+      const badges = getDocumentPrecedentBadges(document, analysis);
+
+      return { success: true, badges };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== DATE ENTRIES (multi-date timeline) ====================
+
+  ipcMain.handle('documents:addDateEntry', async (event, docId, date, label, confidence) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const stmt = currentCaseDb.prepare(`
+        INSERT INTO document_date_entries (document_id, entry_date, label, date_confidence)
+        VALUES (?, ?, ?, ?)
+      `);
+      const result = stmt.run(docId, date, label || null, confidence || 'exact');
+
+      return { success: true, id: result.lastInsertRowid };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('documents:removeDateEntry', async (event, entryId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      currentCaseDb.prepare('DELETE FROM document_date_entries WHERE id = ?').run(entryId);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('documents:getDateEntries', async (event, docId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const entries = currentCaseDb.prepare(`
+        SELECT id, document_id, entry_date, label, date_confidence, is_primary, created_at
+        FROM document_date_entries
+        WHERE document_id = ?
+        ORDER BY entry_date ASC
+      `).all(docId);
+
+      return { success: true, entries };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== GROUPS (document linking) ====================
+
+  ipcMain.handle('groups:create', async (event, name, description, color) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const crypto = require('crypto');
+      const id = crypto.randomUUID();
+
+      currentCaseDb.prepare(`
+        INSERT INTO groups (id, name, description, color) VALUES (?, ?, ?, ?)
+      `).run(id, name, description || null, color || null);
+
+      return { success: true, group: { id, name, description, color } };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('groups:list', async () => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const groups = currentCaseDb.prepare(`
+        SELECT g.id, g.name, g.description, g.color, g.created_at,
+               COUNT(d.id) as member_count
+        FROM groups g
+        LEFT JOIN documents d ON d.group_id = g.id
+        GROUP BY g.id
+        ORDER BY g.created_at DESC
+      `).all();
+
+      return { success: true, groups };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('groups:delete', async (event, groupId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      // Unlink all documents from this group
+      currentCaseDb.prepare('UPDATE documents SET group_id = NULL WHERE group_id = ?').run(groupId);
+      // Delete the group
+      currentCaseDb.prepare('DELETE FROM groups WHERE id = ?').run(groupId);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('groups:getMembers', async (event, groupId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const members = currentCaseDb.prepare(`
+        SELECT id, filename, file_type, file_size, evidence_type,
+               document_date, document_date_confidence
+        FROM documents
+        WHERE group_id = ?
+        ORDER BY document_date ASC, ingested_at ASC
+      `).all(groupId);
+
+      return { success: true, members };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('documents:setGroup', async (event, docId, groupId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      currentCaseDb.prepare(`
+        UPDATE documents SET group_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).run(groupId, docId);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('documents:removeGroup', async (event, docId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      currentCaseDb.prepare(`
+        UPDATE documents SET group_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).run(docId);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
     }
   });
 
@@ -439,11 +740,13 @@ function registerIpcHandlers() {
           encrypted_content, metadata_json,
           file_created_at, file_modified_at,
           document_date, document_date_confidence, content_dates_json,
-          extracted_text, ocr_text, evidence_type
+          extracted_text, ocr_text, evidence_type,
+          evidence_confidence, evidence_secondary, evidence_scores_json
         ) VALUES (
           ?, ?, ?, ?, ?, ?,
           ?, ?,
           ?, ?,
+          ?, ?, ?,
           ?, ?, ?,
           ?, ?, ?
         )
@@ -454,7 +757,8 @@ function registerIpcHandlers() {
         doc.encrypted_content, doc.metadata_json,
         doc.file_created_at, doc.file_modified_at,
         doc.document_date, doc.document_date_confidence, doc.content_dates_json,
-        doc.extracted_text, doc.ocr_text, doc.evidence_type
+        doc.extracted_text, doc.ocr_text, doc.evidence_type,
+        doc.evidence_confidence, doc.evidence_secondary, doc.evidence_scores_json
       );
 
       console.log('[DEBUG] INSERT SUCCESS!');
@@ -488,6 +792,8 @@ function docToSummary(doc) {
     file_type: doc.file_type,
     file_size: doc.file_size,
     evidence_type: doc.evidence_type,
+    evidence_confidence: doc.evidence_confidence,
+    evidence_secondary: doc.evidence_secondary,
     document_date: doc.document_date,
     document_date_confidence: doc.document_date_confidence
   };

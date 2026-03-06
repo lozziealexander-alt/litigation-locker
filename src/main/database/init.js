@@ -112,6 +112,40 @@ function openCase(caseId) {
     caseDb.exec(schema);
   }
 
+  // ---- Migrations for existing databases ----
+
+  // Add evidence classification columns (inference-based classification update)
+  const docColumns = caseDb.prepare("PRAGMA table_info(documents)").all();
+  const columnNames = docColumns.map(c => c.name);
+
+  if (!columnNames.includes('evidence_confidence')) {
+    caseDb.exec('ALTER TABLE documents ADD COLUMN evidence_confidence REAL');
+  }
+  if (!columnNames.includes('evidence_secondary')) {
+    caseDb.exec('ALTER TABLE documents ADD COLUMN evidence_secondary TEXT');
+  }
+  if (!columnNames.includes('evidence_scores_json')) {
+    caseDb.exec('ALTER TABLE documents ADD COLUMN evidence_scores_json TEXT');
+  }
+
+  // Add document_date_entries table (multi-date timeline support)
+  const hasDateEntries = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='document_date_entries'").get();
+  if (!hasDateEntries) {
+    caseDb.exec(`
+      CREATE TABLE IF NOT EXISTS document_date_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        entry_date DATETIME NOT NULL,
+        label TEXT,
+        date_confidence TEXT CHECK(date_confidence IN ('exact', 'approximate', 'inferred')),
+        is_primary BOOLEAN DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_date_entries_doc ON document_date_entries(document_id);
+      CREATE INDEX IF NOT EXISTS idx_date_entries_date ON document_date_entries(entry_date);
+    `);
+  }
+
   return caseDb;
 }
 

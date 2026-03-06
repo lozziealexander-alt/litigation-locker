@@ -34,13 +34,35 @@ contextBridge.exposeInMainWorld('api', {
     updateDate: (docId, date, confidence) => ipcRenderer.invoke('documents:updateDate', docId, date, confidence),
     updateType: (docId, evidenceType) => ipcRenderer.invoke('documents:updateType', docId, evidenceType),
     rename: (docId, newFilename) => ipcRenderer.invoke('documents:rename', docId, newFilename),
-    getContent: (docId) => ipcRenderer.invoke('documents:getContent', docId)
+    getContent: (docId) => ipcRenderer.invoke('documents:getContent', docId),
+    reclassify: () => ipcRenderer.invoke('documents:reclassify'),
+    // Date entries (multi-date timeline)
+    addDateEntry: (docId, date, label, confidence) => ipcRenderer.invoke('documents:addDateEntry', docId, date, label, confidence),
+    removeDateEntry: (entryId) => ipcRenderer.invoke('documents:removeDateEntry', entryId),
+    getDateEntries: (docId) => ipcRenderer.invoke('documents:getDateEntries', docId),
+    // Group linking
+    setGroup: (docId, groupId) => ipcRenderer.invoke('documents:setGroup', docId, groupId),
+    removeGroup: (docId) => ipcRenderer.invoke('documents:removeGroup', docId)
+  },
+
+  // Group operations (document linking)
+  groups: {
+    create: (name, description, color) => ipcRenderer.invoke('groups:create', name, description, color),
+    list: () => ipcRenderer.invoke('groups:list'),
+    delete: (groupId) => ipcRenderer.invoke('groups:delete', groupId),
+    getMembers: (groupId) => ipcRenderer.invoke('groups:getMembers', groupId)
   },
 
   // Timeline operations
   timeline: {
     get: () => ipcRenderer.invoke('timeline:get'),
     getConnections: () => ipcRenderer.invoke('timeline:getConnections')
+  },
+
+  // Precedent analysis
+  precedents: {
+    analyze: () => ipcRenderer.invoke('precedents:analyze'),
+    getDocumentBadges: (docId) => ipcRenderer.invoke('precedents:getDocumentBadges', docId)
   },
 
   // File dialog

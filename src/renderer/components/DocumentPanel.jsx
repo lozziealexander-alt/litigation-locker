@@ -26,14 +26,29 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
   const [editContext, setEditContext] = useState('');
   const [previewData, setPreviewData] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
+  // Date entries (multi-date timeline)
+  const [dateEntries, setDateEntries] = useState([]);
+  const [addingDateEntry, setAddingDateEntry] = useState(false);
+  const [newEntryDate, setNewEntryDate] = useState('');
+  const [newEntryLabel, setNewEntryLabel] = useState('');
+  // Document linking / groups
+  const [groups, setGroups] = useState([]);
+  const [groupMembers, setGroupMembers] = useState([]);
+  const [showGroupPicker, setShowGroupPicker] = useState(false);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [dateSaveFlash, setDateSaveFlash] = useState(false);
   const nameInputRef = useRef(null);
   const styles = getStyles();
 
   useEffect(() => {
     if (doc?.id) {
       loadFullDocument(doc.id);
+      loadDateEntries(doc.id);
       setPreviewData(null);
       setShowPreview(false);
+      setShowGroupPicker(false);
+      setCreatingGroup(false);
     }
   }, [doc?.id]);
 
@@ -48,6 +63,33 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
     const result = await window.api.documents.get(docId);
     if (result.success) {
       setFullDoc(result.document);
+      // Load group members if document has a group
+      if (result.document.group_id) {
+        loadGroupMembers(result.document.group_id);
+      } else {
+        setGroupMembers([]);
+      }
+    }
+  }
+
+  async function loadDateEntries(docId) {
+    const result = await window.api.documents.getDateEntries(docId);
+    if (result.success) {
+      setDateEntries(result.entries);
+    }
+  }
+
+  async function loadGroupMembers(groupId) {
+    const result = await window.api.groups.getMembers(groupId);
+    if (result.success) {
+      setGroupMembers(result.members);
+    }
+  }
+
+  async function loadGroups() {
+    const result = await window.api.groups.list();
+    if (result.success) {
+      setGroups(result.groups);
     }
   }
 
@@ -65,16 +107,77 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
   }
 
   async function handleDateChange() {
-    if (!editDate) {
-      setIsEditingDate(false);
-      return;
-    }
-    const result = await window.api.documents.updateDate(doc.id, editDate, 'exact');
+    // Normalize to ISO timestamp (noon UTC) to avoid timezone display issues
+    const isoDate = editDate ? new Date(editDate + 'T12:00:00Z').toISOString() : null;
+    const confidence = isoDate ? 'exact' : 'undated';
+    const result = await window.api.documents.updateDate(doc.id, isoDate, confidence);
     if (result.success) {
-      setFullDoc(prev => prev ? { ...prev, document_date: editDate, document_date_confidence: 'exact' } : prev);
+      setFullDoc(prev => prev ? { ...prev, document_date: isoDate, document_date_confidence: confidence } : prev);
       if (onDocumentUpdated) onDocumentUpdated();
+      // Flash checkmark
+      setDateSaveFlash(true);
+      setTimeout(() => setDateSaveFlash(false), 1500);
     }
     setIsEditingDate(false);
+  }
+
+  async function handlePinDate(dateStr, label) {
+    const isoDate = new Date(dateStr + 'T12:00:00Z').toISOString();
+    const result = await window.api.documents.addDateEntry(doc.id, isoDate, label, 'exact');
+    if (result.success) {
+      loadDateEntries(doc.id);
+      if (onDocumentUpdated) onDocumentUpdated();
+    }
+  }
+
+  async function handleUnpinDate(entryId) {
+    const result = await window.api.documents.removeDateEntry(entryId);
+    if (result.success) {
+      loadDateEntries(doc.id);
+      if (onDocumentUpdated) onDocumentUpdated();
+    }
+  }
+
+  async function handleAddDateEntry() {
+    if (!newEntryDate) return;
+    const isoDate = new Date(newEntryDate + 'T12:00:00Z').toISOString();
+    const result = await window.api.documents.addDateEntry(doc.id, isoDate, newEntryLabel || null, 'exact');
+    if (result.success) {
+      loadDateEntries(doc.id);
+      setAddingDateEntry(false);
+      setNewEntryDate('');
+      setNewEntryLabel('');
+      if (onDocumentUpdated) onDocumentUpdated();
+    }
+  }
+
+  async function handleSetGroup(groupId) {
+    const result = await window.api.documents.setGroup(doc.id, groupId);
+    if (result.success) {
+      setFullDoc(prev => prev ? { ...prev, group_id: groupId } : prev);
+      loadGroupMembers(groupId);
+      setShowGroupPicker(false);
+      if (onDocumentUpdated) onDocumentUpdated();
+    }
+  }
+
+  async function handleRemoveGroup() {
+    const result = await window.api.documents.removeGroup(doc.id);
+    if (result.success) {
+      setFullDoc(prev => prev ? { ...prev, group_id: null } : prev);
+      setGroupMembers([]);
+      if (onDocumentUpdated) onDocumentUpdated();
+    }
+  }
+
+  async function handleCreateGroup() {
+    if (!newGroupName.trim()) return;
+    const result = await window.api.groups.create(newGroupName.trim());
+    if (result.success) {
+      await handleSetGroup(result.group.id);
+      setCreatingGroup(false);
+      setNewGroupName('');
+    }
   }
 
   async function handleTypeChange(newType) {
@@ -220,7 +323,10 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
                   ? formatDate(displayDoc.document_date)
                   : 'No date extracted'
                 }
-                <span style={styles.editHint}>{'\u270E'}</span>
+                {dateSaveFlash
+                  ? <span style={styles.saveFlash}>{'\u2713'} Saved</span>
+                  : <span style={styles.editHint}>{'\u270E'}</span>
+                }
               </div>
             )}
             <div style={styles.confidenceRow}>
@@ -234,7 +340,7 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
             </div>
           </div>
 
-          {/* Content dates */}
+          {/* Content dates with pin buttons */}
           {contentDates.length > 0 && (
             <div style={styles.section}>
               <h3 style={styles.sectionTitle}>
@@ -242,22 +348,188 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
                 <span style={styles.countBadge}>{contentDates.length}</span>
               </h3>
               <div style={styles.datesList}>
-                {contentDates.slice(0, 5).map((d, i) => (
-                  <div key={i} style={styles.dateRow}>
-                    <span style={styles.dateText}>"{d.text}"</span>
-                    <span style={styles.dateValue}>
-                      {new Date(d.date).toLocaleDateString()}
-                    </span>
-                  </div>
-                ))}
-                {contentDates.length > 5 && (
+                {contentDates.slice(0, 8).map((d, i) => {
+                  const dateKey = d.date?.split('T')[0];
+                  const isPinned = dateEntries.some(e => e.entry_date?.split('T')[0] === dateKey);
+                  return (
+                    <div key={i} style={styles.dateRow}>
+                      <span style={styles.dateText}>"{d.text}"</span>
+                      <span style={styles.dateValue}>
+                        {new Date(d.date).toLocaleDateString()}
+                      </span>
+                      <button
+                        style={{
+                          ...styles.pinBtn,
+                          opacity: isPinned ? 1 : 0.5,
+                          color: isPinned ? colors.primary : colors.textMuted
+                        }}
+                        onClick={() => {
+                          if (isPinned) {
+                            const entry = dateEntries.find(e => e.entry_date?.split('T')[0] === dateKey);
+                            if (entry) handleUnpinDate(entry.id);
+                          } else {
+                            handlePinDate(dateKey, d.text);
+                          }
+                        }}
+                        title={isPinned ? 'Unpin from timeline' : 'Pin to timeline'}
+                      >
+                        {isPinned ? '\uD83D\uDCCC' : '\uD83D\uDCCC'}
+                      </button>
+                    </div>
+                  );
+                })}
+                {contentDates.length > 8 && (
                   <div style={styles.moreText}>
-                    +{contentDates.length - 5} more dates
+                    +{contentDates.length - 8} more dates
                   </div>
                 )}
               </div>
             </div>
           )}
+
+          {/* Pinned date entries / manual timeline dates */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>
+              Timeline Pins
+              {dateEntries.length > 0 && <span style={styles.countBadge}>{dateEntries.length}</span>}
+            </h3>
+            {dateEntries.length > 0 ? (
+              <div style={styles.datesList}>
+                {dateEntries.map(entry => (
+                  <div key={entry.id} style={styles.dateRow}>
+                    <span style={{ ...styles.dateText, fontStyle: 'normal' }}>
+                      {'\uD83D\uDCCC'} {entry.label || 'Pinned date'}
+                    </span>
+                    <span style={styles.dateValue}>
+                      {new Date(entry.entry_date).toLocaleDateString()}
+                    </span>
+                    <button
+                      style={styles.unpinBtn}
+                      onClick={() => handleUnpinDate(entry.id)}
+                      title="Remove pin"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={styles.emptyHint}>
+                No pinned dates. Pin content dates above or add manually below.
+              </div>
+            )}
+            {addingDateEntry ? (
+              <div style={styles.addEntryRow}>
+                <input
+                  type="date"
+                  style={styles.dateInput}
+                  value={newEntryDate}
+                  onChange={e => setNewEntryDate(e.target.value)}
+                  autoFocus
+                />
+                <input
+                  style={styles.labelInput}
+                  value={newEntryLabel}
+                  onChange={e => setNewEntryLabel(e.target.value)}
+                  placeholder="Label (optional)"
+                />
+                <button style={styles.saveBtn} onClick={handleAddDateEntry}>Add</button>
+                <button style={styles.cancelBtn} onClick={() => { setAddingDateEntry(false); setNewEntryDate(''); setNewEntryLabel(''); }}>✕</button>
+              </div>
+            ) : (
+              <button
+                style={styles.addDateBtn}
+                onClick={() => setAddingDateEntry(true)}
+              >
+                + Add date to timeline
+              </button>
+            )}
+          </div>
+
+          {/* Document linking / groups */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>
+              Linked Documents
+              {groupMembers.length > 1 && <span style={styles.countBadge}>{groupMembers.length}</span>}
+            </h3>
+            {displayDoc.group_id ? (
+              <>
+                <div style={styles.groupHeader}>
+                  <span style={styles.groupIcon}>{'\uD83D\uDCCE'}</span>
+                  <span style={styles.groupName}>
+                    {groups.find(g => g.id === displayDoc.group_id)?.name || 'Linked group'}
+                  </span>
+                  <button style={styles.unlinkBtn} onClick={handleRemoveGroup} title="Unlink from group">
+                    Unlink
+                  </button>
+                </div>
+                <div style={styles.memberList}>
+                  {groupMembers.filter(m => m.id !== doc.id).map(member => (
+                    <div key={member.id} style={styles.memberRow}>
+                      <span style={styles.memberName}>{member.filename}</span>
+                      <span style={styles.memberType}>{formatType(member.evidence_type)}</span>
+                    </div>
+                  ))}
+                  {groupMembers.filter(m => m.id !== doc.id).length === 0 && (
+                    <div style={styles.emptyHint}>No other documents in this group yet.</div>
+                  )}
+                </div>
+              </>
+            ) : showGroupPicker ? (
+              <div style={styles.groupPicker}>
+                {creatingGroup ? (
+                  <div style={styles.addEntryRow}>
+                    <input
+                      style={styles.labelInput}
+                      value={newGroupName}
+                      onChange={e => setNewGroupName(e.target.value)}
+                      placeholder="Group name"
+                      autoFocus
+                      onKeyDown={e => e.key === 'Enter' && handleCreateGroup()}
+                    />
+                    <button style={styles.saveBtn} onClick={handleCreateGroup}>Create</button>
+                    <button style={styles.cancelBtn} onClick={() => { setCreatingGroup(false); setNewGroupName(''); }}>✕</button>
+                  </div>
+                ) : (
+                  <>
+                    {groups.length > 0 && (
+                      <div style={styles.datesList}>
+                        {groups.map(g => (
+                          <div
+                            key={g.id}
+                            style={styles.groupOption}
+                            onClick={() => handleSetGroup(g.id)}
+                          >
+                            <span>{'\uD83D\uDCCE'} {g.name}</span>
+                            <span style={styles.memberCount}>{g.member_count} doc{g.member_count !== 1 ? 's' : ''}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      style={styles.addDateBtn}
+                      onClick={() => setCreatingGroup(true)}
+                    >
+                      + Create new group
+                    </button>
+                    <button
+                      style={{ ...styles.cancelBtn, width: '100%', marginTop: spacing.sm }}
+                      onClick={() => setShowGroupPicker(false)}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : (
+              <button
+                style={styles.addDateBtn}
+                onClick={() => { loadGroups(); setShowGroupPicker(true); }}
+              >
+                {'\uD83D\uDCCE'} Link to group
+              </button>
+            )}
+          </div>
 
           {/* Metadata */}
           <div style={styles.section}>
@@ -706,6 +978,146 @@ function getStyles() {
       color: colors.textMuted,
       textAlign: 'center',
       padding: spacing.sm
+    },
+
+    // Pin buttons
+    pinBtn: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: typography.fontSize.sm,
+      padding: `2px ${spacing.xs}`,
+      borderRadius: radius.sm,
+      flexShrink: 0,
+      transition: 'opacity 0.15s ease'
+    },
+    unpinBtn: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      padding: `2px ${spacing.xs}`,
+      flexShrink: 0
+    },
+    addDateBtn: {
+      width: '100%',
+      padding: `${spacing.sm} ${spacing.md}`,
+      background: 'transparent',
+      color: colors.primary,
+      border: `1px dashed ${colors.border}`,
+      borderRadius: radius.md,
+      fontSize: typography.fontSize.sm,
+      cursor: 'pointer',
+      marginTop: spacing.sm,
+      transition: 'background 0.15s ease'
+    },
+    addEntryRow: {
+      display: 'flex',
+      gap: spacing.sm,
+      alignItems: 'center',
+      marginTop: spacing.sm
+    },
+    labelInput: {
+      flex: 1,
+      padding: `${spacing.sm} ${spacing.md}`,
+      background: colors.surface,
+      color: colors.textPrimary,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.md,
+      fontSize: typography.fontSize.sm,
+      outline: 'none',
+      fontFamily: 'inherit'
+    },
+    emptyHint: {
+      fontSize: typography.fontSize.sm,
+      color: colors.textMuted,
+      fontStyle: 'italic',
+      padding: `${spacing.sm} 0`
+    },
+    saveFlash: {
+      fontSize: typography.fontSize.xs,
+      color: '#22c55e',
+      fontWeight: typography.fontWeight.semibold,
+      flexShrink: 0,
+      animation: 'fadeIn 0.2s ease'
+    },
+
+    // Group / linking styles
+    groupHeader: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: spacing.sm,
+      padding: spacing.sm,
+      background: colors.surfaceAlt,
+      borderRadius: radius.md,
+      marginBottom: spacing.sm
+    },
+    groupIcon: {
+      fontSize: typography.fontSize.md
+    },
+    groupName: {
+      fontSize: typography.fontSize.sm,
+      fontWeight: typography.fontWeight.medium,
+      color: colors.textPrimary,
+      flex: 1
+    },
+    unlinkBtn: {
+      background: 'none',
+      border: `1px solid ${colors.border}`,
+      color: colors.textMuted,
+      fontSize: typography.fontSize.xs,
+      padding: `2px ${spacing.sm}`,
+      borderRadius: radius.sm,
+      cursor: 'pointer'
+    },
+    memberList: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: spacing.xs
+    },
+    memberRow: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: `${spacing.xs} ${spacing.sm}`,
+      background: colors.surfaceAlt,
+      borderRadius: radius.sm,
+      fontSize: typography.fontSize.sm
+    },
+    memberName: {
+      color: colors.textPrimary,
+      flex: 1,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      marginRight: spacing.sm
+    },
+    memberType: {
+      color: colors.textMuted,
+      fontSize: typography.fontSize.xs,
+      flexShrink: 0
+    },
+    groupPicker: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: spacing.sm
+    },
+    groupOption: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: spacing.sm,
+      background: colors.surfaceAlt,
+      borderRadius: radius.md,
+      cursor: 'pointer',
+      fontSize: typography.fontSize.sm,
+      color: colors.textPrimary,
+      transition: 'background 0.15s ease'
+    },
+    memberCount: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted
     },
 
     // Meta grid

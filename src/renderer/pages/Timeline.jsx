@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { useTheme } from '../styles/ThemeContext';
 import { colors, shadows, spacing, typography, radius, getEvidenceColor } from '../styles/tokens';
+import CaseStrength from '../components/CaseStrength';
 
 // Evidence type icons
 const EVIDENCE_ICONS = {
@@ -47,6 +48,10 @@ export default function Timeline({ onSelectDocument }) {
   const [loading, setLoading] = useState(true);
   const [hoveredEvent, setHoveredEvent] = useState(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [precedentAnalysis, setPrecedentAnalysis] = useState(null);
+  const [showCaseStrength, setShowCaseStrength] = useState(false);
+  const [isIngesting, setIsIngesting] = useState(false);
+  const [ingestProgress, setIngestProgress] = useState('');
   const [zoomLevel, setZoomLevel] = useState('day'); // 'year' | 'month' | 'day' | 'hour'
   const [linePositions, setLinePositions] = useState([]);
   const [svgDimensions, setSvgDimensions] = useState({ width: 0, height: 0 });
@@ -114,8 +119,12 @@ export default function Timeline({ onSelectDocument }) {
         return;
       }
 
+      setIsIngesting(true);
+      setIngestProgress(`Processing ${filePaths.length} file${filePaths.length > 1 ? 's' : ''}...`);
       window.api.documents.ingest(filePaths).then(result => {
         console.log('[Timeline] ingest result:', JSON.stringify(result).slice(0, 300));
+        setIsIngesting(false);
+        setIngestProgress('');
         if (result.success) {
           loadTimeline();
         } else {
@@ -124,6 +133,8 @@ export default function Timeline({ onSelectDocument }) {
         }
       }).catch(err => {
         console.error('[Timeline] ingest error:', err);
+        setIsIngesting(false);
+        setIngestProgress('');
         alert('Import error: ' + err.message);
       });
     }
@@ -148,18 +159,36 @@ export default function Timeline({ onSelectDocument }) {
   async function loadTimeline() {
     setLoading(true);
     try {
-      const [timelineResult, connectionsResult] = await Promise.all([
+      const [timelineResult, connectionsResult, precedentResult] = await Promise.all([
         window.api.timeline.get(),
-        window.api.timeline.getConnections()
+        window.api.timeline.getConnections(),
+        window.api.precedents.analyze()
       ]);
 
       if (timelineResult.success) {
-        setDated(timelineResult.dated || []);
+        // Merge pinned date entries into dated docs as virtual entries
+        const baseDated = timelineResult.dated || [];
+        const entries = timelineResult.dateEntries || [];
+        const virtualDocs = entries.map(entry => ({
+          ...entry,
+          document_date: entry.entry_date,
+          isDateEntry: true,
+          pinLabel: entry.label || 'Pinned',
+          pinEntryId: entry.entry_id
+        }));
+        setDated([...baseDated, ...virtualDocs].sort((a, b) => {
+          const da = new Date(a.document_date);
+          const db = new Date(b.document_date);
+          return da - db;
+        }));
         setUndated(timelineResult.undated || []);
       }
       if (connectionsResult.success) {
         setConnections(connectionsResult.connections || []);
         setEscalation(connectionsResult.escalation);
+      }
+      if (precedentResult.success) {
+        setPrecedentAnalysis(precedentResult.analysis);
       }
     } catch (err) {
       console.error('[Timeline] loadTimeline error:', err);
@@ -304,9 +333,24 @@ export default function Timeline({ onSelectDocument }) {
       const result = await window.api.dialog.openFiles();
       console.log('[Timeline] dialog result:', JSON.stringify(result).slice(0, 300));
       if (result.canceled || result.filePaths.length === 0) return;
+
+      const count = result.filePaths.length;
+      setIsIngesting(true);
+      setIngestProgress(`Processing ${count} file${count > 1 ? 's' : ''}...`);
+
       const ingestResult = await window.api.documents.ingest(result.filePaths);
       console.log('[Timeline] ingest result:', JSON.stringify(ingestResult).slice(0, 300));
+      setIsIngesting(false);
+      setIngestProgress('');
+
       if (ingestResult.success) {
+        const imported = ingestResult.documents?.length || 0;
+        const errCount = ingestResult.errors?.length || 0;
+        if (errCount > 0) {
+          const errMsgs = ingestResult.errors.map(e => `${e.file}: ${e.error}`).join('\n');
+          console.warn('[Timeline] import partial errors:', errMsgs);
+          alert(`Imported ${imported} file${imported !== 1 ? 's' : ''}. ${errCount} file${errCount !== 1 ? 's' : ''} had errors:\n${errMsgs}`);
+        }
         loadTimeline();
       } else {
         console.error('[Timeline] import failed:', ingestResult.error);
@@ -314,7 +358,28 @@ export default function Timeline({ onSelectDocument }) {
       }
     } catch (err) {
       console.error('[Timeline] handleImportFiles error:', err);
+      setIsIngesting(false);
+      setIngestProgress('');
       alert('Import error: ' + err.message);
+    }
+  }
+
+  async function handleReclassify() {
+    try {
+      setIsIngesting(true);
+      setIngestProgress('Re-classifying all documents...');
+      const result = await window.api.documents.reclassify();
+      setIsIngesting(false);
+      setIngestProgress('');
+      if (result.success) {
+        loadTimeline();
+      } else {
+        alert('Re-classify failed: ' + (result.error || 'Unknown error'));
+      }
+    } catch (err) {
+      setIsIngesting(false);
+      setIngestProgress('');
+      alert('Re-classify error: ' + err.message);
     }
   }
 
@@ -355,6 +420,14 @@ export default function Timeline({ onSelectDocument }) {
         ...(isDraggingOver ? styles.containerDragOver : {})
       }}
     >
+      {/* Ingest progress overlay */}
+      {isIngesting && (
+        <div style={styles.ingestOverlay}>
+          <div style={styles.ingestSpinner} />
+          <span style={styles.ingestText}>{ingestProgress}</span>
+        </div>
+      )}
+
       {/* Header */}
       <div style={styles.header}>
         <div style={styles.headerLeft}>
@@ -371,6 +444,16 @@ export default function Timeline({ onSelectDocument }) {
               <span style={styles.escalationIcon}>{'\u2197'}</span>
               Escalating Pattern
             </div>
+          )}
+
+          {precedentAnalysis && (
+            <button
+              style={styles.caseStrengthBtn}
+              onClick={() => setShowCaseStrength(true)}
+            >
+              <span style={styles.caseStrengthIcon}>{'\u2696\uFE0F'}</span>
+              Case: {precedentAnalysis.caseStrength}%
+            </button>
           )}
 
           {/* Semantic zoom controls */}
@@ -408,8 +491,26 @@ export default function Timeline({ onSelectDocument }) {
             </div>
           )}
 
-          <button style={styles.importButton} onClick={handleImportFiles}>
-            + Import Files
+          {totalDocs > 0 && (
+            <button
+              style={styles.reclassifyBtn}
+              onClick={handleReclassify}
+              disabled={isIngesting}
+              title="Re-run inference-based classification on all documents"
+            >
+              {'\uD83E\uDDE0'} Re-classify
+            </button>
+          )}
+
+          <button
+            style={{
+              ...styles.importButton,
+              ...(isIngesting ? { opacity: 0.5, cursor: 'not-allowed' } : {})
+            }}
+            onClick={isIngesting ? undefined : handleImportFiles}
+            disabled={isIngesting}
+          >
+            {isIngesting ? 'Importing...' : '+ Import Files'}
           </button>
           <span style={styles.docCount}>
             {totalDocs} document{totalDocs !== 1 ? 's' : ''}
@@ -530,15 +631,18 @@ export default function Timeline({ onSelectDocument }) {
                     // Month view: condensed cards
                     group.documents.map(doc => (
                       <div
-                        key={doc.id}
+                        key={doc.isDateEntry ? `entry-${doc.pinEntryId}` : doc.id}
                         style={{
                           ...styles.eventCardCompact,
-                          borderLeftColor: getEvidenceColor(doc.evidence_type)
+                          borderLeftColor: getEvidenceColor(doc.evidence_type),
+                          ...(doc.isDateEntry ? { borderStyle: 'dashed' } : {})
                         }}
                         onClick={() => onSelectDocument && onSelectDocument(doc)}
                       >
                         <span style={styles.eventIcon}>{getEvidenceIcon(doc.evidence_type)}</span>
-                        <span style={styles.compactTitle}>{doc.filename}</span>
+                        <span style={styles.compactTitle}>
+                          {doc.isDateEntry ? '\uD83D\uDCCC ' : ''}{doc.group_id ? '\uD83D\uDCCE ' : ''}{doc.filename}
+                        </span>
                         <span style={styles.compactDate}>
                           {new Date(doc.document_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                         </span>
@@ -552,11 +656,12 @@ export default function Timeline({ onSelectDocument }) {
 
                       return (
                         <div
-                          key={doc.id}
+                          key={doc.isDateEntry ? `entry-${doc.pinEntryId}` : doc.id}
                           data-event-id={doc.id}
                           style={{
                             ...styles.eventCard,
                             borderLeftColor: getEvidenceColor(doc.evidence_type),
+                            ...(doc.isDateEntry ? styles.eventCardPinned : {}),
                             ...(hoveredEvent === doc.id ? styles.eventCardHover : {})
                           }}
                           onClick={() => onSelectDocument && onSelectDocument(doc)}
@@ -571,13 +676,32 @@ export default function Timeline({ onSelectDocument }) {
 
                           <div style={{
                             ...styles.eventType,
-                            color: getEvidenceColor(doc.evidence_type)
+                            color: getEvidenceColor(doc.evidence_type),
+                            opacity: doc.evidence_confidence != null ? Math.max(0.5, doc.evidence_confidence) : 1
                           }}>
                             <span style={styles.eventIcon}>{getEvidenceIcon(doc.evidence_type)}</span>
                             {formatEvidenceType(doc.evidence_type)}
+                            {doc.evidence_confidence != null && doc.evidence_confidence < 0.6 && (
+                              <span style={styles.lowConfidence} title={`Confidence: ${Math.round(doc.evidence_confidence * 100)}%`}>?</span>
+                            )}
+                            {doc.evidence_secondary && doc.evidence_secondary !== doc.evidence_type && doc.evidence_confidence != null && doc.evidence_confidence < 0.6 && (
+                              <span style={styles.secondaryType} title={`Also: ${formatEvidenceType(doc.evidence_secondary)}`}>
+                                /{formatEvidenceType(doc.evidence_secondary)}
+                              </span>
+                            )}
                           </div>
 
-                          <div style={styles.eventTitle}>{doc.filename}</div>
+                          <div style={styles.eventTitle}>
+                            {doc.isDateEntry && <span title="Pinned date entry">{'\uD83D\uDCCC'} </span>}
+                            {doc.group_id && <span title="Linked document group">{'\uD83D\uDCCE'} </span>}
+                            {doc.filename}
+                          </div>
+
+                          {doc.isDateEntry && doc.pinLabel && (
+                            <div style={styles.pinLabelBadge}>
+                              {doc.pinLabel}
+                            </div>
+                          )}
 
                           <div style={styles.eventMeta}>
                             {doc.file_type && (
@@ -589,6 +713,27 @@ export default function Timeline({ onSelectDocument }) {
                               {doc.document_date_confidence}
                             </span>
                           </div>
+
+                          {/* Precedent badge */}
+                          {(doc.evidence_type === 'PROTECTED_ACTIVITY' ||
+                            doc.evidence_type === 'ADVERSE_ACTION') &&
+                            precedentAnalysis?.precedents?.burlington_northern && (
+                            <div style={{
+                              ...styles.precedentBadge,
+                              background: getPrecedentColor(precedentAnalysis.precedents.burlington_northern.alignmentPercent)
+                            }}>
+                              BN: {precedentAnalysis.precedents.burlington_northern.alignmentPercent}%
+                            </div>
+                          )}
+                          {doc.evidence_type === 'INCIDENT' &&
+                            precedentAnalysis?.precedents?.harris && (
+                            <div style={{
+                              ...styles.precedentBadge,
+                              background: getPrecedentColor(precedentAnalysis.precedents.harris.alignmentPercent)
+                            }}>
+                              Harris: {precedentAnalysis.precedents.harris.alignmentPercent}%
+                            </div>
+                          )}
                         </div>
                       );
                     })
@@ -635,6 +780,14 @@ export default function Timeline({ onSelectDocument }) {
           </div>
         </div>
       )}
+
+      {/* Case Strength modal */}
+      {showCaseStrength && (
+        <CaseStrength
+          analysis={precedentAnalysis}
+          onClose={() => setShowCaseStrength(false)}
+        />
+      )}
     </div>
   );
 }
@@ -674,6 +827,12 @@ function YearSummary({ documents, onSelectDocument, styles }) {
   ));
 }
 
+function getPrecedentColor(percent) {
+  if (percent >= 70) return '#DCFCE7';
+  if (percent >= 40) return '#FEF9C3';
+  return '#FEE2E2';
+}
+
 function formatEvidenceType(type) {
   const labels = {
     'ADVERSE_ACTION': 'Adverse Action',
@@ -702,6 +861,35 @@ function getStyles() {
     },
     containerDragOver: {
       background: colors.surfaceAlt
+    },
+
+    // Ingest overlay
+    ingestOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 50,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.sm,
+      padding: `${spacing.sm} ${spacing.md}`,
+      background: colors.primary,
+      color: colors.textInverse,
+      fontSize: typography.fontSize.sm,
+      fontWeight: typography.fontWeight.medium,
+    },
+    ingestSpinner: {
+      width: '16px',
+      height: '16px',
+      border: `2px solid rgba(255,255,255,0.3)`,
+      borderTopColor: '#fff',
+      borderRadius: '50%',
+      animation: 'spin 0.8s linear infinite',
+    },
+    ingestText: {
+      color: colors.textInverse,
     },
 
     // Loading
@@ -803,6 +991,23 @@ function getStyles() {
       borderRadius: radius.full
     },
     escalationIcon: {
+      fontSize: typography.fontSize.base
+    },
+    caseStrengthBtn: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: spacing.xs,
+      padding: `${spacing.xs} ${spacing.md}`,
+      background: colors.surface,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.full,
+      fontSize: typography.fontSize.sm,
+      fontWeight: typography.fontWeight.medium,
+      color: colors.textPrimary,
+      cursor: 'pointer',
+      transition: 'all 0.15s ease'
+    },
+    caseStrengthIcon: {
       fontSize: typography.fontSize.base
     },
 
@@ -1011,6 +1216,20 @@ function getStyles() {
       boxShadow: shadows.md,
       transform: 'translateY(-2px)'
     },
+    eventCardPinned: {
+      borderStyle: 'dashed',
+      background: `${colors.surface}ee`,
+      opacity: 0.92
+    },
+    pinLabelBadge: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      fontStyle: 'italic',
+      marginBottom: spacing.xs,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    },
     retaliationBadge: {
       position: 'absolute',
       top: `-${spacing.sm}`,
@@ -1065,6 +1284,44 @@ function getStyles() {
       background: colors.surfaceAlt,
       padding: `2px ${spacing.xs}`,
       borderRadius: radius.sm
+    },
+    precedentBadge: {
+      display: 'inline-block',
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.semibold,
+      padding: `2px ${spacing.sm}`,
+      borderRadius: radius.sm,
+      marginTop: spacing.xs
+    },
+    lowConfidence: {
+      display: 'inline-block',
+      fontSize: '9px',
+      fontWeight: typography.fontWeight.bold,
+      color: '#f59e0b',
+      background: 'rgba(245, 158, 11, 0.15)',
+      borderRadius: '50%',
+      width: '14px',
+      height: '14px',
+      lineHeight: '14px',
+      textAlign: 'center',
+      marginLeft: '4px'
+    },
+    secondaryType: {
+      fontSize: '9px',
+      color: colors.textTertiary,
+      marginLeft: '2px',
+      fontWeight: typography.fontWeight.normal
+    },
+    reclassifyBtn: {
+      background: 'none',
+      border: `1px solid ${colors.border}`,
+      color: colors.textSecondary,
+      padding: `${spacing.xs} ${spacing.md}`,
+      borderRadius: radius.md,
+      fontSize: typography.fontSize.xs,
+      cursor: 'pointer',
+      transition: 'all 0.15s ease',
+      whiteSpace: 'nowrap'
     },
 
     // Month view: compact event card

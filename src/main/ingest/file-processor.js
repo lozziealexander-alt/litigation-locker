@@ -6,7 +6,7 @@ const mime = require('mime-types');
 
 const { extractMetadata } = require('./metadata-extractor');
 const { extractDatesFromText } = require('./date-extractor');
-const { detectEvidenceType } = require('./evidence-detector');
+const { classifyEvidence } = require('./evidence-classifier');
 const { runOcr } = require('./ocr-engine');
 const { encrypt } = require('../crypto/vault');
 
@@ -15,7 +15,16 @@ const { encrypt } = require('../crypto/vault');
  * Returns a document record ready for DB insertion.
  */
 async function processFile(filePath, caseKey) {
+  // Validate file exists and is accessible
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+
   const stats = fs.statSync(filePath);
+  if (!stats.isFile()) {
+    throw new Error(`Not a file: ${filePath}`);
+  }
+
   const rawContent = fs.readFileSync(filePath);
 
   const filename = path.basename(filePath);
@@ -24,11 +33,19 @@ async function processFile(filePath, caseKey) {
   const sha256 = crypto.createHash('sha256').update(rawContent).digest('hex');
   const docId = uuidv4();
 
+  console.log(`[processFile] ${filename} (${mimeType}, ${stats.size} bytes)`);
+
   // Encrypt the raw file content
   const encryptedContent = encrypt(rawContent, caseKey);
 
   // Extract metadata based on file type
-  const metadata = await extractMetadata(rawContent, ext, mimeType, filePath);
+  let metadata;
+  try {
+    metadata = await extractMetadata(rawContent, ext, mimeType, filePath);
+  } catch (metaErr) {
+    console.warn(`[processFile] metadata extraction failed for ${filename}:`, metaErr.message);
+    metadata = { raw: {}, documentDate: null, extractedText: '' };
+  }
 
   // Get text content: from extraction or OCR
   let extractedText = metadata.extractedText || '';
@@ -36,7 +53,12 @@ async function processFile(filePath, caseKey) {
 
   const isImage = mimeType.startsWith('image/');
   if (isImage && !extractedText) {
-    ocrText = await runOcr(rawContent, mimeType);
+    try {
+      ocrText = await runOcr(rawContent, mimeType);
+    } catch (ocrErr) {
+      console.warn(`[processFile] OCR failed for ${filename}:`, ocrErr.message);
+      ocrText = '';
+    }
   }
 
   // Combine all available text for date extraction
@@ -48,8 +70,8 @@ async function processFile(filePath, caseKey) {
   // Determine the primary document date (best guess)
   const documentDate = pickBestDate(metadata, contentDates, stats);
 
-  // Detect evidence type from content signals
-  const evidenceType = detectEvidenceType({
+  // Classify evidence type using multi-layer inference
+  const classification = classifyEvidence({
     filename,
     ext,
     mimeType,
@@ -74,7 +96,12 @@ async function processFile(filePath, caseKey) {
     content_dates_json: JSON.stringify(contentDates),
     extracted_text: extractedText || null,
     ocr_text: ocrText || null,
-    evidence_type: evidenceType
+    evidence_type: classification.primary,
+    evidence_confidence: classification.confidence === 'high' ? 0.9 :
+                         classification.confidence === 'medium' ? 0.6 :
+                         classification.confidence === 'low' ? 0.3 : 0.1,
+    evidence_secondary: classification.secondary,
+    evidence_scores_json: JSON.stringify(classification.allScores)
   };
 }
 
@@ -103,18 +130,51 @@ function pickBestDate(metadata, contentDates, stats) {
 }
 
 /**
- * Process multiple files (batch ingest)
+ * Process multiple files (batch ingest).
+ * Splits work: non-image files process in parallel, image files
+ * (which need the shared Tesseract worker) process sequentially.
  */
 async function processFiles(filePaths, caseKey) {
   const results = [];
   const errors = [];
 
-  for (const filePath of filePaths) {
+  // Split into image vs non-image for smarter concurrency
+  const imagePaths = [];
+  const otherPaths = [];
+
+  for (const fp of filePaths) {
+    const m = mime.lookup(fp) || 'application/octet-stream';
+    if (m.startsWith('image/')) {
+      imagePaths.push(fp);
+    } else {
+      otherPaths.push(fp);
+    }
+  }
+
+  // Process non-image files in parallel (no shared OCR worker contention)
+  if (otherPaths.length > 0) {
+    const settled = await Promise.allSettled(
+      otherPaths.map(fp => processFile(fp, caseKey))
+    );
+    for (let i = 0; i < settled.length; i++) {
+      if (settled[i].status === 'fulfilled') {
+        results.push(settled[i].value);
+      } else {
+        const reason = settled[i].reason;
+        console.error('[processFiles] error on', otherPaths[i], reason?.message || reason);
+        errors.push({ file: path.basename(otherPaths[i]), error: reason?.message || String(reason) });
+      }
+    }
+  }
+
+  // Process image files sequentially (shared Tesseract worker)
+  for (const fp of imagePaths) {
     try {
-      const doc = await processFile(filePath, caseKey);
+      const doc = await processFile(fp, caseKey);
       results.push(doc);
     } catch (err) {
-      errors.push({ file: filePath, error: err.message });
+      console.error('[processFiles] error on', fp, err.message);
+      errors.push({ file: path.basename(fp), error: err.message });
     }
   }
 

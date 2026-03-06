@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS documents (
   extracted_text TEXT,
   ocr_text TEXT,
   evidence_type TEXT,
+  evidence_confidence REAL,
+  evidence_secondary TEXT,
+  evidence_scores_json TEXT,
   user_context TEXT,
 
   -- Organization
@@ -222,6 +225,17 @@ CREATE TABLE IF NOT EXISTS case_context (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Document date entries (allow one document to appear at multiple timeline dates)
+CREATE TABLE IF NOT EXISTS document_date_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  entry_date DATETIME NOT NULL,
+  label TEXT,
+  date_confidence TEXT CHECK(date_confidence IN ('exact', 'approximate', 'inferred')),
+  is_primary BOOLEAN DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_documents_date ON documents(document_date);
 CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(evidence_type);
@@ -230,3 +244,5 @@ CREATE INDEX IF NOT EXISTS idx_actor_appearances_actor ON actor_appearances(acto
 CREATE INDEX IF NOT EXISTS idx_actor_appearances_doc ON actor_appearances(document_id);
 CREATE INDEX IF NOT EXISTS idx_timeline_source ON timeline_connections(source_id, source_type);
 CREATE INDEX IF NOT EXISTS idx_timeline_target ON timeline_connections(target_id, target_type);
+CREATE INDEX IF NOT EXISTS idx_date_entries_doc ON document_date_entries(document_id);
+CREATE INDEX IF NOT EXISTS idx_date_entries_date ON document_date_entries(entry_date);

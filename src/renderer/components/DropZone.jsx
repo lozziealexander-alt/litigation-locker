@@ -34,7 +34,14 @@ export default function DropZone({ onIngest, isIngesting }) {
 
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
-      const paths = files.map(f => f.path).filter(Boolean);
+      const paths = files.map(f => {
+        try {
+          return window.api.getPathForFile(f);
+        } catch (err) {
+          console.warn('[DropZone] getPathForFile fallback for:', f.name, err.message);
+          return f.path || '';
+        }
+      }).filter(Boolean);
       if (paths.length > 0 && onIngest) {
         onIngest(paths);
       }
