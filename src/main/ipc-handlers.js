@@ -424,8 +424,8 @@ function registerIpcHandlers() {
       // Delete from documents table
       currentCaseDb.prepare('DELETE FROM documents WHERE id = ?').run(docId);
 
-      // Clean up related date_entries if table exists
-      try { currentCaseDb.prepare('DELETE FROM date_entries WHERE document_id = ?').run(docId); } catch (e) {}
+      // Clean up related document_date_entries if table exists
+      try { currentCaseDb.prepare('DELETE FROM document_date_entries WHERE document_id = ?').run(docId); } catch (e) {}
 
       return { success: true };
     } catch (error) {
@@ -518,23 +518,28 @@ function registerIpcHandlers() {
   // ==================== FILE DIALOG ====================
 
   ipcMain.handle('dialog:openFiles', async () => {
-    console.log('[IPC] dialog:openFiles called');
-    const result = await dialog.showOpenDialog({
-      properties: ['openFile', 'multiSelections'],
-      filters: [
-        { name: 'All Files', extensions: ['*'] },
-        { name: 'Documents', extensions: ['pdf', 'doc', 'docx', 'txt', 'rtf', 'md'] },
-        { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'] },
-        { name: 'Emails', extensions: ['eml'] }
-      ]
-    });
+    try {
+      console.log('[IPC] dialog:openFiles called');
+      const result = await dialog.showOpenDialog({
+        properties: ['openFile', 'multiSelections'],
+        filters: [
+          { name: 'All Files', extensions: ['*'] },
+          { name: 'Documents', extensions: ['pdf', 'doc', 'docx', 'txt', 'rtf', 'md'] },
+          { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'] },
+          { name: 'Emails', extensions: ['eml'] }
+        ]
+      });
 
-    if (result.canceled) {
-      console.log('[IPC] dialog:openFiles - canceled');
-      return { canceled: true, filePaths: [] };
+      if (result.canceled) {
+        console.log('[IPC] dialog:openFiles - canceled');
+        return { canceled: true, filePaths: [] };
+      }
+      console.log('[IPC] dialog:openFiles - selected', result.filePaths.length, 'files:', result.filePaths);
+      return { canceled: false, filePaths: result.filePaths };
+    } catch (error) {
+      console.error('[IPC] dialog:openFiles error:', error.message);
+      return { canceled: true, filePaths: [], error: error.message };
     }
-    console.log('[IPC] dialog:openFiles - selected', result.filePaths.length, 'files:', result.filePaths);
-    return { canceled: false, filePaths: result.filePaths };
   });
 
   // ==================== TIMELINE ====================
@@ -638,8 +643,17 @@ function registerIpcHandlers() {
         ORDER BY document_date ASC
       `).all();
 
-      const incidents = [];
-      const actors = [];
+      const incidents = currentCaseDb.prepare(`
+        SELECT id, title, incident_date, incident_type, computed_severity
+        FROM incidents
+        ORDER BY incident_date ASC
+      `).all();
+
+      const actors = currentCaseDb.prepare(`
+        SELECT id, name, role, classification, relationship_to_self,
+               is_self, gender, disability_status
+        FROM actors
+      `).all();
 
       const analysis = analyzeAllPrecedents(documents, incidents, actors, jurisdiction);
 
@@ -669,7 +683,23 @@ function registerIpcHandlers() {
         return { success: false, error: 'Document not found' };
       }
 
-      const analysis = analyzeAllPrecedents(documents, [], []);
+      const incidents = currentCaseDb.prepare(`
+        SELECT id, title, incident_date, incident_type, computed_severity
+        FROM incidents ORDER BY incident_date ASC
+      `).all();
+
+      const actors = currentCaseDb.prepare(`
+        SELECT id, name, role, classification, relationship_to_self,
+               is_self, gender, disability_status
+        FROM actors
+      `).all();
+
+      const ctx = currentCaseDb.prepare(
+        "SELECT jurisdiction FROM case_context WHERE id = 1"
+      ).get();
+      const jurisdiction = ctx?.jurisdiction || 'both';
+
+      const analysis = analyzeAllPrecedents(documents, incidents, actors, jurisdiction);
       const badges = getDocumentPrecedentBadges(document, analysis);
 
       return { success: true, badges };
@@ -1039,6 +1069,9 @@ function registerIpcHandlers() {
         return { success: false, error: 'No case is open' };
       }
 
+      // Migration: add secondary_classifications if missing
+      try { currentCaseDb.exec('ALTER TABLE actors ADD COLUMN secondary_classifications TEXT DEFAULT NULL'); } catch (e) {}
+
       const stmt = currentCaseDb.prepare(`
         SELECT a.*,
          (SELECT COUNT(*) FROM actor_appearances WHERE actor_id = a.id) as appearance_count
@@ -1071,12 +1104,12 @@ function registerIpcHandlers() {
       const stmt = currentCaseDb.prepare(`
         INSERT INTO actors (
           id, name, email, role, title, department,
-          classification, would_they_help,
+          classification, secondary_classifications, would_they_help,
           relationship_to_self, reports_to, is_self,
           has_written_statement, statement_is_dated, statement_is_specific,
           still_employed, reports_to_bad_actor, risk_factors,
           gender, disability_status, start_date, end_date
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
@@ -1087,6 +1120,7 @@ function registerIpcHandlers() {
         actorData.title || null,
         actorData.department || null,
         actorData.classification || 'unknown',
+        actorData.secondaryClassifications ? JSON.stringify(actorData.secondaryClassifications) : null,
         actorData.wouldTheyHelp || 'unknown',
         actorData.relationship || null,
         actorData.reportsTo || null,
@@ -1157,6 +1191,12 @@ function registerIpcHandlers() {
         }
       }
 
+      // Handle JSON-serialized secondary classifications
+      if (updates.secondaryClassifications !== undefined) {
+        fields.push('secondary_classifications = ?');
+        values.push(Array.isArray(updates.secondaryClassifications) ? JSON.stringify(updates.secondaryClassifications) : updates.secondaryClassifications);
+      }
+
       if (fields.length === 0) {
         return { success: true };
       }
@@ -1198,14 +1238,43 @@ function registerIpcHandlers() {
         return { success: false, error: 'No case is open' };
       }
 
-      // Move all appearances to the kept actor
+      // Delete conflicting appearances where both actors appear in same document
+      currentCaseDb.prepare(`
+        DELETE FROM actor_appearances
+        WHERE actor_id = ? AND document_id IN (
+          SELECT document_id FROM actor_appearances WHERE actor_id = ?
+        )
+      `).run(mergeActorId, keepActorId);
+
+      // Move remaining appearances to the kept actor
       currentCaseDb.prepare(`
         UPDATE actor_appearances SET actor_id = ? WHERE actor_id = ?
       `).run(keepActorId, mergeActorId);
 
-      // Move all incident links
+      // Delete conflicting incident links where both actors are in same incident
+      currentCaseDb.prepare(`
+        DELETE FROM incident_actors
+        WHERE actor_id = ? AND incident_id IN (
+          SELECT incident_id FROM incident_actors WHERE actor_id = ?
+        )
+      `).run(mergeActorId, keepActorId);
+
+      // Move remaining incident links
       currentCaseDb.prepare(`
         UPDATE incident_actors SET actor_id = ? WHERE actor_id = ?
+      `).run(keepActorId, mergeActorId);
+
+      // Delete conflicting anchor links where both actors are in same anchor
+      currentCaseDb.prepare(`
+        DELETE FROM anchor_actors
+        WHERE actor_id = ? AND anchor_id IN (
+          SELECT anchor_id FROM anchor_actors WHERE actor_id = ?
+        )
+      `).run(mergeActorId, keepActorId);
+
+      // Move remaining anchor links
+      currentCaseDb.prepare(`
+        UPDATE anchor_actors SET actor_id = ? WHERE actor_id = ?
       `).run(keepActorId, mergeActorId);
 
       // Delete the merged actor

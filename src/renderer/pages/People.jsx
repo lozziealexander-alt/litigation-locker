@@ -119,12 +119,15 @@ export default function People({ onSelectActor }) {
   async function handleMerge(keepId, mergeId) {
     const result = await window.api.actors.merge(keepId, mergeId);
     if (result.success) {
-      // Remove merged pair from list
-      setDuplicates(prev => prev.filter(d => !(d.actor1.id === mergeId || d.actor2.id === mergeId)));
+      // Remove merged pair from list, close panel if none remain
+      setDuplicates(prev => {
+        const remaining = prev.filter(d => !(d.actor1.id === mergeId || d.actor2.id === mergeId));
+        if (remaining.length === 0) {
+          setShowMergePanel(false);
+        }
+        return remaining;
+      });
       await loadActors();
-      if (duplicates.length <= 1) {
-        setShowMergePanel(false);
-      }
     }
   }
 
@@ -346,7 +349,9 @@ export default function People({ onSelectActor }) {
                     </button>
                     <button
                       style={styles.skipMergeBtn}
-                      onClick={() => setDuplicates(prev => prev.filter((_, idx) => idx !== i))}
+                      onClick={() => setDuplicates(prev => prev.filter(d =>
+                        !(d.actor1.id === dup.actor1.id && d.actor2.id === dup.actor2.id)
+                      ))}
                     >
                       Skip
                     </button>

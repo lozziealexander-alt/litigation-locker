@@ -620,13 +620,16 @@ export default function Anchors({ caseId }) {
                     draggable onDragStart={e => handleDragStart(e, index)}
                     onDragOver={e => handleDragOver(e, index)}
                     onDrop={e => handleDrop(e, index)} onDragEnd={handleDragEnd}
+                    onClick={() => handleExpandAnchor(anchor)}
                     style={{
                       ...styles.anchorCard,
                       borderLeft: `3px solid ${accentColor}`,
                       opacity: dragState.dragging === index ? 0.4 : 1,
                       borderTop: dragState.over === index ? `2px solid ${colors.primary}` : '2px solid transparent',
                       ...(expandedAnchor === anchor.id ? {
-                        borderColor: accentColor,
+                        borderRight: `1px solid ${accentColor}`,
+                        borderBottom: `1px solid ${accentColor}`,
+                        borderTop: `2px solid ${accentColor}`,
                         boxShadow: `0 0 0 2px ${accentColor}20`,
                       } : {})
                     }}
@@ -679,7 +682,7 @@ export default function Anchors({ caseId }) {
                       </div>
 
                       {/* Title */}
-                      <h3 style={styles.anchorTitle} onClick={() => handleExpandAnchor(anchor)}>
+                      <h3 style={styles.anchorTitle} onClick={e => { e.stopPropagation(); handleExpandAnchor(anchor); }}>
                         {anchor.title}
                       </h3>
 
@@ -715,11 +718,12 @@ export default function Anchors({ caseId }) {
                           <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                             {anchor.precedents.slice(0, 3).map(p => {
                               const info = PRECEDENT_CATALOG.find(c => c.id === p.precedent_id);
+                              if (!info) return null;
                               return (
                                 <span key={p.precedent_id} style={styles.precedentBadgeClickable}
                                   onClick={e => { e.stopPropagation(); setPrecedentDetail(info); }}
-                                  title={info?.name || p.precedent_id}>
-                                  {'\u2696\uFE0F'} {info?.shortName || p.precedent_id}
+                                  title={info.name}>
+                                  {'\u2696\uFE0F'} {info.shortName || p.precedent_id}
                                 </span>
                               );
                             })}
@@ -728,7 +732,7 @@ export default function Anchors({ caseId }) {
                       </div>
 
                       {/* Expand button */}
-                      <button style={styles.expandBtn} onClick={() => handleExpandAnchor(anchor)}>
+                      <button style={styles.expandBtn} onClick={e => { e.stopPropagation(); handleExpandAnchor(anchor); }}>
                         {expandedAnchor === anchor.id ? 'Close \u25B2' : 'Details \u25BC'}
                       </button>
                     </div>
@@ -879,7 +883,7 @@ function AnchorSpokes({
             {editing ? (
               <input value={editData.title}
                 onChange={e => setEditData({ ...editData, title: e.target.value })}
-                style={{ ...styles.spokeTitleInput, borderColor: accentColor }} />
+                style={{ ...styles.spokeTitleInput, border: `1px solid ${accentColor}` }} />
             ) : (
               <h3 style={styles.spokeTitle}>{anchor.title}</h3>
             )}
@@ -968,7 +972,7 @@ function AnchorSpokes({
                   <label key={dir} style={{
                     ...styles.radioLabel,
                     background: editData.actionDirection === dir ? (dir === 'toward_me' ? '#FEF2F2' : '#FFFBEB') : '#F9FAFB',
-                    borderColor: editData.actionDirection === dir ? (dir === 'toward_me' ? '#FCA5A5' : '#FDE68A') : '#E8E4DF'
+                    border: `1px solid ${editData.actionDirection === dir ? (dir === 'toward_me' ? '#FCA5A5' : '#FDE68A') : '#E8E4DF'}`
                   }}>
                     <input type="radio" name="direction" value={dir} checked={editData.actionDirection === dir}
                       onChange={e => setEditData({ ...editData, actionDirection: e.target.value })}
@@ -1217,7 +1221,7 @@ function AnchorSpokes({
                 return (
                   <div key={p.precedent_id} style={styles.precedentRow}>
                     <span style={{ fontSize: '14px', flexShrink: 0 }}>{'\u2696\uFE0F'}</span>
-                    <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => onPrecedentClick(info)}>
+                    <div style={{ flex: 1, cursor: info ? 'pointer' : 'default' }} onClick={() => info && onPrecedentClick(info)}>
                       <span style={styles.precedentName}>{info?.name || p.precedent_id}</span>
                       {p.relevance_note && <span style={styles.precedentNote}>{p.relevance_note}</span>}
                     </div>
@@ -1487,8 +1491,8 @@ const styles = {
   },
   spinner: {
     width: '32px', height: '32px',
-    border: '3px solid #E5E7EB',
-    borderTopColor: colors.primary,
+    borderRight: '3px solid #E5E7EB', borderBottom: '3px solid #E5E7EB',
+    borderLeft: '3px solid #E5E7EB', borderTop: `3px solid ${colors.primary}`,
     borderRadius: '50%',
     animation: 'spin 1s linear infinite'
   },
@@ -1701,7 +1705,9 @@ const styles = {
   // Anchor cards
   anchorCard: {
     display: 'flex', background: '#FFFFFF',
-    border: '1px solid #E8E4DF', borderRadius: radius.md,
+    borderTop: '1px solid #E8E4DF', borderRight: '1px solid #E8E4DF',
+    borderBottom: '1px solid #E8E4DF', borderLeft: '1px solid #E8E4DF',
+    borderRadius: radius.md,
     marginBottom: spacing.sm, overflow: 'hidden',
     transition: 'all 0.2s ease', position: 'relative',
     zIndex: 1, cursor: 'grab'
@@ -1795,7 +1801,7 @@ const styles = {
   },
   spokeTitleInput: {
     fontSize: '18px', fontWeight: 600, color: colors.textPrimary,
-    border: '1px solid', borderRadius: '6px', padding: `4px ${spacing.sm}`,
+    border: '1px solid #E8E4DF', borderRadius: '6px', padding: `4px ${spacing.sm}`,
     outline: 'none', width: '280px'
   },
   closeBtn: {
@@ -1843,7 +1849,7 @@ const styles = {
   radioLabel: {
     padding: `${spacing.xs} ${spacing.sm}`, borderRadius: radius.md,
     fontSize: '12px', fontWeight: 500, cursor: 'pointer',
-    border: '1px solid', transition: 'all 0.15s'
+    border: '1px solid #E8E4DF', transition: 'all 0.15s'
   },
 
   // Actor chips

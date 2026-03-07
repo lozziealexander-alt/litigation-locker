@@ -112,7 +112,8 @@ window.api = {
       { id: 'act-1', name: 'Jane Manager', classification: 'bad_actor', secondary_classifications: '["enabler"]', role: 'Direct Supervisor', relationship_to_self: 'supervisor', appearance_count: 5 },
       { id: 'act-2', name: 'Tom HR', classification: 'enabler', secondary_classifications: null, role: 'HR Director', relationship_to_self: 'hr', appearance_count: 3 },
       { id: 'act-3', name: 'Sarah Coworker', classification: 'witness_supportive', secondary_classifications: '["corroborator"]', role: 'Colleague', relationship_to_self: 'coworker', appearance_count: 1 },
-      { id: 'act-4', name: 'Mike VP', classification: 'bad_actor', secondary_classifications: null, role: 'VP Operations', relationship_to_self: 'upper management', appearance_count: 2 }
+      { id: 'act-4', name: 'Mike VP', classification: 'bad_actor', secondary_classifications: null, role: 'VP Operations', relationship_to_self: 'upper management', appearance_count: 2 },
+      { id: 'act-self', name: 'You (Self)', classification: 'self', secondary_classifications: null, role: 'Senior Analyst', relationship_to_self: 'self', appearance_count: 6, is_self: 1, gender: 'female', disability_status: 'no', race: 'unknown', age_range: '40-49' }
     ]}),
     create: (data) => Promise.resolve({ success: true, actor: { id: 'act-new', ...data } }),
     update: () => Promise.resolve({ success: true }),

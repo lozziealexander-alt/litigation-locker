@@ -12,6 +12,7 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
   const [escalation, setEscalation] = useState(null);
   const [collapsedSections, setCollapsedSections] = useState({});
   const [showCaseStrength, setShowCaseStrength] = useState(false);
+  const [protectedClasses, setProtectedClasses] = useState([]);
 
   function toggleSection(section) {
     setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -34,7 +35,19 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
 
     if (docsResult.success) setDocuments(docsResult.documents);
     if (incidentsResult.success) setIncidents(incidentsResult.incidents);
-    if (actorsResult.success) setActors(actorsResult.actors);
+    if (actorsResult.success) {
+      setActors(actorsResult.actors);
+      // Extract protected class status from self-actor
+      const self = actorsResult.actors.find(a => a.is_self);
+      if (self) {
+        const classes = [];
+        if (self.gender && self.gender !== 'unknown') classes.push({ type: 'Gender', value: self.gender });
+        if (self.disability_status && self.disability_status !== 'unknown' && self.disability_status !== 'no') classes.push({ type: 'Disability', value: self.disability_status });
+        if (self.race && self.race !== 'unknown') classes.push({ type: 'Race', value: self.race });
+        if (self.age_range && self.age_range !== 'unknown') classes.push({ type: 'Age', value: self.age_range });
+        setProtectedClasses(classes);
+      }
+    }
     if (precedentResult.success) setPrecedentAnalysis(precedentResult.analysis);
     if (connectionsResult.success) {
       setConnections(connectionsResult.connections);
@@ -324,26 +337,43 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
           );
         })()}
 
+        {/* Protected Class Status */}
+        {protectedClasses.length > 0 && (
+          <div style={{ ...styles.card, borderLeft: `3px solid ${colors.primary}`, marginBottom: spacing.md }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '14px', fontWeight: 600, color: colors.textPrimary }}>Protected Class Status:</span>
+              {protectedClasses.map((pc, i) => (
+                <span key={i} style={{
+                  padding: '2px 10px', borderRadius: radius.full, fontSize: '12px', fontWeight: 500,
+                  background: colors.primary + '14', color: colors.primary, border: `1px solid ${colors.primary}30`
+                }}>
+                  {pc.type}: {pc.value}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Stats Row */}
         <div style={styles.statsRow}>
           <StatCard
             icon={'\uD83D\uDCC4'}
             value={stats?.documentCount || 0}
             label="Documents"
-            onClick={onNavigateToTimeline}
+            onClick={() => onNavigateToTimeline?.()}
           />
           <StatCard
             icon={'\u26A1'}
             value={stats?.incidentCount || 0}
             label="Incidents"
-            onClick={onNavigateToTimeline}
+            onClick={() => onNavigateToTimeline?.()}
           />
           <StatCard
             icon={'\uD83D\uDC65'}
             value={stats?.actorCount || 0}
             label="People"
             sublabel={stats?.badActorCount > 0 ? `${stats.badActorCount} bad actor${stats.badActorCount !== 1 ? 's' : ''}` : null}
-            onClick={onNavigateToPeople}
+            onClick={() => onNavigateToPeople?.()}
           />
           <StatCard
             icon={'\uD83D\uDCC5'}
@@ -432,7 +462,7 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
                           borderLeftColor: alert.severity === 'critical' ? colors.error :
                                            alert.severity === 'warning' ? colors.warning : colors.primary
                         }}
-                        onClick={onNavigateToTimeline}
+                        onClick={() => onNavigateToTimeline?.()}
                         title="View on timeline"
                       >
                         <div style={styles.alertTitle}>{alert.title}</div>
@@ -499,7 +529,7 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
                       <div
                         key={i}
                         style={{...styles.gapItem, ...styles.clickableItem}}
-                        onClick={() => onNavigateToTimeline?.()}
+                        onClick={() => setShowCaseStrength(true)}
                         title={`${gap.recommendation}\n\nPrecedent: ${gap.precedent}`}
                       >
                         <div style={styles.gapElement}>{gap.element}</div>
@@ -581,7 +611,7 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
                 </div>
                 <span style={styles.strengthValue}>{precedentAnalysis.caseStrength}%</span>
               </div>
-              {Object.entries(precedentAnalysis.precedents).map(([key, prec]) => (
+              {Object.entries(precedentAnalysis.precedents || {}).map(([key, prec]) => (
                 <div key={key} style={styles.precedentDetail}>
                   <div style={styles.precedentDetailHeader}>
                     <span style={styles.precedentDetailName}>{prec.name}</span>

@@ -57,6 +57,7 @@ export default function App() {
     if (result.success) {
       setActiveCase(caseData);
       setSelectedDocument(null);
+      setSelectedActor(null);
       setTimelineKey(k => k + 1);
     }
   }

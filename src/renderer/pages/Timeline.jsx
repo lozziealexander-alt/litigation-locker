@@ -999,8 +999,9 @@ export default function Timeline({ onSelectDocument }) {
                             precedentAnalysis?.precedents?.burlington_northern && (
                             <div style={{
                               ...styles.precedentBadge,
-                              background: getPrecedentColor(precedentAnalysis.precedents.burlington_northern.alignmentPercent)
-                            }}>
+                              background: getPrecedentColor(precedentAnalysis.precedents.burlington_northern.alignmentPercent),
+                              cursor: 'pointer'
+                            }} onClick={e => { e.stopPropagation(); setShowCaseStrength(true); }}>
                               BN: {precedentAnalysis.precedents.burlington_northern.alignmentPercent}%
                             </div>
                           )}
@@ -1008,8 +1009,9 @@ export default function Timeline({ onSelectDocument }) {
                             precedentAnalysis?.precedents?.harris && (
                             <div style={{
                               ...styles.precedentBadge,
-                              background: getPrecedentColor(precedentAnalysis.precedents.harris.alignmentPercent)
-                            }}>
+                              background: getPrecedentColor(precedentAnalysis.precedents.harris.alignmentPercent),
+                              cursor: 'pointer'
+                            }} onClick={e => { e.stopPropagation(); setShowCaseStrength(true); }}>
                               Harris: {precedentAnalysis.precedents.harris.alignmentPercent}%
                             </div>
                           )}

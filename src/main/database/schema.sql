@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS actors (
     'bad_actor', 'enabler', 'witness_supportive', 'witness_neutral',
     'witness_hostile', 'bystander', 'corroborator', 'self', 'unknown'
   )),
+  secondary_classifications TEXT DEFAULT NULL, -- JSON array of additional classifications
 
   -- Witness assessment
   would_they_help TEXT CHECK(would_they_help IN ('likely_helpful', 'uncertain', 'likely_hostile', 'unknown')),
