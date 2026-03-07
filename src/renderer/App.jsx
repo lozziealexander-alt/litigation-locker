@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import Unlock from './pages/Unlock';
 import Timeline from './pages/Timeline';
+import People from './pages/People';
 import DocumentPanel from './components/DocumentPanel';
+import ActorDetail from './components/ActorDetail';
 import { useTheme } from './styles/ThemeContext';
 import { colors, shadows, spacing, typography, radius } from './styles/tokens';
 
@@ -12,6 +14,8 @@ export default function App() {
   const [cases, setCases] = useState([]);
   const [activeCase, setActiveCase] = useState(null);
   const [selectedDocument, setSelectedDocument] = useState(null);
+  const [selectedActor, setSelectedActor] = useState(null);
+  const [currentPage, setCurrentPage] = useState('timeline');
   const [timelineKey, setTimelineKey] = useState(0);
 
   // Recompute styles each render so they pick up current theme colors
@@ -125,7 +129,29 @@ export default function App() {
         </div>
 
         <div style={styles.sidebarSection}>
-          <div style={styles.sidebarLabel}>CASES</div>
+          <div style={styles.sidebarLabel}>VIEWS</div>
+          <button
+            style={{
+              ...styles.caseButton,
+              ...(currentPage === 'timeline' ? styles.navButtonActive : {})
+            }}
+            onClick={() => setCurrentPage('timeline')}
+          >
+            <span style={styles.caseIcon}>{'\u{1F4C5}'}</span>
+            <span style={styles.caseName}>Timeline</span>
+          </button>
+          <button
+            style={{
+              ...styles.caseButton,
+              ...(currentPage === 'people' ? styles.navButtonActive : {})
+            }}
+            onClick={() => setCurrentPage('people')}
+          >
+            <span style={styles.caseIcon}>{'\u{1F465}'}</span>
+            <span style={styles.caseName}>People</span>
+          </button>
+
+          <div style={{ ...styles.sidebarLabel, marginTop: spacing.lg }}>CASES</div>
           {cases.map(c => (
             <button
               key={c.id}
@@ -161,10 +187,17 @@ export default function App() {
 
       {/* Main content */}
       <div style={styles.main}>
-        <Timeline
-          key={timelineKey}
-          onSelectDocument={setSelectedDocument}
-        />
+        {currentPage === 'timeline' && (
+          <Timeline
+            key={timelineKey}
+            onSelectDocument={setSelectedDocument}
+          />
+        )}
+        {currentPage === 'people' && (
+          <People
+            onSelectActor={setSelectedActor}
+          />
+        )}
       </div>
 
       {/* Document panel */}
@@ -173,6 +206,18 @@ export default function App() {
           document={selectedDocument}
           onClose={() => setSelectedDocument(null)}
           onDocumentUpdated={() => setTimelineKey(k => k + 1)}
+        />
+      )}
+
+      {/* Actor detail panel */}
+      {selectedActor && (
+        <ActorDetail
+          actor={selectedActor}
+          onClose={() => setSelectedActor(null)}
+          onActorUpdated={() => {
+            setSelectedActor(null);
+            setTimelineKey(k => k + 1);
+          }}
         />
       )}
     </div>
@@ -314,6 +359,10 @@ function getStyles() {
     caseButtonActive: {
       background: colors.sidebarActive,
       color: colors.textInverse
+    },
+    navButtonActive: {
+      background: `${colors.sidebarActive}33`,
+      color: colors.sidebarActive
     },
     caseIcon: {
       fontSize: '14px',

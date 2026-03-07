@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS actors (
   -- Classification
   classification TEXT CHECK(classification IN (
     'bad_actor', 'enabler', 'witness_supportive', 'witness_neutral',
-    'witness_hostile', 'bystander', 'corroborator', 'self'
+    'witness_hostile', 'bystander', 'corroborator', 'self', 'unknown'
   )),
 
   -- Witness assessment
@@ -93,6 +93,12 @@ CREATE TABLE IF NOT EXISTS actors (
   -- Relationship
   reports_to TEXT REFERENCES actors(id),
   relationship_to_self TEXT,
+
+  -- Equality / dossier fields
+  gender TEXT CHECK(gender IN ('male', 'female', 'non_binary', 'prefer_not_to_say', 'unknown')),
+  disability_status TEXT CHECK(disability_status IN ('yes', 'no', 'prefer_not_to_say', 'unknown')),
+  start_date TEXT,
+  end_date TEXT,
 
   -- Computed
   is_self BOOLEAN DEFAULT 0,
@@ -189,7 +195,9 @@ CREATE TABLE IF NOT EXISTS timeline_connections (
 -- Pay records
 CREATE TABLE IF NOT EXISTS pay_records (
   id TEXT PRIMARY KEY,
+  actor_id TEXT REFERENCES actors(id),
   record_date DATE NOT NULL,
+  period TEXT,
   base_salary REAL,
   bonus REAL,
   merit_increase_percent REAL,
@@ -247,3 +255,4 @@ CREATE INDEX IF NOT EXISTS idx_timeline_source ON timeline_connections(source_id
 CREATE INDEX IF NOT EXISTS idx_timeline_target ON timeline_connections(target_id, target_type);
 CREATE INDEX IF NOT EXISTS idx_date_entries_doc ON document_date_entries(document_id);
 CREATE INDEX IF NOT EXISTS idx_date_entries_date ON document_date_entries(entry_date);
+CREATE INDEX IF NOT EXISTS idx_pay_records_actor ON pay_records(actor_id);

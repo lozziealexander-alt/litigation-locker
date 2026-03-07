@@ -9,6 +9,7 @@ const { analyzeConnections, detectEscalationPattern } = require('./analysis/time
 const { analyzeAllPrecedents, getDocumentPrecedentBadges } = require('./analysis/precedent-matcher');
 const { classifyEvidence } = require('./ingest/evidence-classifier');
 const { detectIncidents, computeSeverity } = require('./analysis/incident-detector');
+const { detectActors, findPotentialDuplicates } = require('./analysis/actor-detector');
 
 // Track currently open case
 let currentCaseDb = null;
@@ -180,8 +181,20 @@ function registerIpcHandlers() {
         }
       }
 
-      console.log('[IPC] inserted', inserted.length, 'documents,', allDetectedIncidents.length, 'potential incidents detected');
-      return { success: true, documents: inserted, errors, detectedIncidents: allDetectedIncidents };
+      // Detect actors from ingested documents
+      const allDetectedActors = [];
+      for (const doc of documents) {
+        const allText = [doc.extracted_text, doc.ocr_text].filter(Boolean).join('\n');
+        if (allText) {
+          const detected = detectActors(allText, doc.id);
+          if (detected.length > 0) {
+            allDetectedActors.push(...detected);
+          }
+        }
+      }
+
+      console.log('[IPC] inserted', inserted.length, 'documents,', allDetectedIncidents.length, 'potential incidents,', allDetectedActors.length, 'potential actors detected');
+      return { success: true, documents: inserted, errors, detectedIncidents: allDetectedIncidents, detectedActors: allDetectedActors };
     } catch (error) {
       console.error('[IPC] documents:ingest EXCEPTION:', error.message, error.stack);
       return { success: false, error: error.message };
@@ -901,6 +914,474 @@ function registerIpcHandlers() {
         ).run(jurisdiction);
       }
       return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== ACTORS ====================
+
+  ipcMain.handle('actors:list', async () => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const stmt = currentCaseDb.prepare(`
+        SELECT a.*,
+         (SELECT COUNT(*) FROM actor_appearances WHERE actor_id = a.id) as appearance_count
+        FROM actors a
+        ORDER BY
+         CASE WHEN a.is_self = 1 THEN 0 ELSE 1 END,
+         CASE a.classification
+           WHEN 'bad_actor' THEN 1
+           WHEN 'enabler' THEN 2
+           ELSE 3
+         END,
+         a.name
+      `);
+      const actors = stmt.all();
+
+      return { success: true, actors };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('actors:create', async (event, actorData) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const id = uuidv4();
+
+      const stmt = currentCaseDb.prepare(`
+        INSERT INTO actors (
+          id, name, email, role, title, department,
+          classification, would_they_help,
+          relationship_to_self, reports_to, is_self,
+          has_written_statement, statement_is_dated, statement_is_specific,
+          still_employed, reports_to_bad_actor, risk_factors,
+          gender, disability_status, start_date, end_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      stmt.run(
+        id,
+        actorData.name,
+        actorData.email || null,
+        actorData.role || null,
+        actorData.title || null,
+        actorData.department || null,
+        actorData.classification || 'unknown',
+        actorData.wouldTheyHelp || 'unknown',
+        actorData.relationship || null,
+        actorData.reportsTo || null,
+        actorData.isSelf ? 1 : 0,
+        actorData.hasWrittenStatement ? 1 : 0,
+        actorData.statementIsDated ? 1 : 0,
+        actorData.statementIsSpecific ? 1 : 0,
+        actorData.stillEmployed || 'unknown',
+        actorData.reportsToBadActor ? 1 : 0,
+        actorData.riskFactors || null,
+        actorData.gender || null,
+        actorData.disabilityStatus || null,
+        actorData.startDate || null,
+        actorData.endDate || null
+      );
+
+      // Link to source document if provided
+      if (actorData.sourceDocumentId) {
+        const linkStmt = currentCaseDb.prepare(`
+          INSERT INTO actor_appearances (actor_id, document_id, role_in_document, auto_detected)
+          VALUES (?, ?, ?, 1)
+        `);
+        linkStmt.run(id, actorData.sourceDocumentId, actorData.roleInDocument || null);
+      }
+
+      return { success: true, actor: { id, ...actorData } };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('actors:update', async (event, actorId, updates) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const fields = [];
+      const values = [];
+
+      const fieldMap = {
+        name: 'name',
+        email: 'email',
+        role: 'role',
+        title: 'title',
+        department: 'department',
+        classification: 'classification',
+        wouldTheyHelp: 'would_they_help',
+        relationship: 'relationship_to_self',
+        reportsTo: 'reports_to',
+        isSelf: 'is_self',
+        hasWrittenStatement: 'has_written_statement',
+        statementIsDated: 'statement_is_dated',
+        statementIsSpecific: 'statement_is_specific',
+        stillEmployed: 'still_employed',
+        reportsToBadActor: 'reports_to_bad_actor',
+        riskFactors: 'risk_factors',
+        gender: 'gender',
+        disabilityStatus: 'disability_status',
+        startDate: 'start_date',
+        endDate: 'end_date'
+      };
+
+      for (const [key, dbField] of Object.entries(fieldMap)) {
+        if (updates[key] !== undefined) {
+          fields.push(`${dbField} = ?`);
+          values.push(typeof updates[key] === 'boolean' ? (updates[key] ? 1 : 0) : updates[key]);
+        }
+      }
+
+      if (fields.length === 0) {
+        return { success: true };
+      }
+
+      fields.push('updated_at = datetime("now")');
+      values.push(actorId);
+
+      const stmt = currentCaseDb.prepare(`UPDATE actors SET ${fields.join(', ')} WHERE id = ?`);
+      stmt.run(...values);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('actors:delete', async (event, actorId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      // Delete appearances first
+      currentCaseDb.prepare('DELETE FROM actor_appearances WHERE actor_id = ?').run(actorId);
+      currentCaseDb.prepare('DELETE FROM incident_actors WHERE actor_id = ?').run(actorId);
+
+      // Delete actor
+      currentCaseDb.prepare('DELETE FROM actors WHERE id = ?').run(actorId);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('actors:merge', async (event, keepActorId, mergeActorId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      // Move all appearances to the kept actor
+      currentCaseDb.prepare(`
+        UPDATE actor_appearances SET actor_id = ? WHERE actor_id = ?
+      `).run(keepActorId, mergeActorId);
+
+      // Move all incident links
+      currentCaseDb.prepare(`
+        UPDATE incident_actors SET actor_id = ? WHERE actor_id = ?
+      `).run(keepActorId, mergeActorId);
+
+      // Delete the merged actor
+      currentCaseDb.prepare('DELETE FROM actors WHERE id = ?').run(mergeActorId);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('actors:getAppearances', async (event, actorId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const stmt = currentCaseDb.prepare(`
+        SELECT d.id, d.filename, d.file_type, d.file_size, d.evidence_type,
+               d.document_date, d.document_date_confidence,
+               aa.role_in_document
+        FROM documents d
+        JOIN actor_appearances aa ON aa.document_id = d.id
+        WHERE aa.actor_id = ?
+        ORDER BY d.document_date DESC
+      `);
+      const appearances = stmt.all(actorId);
+
+      return { success: true, appearances };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('actors:setSelf', async (event, actorId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      // Clear any existing self designation
+      currentCaseDb.prepare('UPDATE actors SET is_self = 0 WHERE is_self = 1').run();
+
+      // Set this actor as self
+      currentCaseDb.prepare('UPDATE actors SET is_self = 1, classification = "self" WHERE id = ?').run(actorId);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('actors:checkDuplicates', async () => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const actors = currentCaseDb.prepare('SELECT * FROM actors').all();
+      const duplicates = findPotentialDuplicates(actors);
+      return { success: true, duplicates };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('actors:rescan', async () => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      // Get all documents with text
+      const docs = currentCaseDb.prepare(`
+        SELECT id, extracted_text, ocr_text FROM documents
+      `).all();
+
+      // Get existing actor names to filter duplicates
+      const existingActors = currentCaseDb.prepare('SELECT name FROM actors').all();
+      const existingNames = new Set(existingActors.map(a => a.name.toLowerCase()));
+
+      const allDetected = [];
+      for (const doc of docs) {
+        const allText = [doc.extracted_text, doc.ocr_text].filter(Boolean).join('\n');
+        if (allText) {
+          const detected = detectActors(allText, doc.id);
+          for (const actor of detected) {
+            if (!existingNames.has(actor.name.toLowerCase())) {
+              allDetected.push(actor);
+              existingNames.add(actor.name.toLowerCase()); // prevent dupes across docs
+            }
+          }
+        }
+      }
+
+      console.log('[IPC] actors:rescan found', allDetected.length, 'new actors across', docs.length, 'documents');
+      return { success: true, detectedActors: allDetected };
+    } catch (error) {
+      console.error('[IPC] actors:rescan error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== DOCUMENT ACTORS ====================
+
+  ipcMain.handle('actors:getForDocument', async (event, documentId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const stmt = currentCaseDb.prepare(`
+        SELECT a.*, aa.role_in_document, aa.auto_detected
+        FROM actors a
+        JOIN actor_appearances aa ON aa.actor_id = a.id
+        WHERE aa.document_id = ?
+        ORDER BY a.name
+      `);
+      const actors = stmt.all(documentId);
+
+      return { success: true, actors };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('actors:addToDocument', async (event, actorId, documentId, roleInDocument) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      // Check if already linked
+      const existing = currentCaseDb.prepare(
+        'SELECT 1 FROM actor_appearances WHERE actor_id = ? AND document_id = ?'
+      ).get(actorId, documentId);
+
+      if (existing) {
+        return { success: true, alreadyLinked: true };
+      }
+
+      currentCaseDb.prepare(`
+        INSERT INTO actor_appearances (actor_id, document_id, role_in_document, auto_detected)
+        VALUES (?, ?, ?, 0)
+      `).run(actorId, documentId, roleInDocument || null);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('actors:removeFromDocument', async (event, actorId, documentId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      currentCaseDb.prepare(
+        'DELETE FROM actor_appearances WHERE actor_id = ? AND document_id = ?'
+      ).run(actorId, documentId);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== PAY RECORDS ====================
+
+  ipcMain.handle('payRecords:list', async () => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const records = currentCaseDb.prepare(`
+        SELECT pr.*, d.filename as document_filename, d.file_type as document_file_type,
+               a.name as actor_name
+        FROM pay_records pr
+        LEFT JOIN documents d ON pr.document_id = d.id
+        LEFT JOIN actors a ON pr.actor_id = a.id
+        ORDER BY pr.record_date DESC
+      `).all();
+
+      return { success: true, records };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('payRecords:create', async (event, data) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const id = uuidv4();
+
+      currentCaseDb.prepare(`
+        INSERT INTO pay_records (id, actor_id, record_date, period, base_salary, bonus, merit_increase_percent, equity_value, document_id, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        data.actorId || null,
+        data.recordDate,
+        data.period || null,
+        data.baseSalary || null,
+        data.bonus || null,
+        data.meritIncreasePercent || null,
+        data.equityValue || null,
+        data.documentId || null,
+        data.notes || null
+      );
+
+      return { success: true, record: { id, ...data } };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('payRecords:update', async (event, recordId, updates) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const fields = [];
+      const values = [];
+
+      const fieldMap = {
+        actorId: 'actor_id',
+        recordDate: 'record_date',
+        period: 'period',
+        baseSalary: 'base_salary',
+        bonus: 'bonus',
+        meritIncreasePercent: 'merit_increase_percent',
+        equityValue: 'equity_value',
+        documentId: 'document_id',
+        notes: 'notes'
+      };
+
+      for (const [key, dbField] of Object.entries(fieldMap)) {
+        if (updates[key] !== undefined) {
+          fields.push(`${dbField} = ?`);
+          values.push(updates[key]);
+        }
+      }
+
+      if (fields.length === 0) return { success: true };
+
+      values.push(recordId);
+      currentCaseDb.prepare(`UPDATE pay_records SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('payRecords:delete', async (event, recordId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      currentCaseDb.prepare('DELETE FROM pay_records WHERE id = ?').run(recordId);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('payRecords:getForActor', async (event, actorId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      const records = currentCaseDb.prepare(`
+        SELECT pr.*, d.filename as document_filename, d.file_type as document_file_type
+        FROM pay_records pr
+        LEFT JOIN documents d ON pr.document_id = d.id
+        WHERE pr.actor_id = ?
+        ORDER BY pr.record_date DESC
+      `).all(actorId);
+
+      return { success: true, records };
     } catch (error) {
       return { success: false, error: error.message };
     }

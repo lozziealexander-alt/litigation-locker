@@ -38,6 +38,11 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [dateSaveFlash, setDateSaveFlash] = useState(false);
+  // Document actors
+  const [docActors, setDocActors] = useState([]);
+  const [allActors, setAllActors] = useState([]);
+  const [showActorPicker, setShowActorPicker] = useState(false);
+  const [actorSearch, setActorSearch] = useState('');
   const nameInputRef = useRef(null);
   const styles = getStyles();
 
@@ -45,10 +50,13 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
     if (doc?.id) {
       loadFullDocument(doc.id);
       loadDateEntries(doc.id);
+      loadDocActors(doc.id);
       setPreviewData(null);
       setShowPreview(false);
       setShowGroupPicker(false);
       setCreatingGroup(false);
+      setShowActorPicker(false);
+      setActorSearch('');
     }
   }, [doc?.id]);
 
@@ -90,6 +98,36 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
     const result = await window.api.groups.list();
     if (result.success) {
       setGroups(result.groups);
+    }
+  }
+
+  async function loadDocActors(docId) {
+    const result = await window.api.actors.getForDocument(docId);
+    if (result.success) {
+      setDocActors(result.actors);
+    }
+  }
+
+  async function loadAllActors() {
+    const result = await window.api.actors.list();
+    if (result.success) {
+      setAllActors(result.actors);
+    }
+  }
+
+  async function handleAddActorToDoc(actorId) {
+    const result = await window.api.actors.addToDocument(actorId, doc.id);
+    if (result.success) {
+      await loadDocActors(doc.id);
+      setShowActorPicker(false);
+      setActorSearch('');
+    }
+  }
+
+  async function handleRemoveActorFromDoc(actorId) {
+    const result = await window.api.actors.removeFromDocument(actorId, doc.id);
+    if (result.success) {
+      await loadDocActors(doc.id);
     }
   }
 
@@ -527,6 +565,81 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
                 onClick={() => { loadGroups(); setShowGroupPicker(true); }}
               >
                 {'\uD83D\uDCCE'} Link to group
+              </button>
+            )}
+          </div>
+
+          {/* People in this document */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>
+              People
+              {docActors.length > 0 && <span style={styles.countBadge}>{docActors.length}</span>}
+            </h3>
+            {docActors.length > 0 && (
+              <div style={styles.datesList}>
+                {docActors.map(actor => (
+                  <div key={actor.id} style={styles.actorRow}>
+                    <span style={styles.actorInitials}>
+                      {actor.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
+                    </span>
+                    <span style={styles.memberName}>{actor.name}</span>
+                    {actor.auto_detected === 1 && (
+                      <span style={styles.autoTag}>auto</span>
+                    )}
+                    <button
+                      style={styles.unpinBtn}
+                      onClick={() => handleRemoveActorFromDoc(actor.id)}
+                      title="Remove from document"
+                    >
+                      {'\u2715'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {showActorPicker ? (
+              <div style={{ marginTop: spacing.sm }}>
+                <input
+                  style={styles.labelInput}
+                  value={actorSearch}
+                  onChange={e => setActorSearch(e.target.value)}
+                  placeholder="Search people..."
+                  autoFocus
+                />
+                <div style={{ ...styles.datesList, marginTop: spacing.sm, maxHeight: '150px', overflowY: 'auto' }}>
+                  {allActors
+                    .filter(a => !docActors.some(da => da.id === a.id))
+                    .filter(a => !actorSearch || a.name.toLowerCase().includes(actorSearch.toLowerCase()))
+                    .slice(0, 10)
+                    .map(actor => (
+                      <div
+                        key={actor.id}
+                        style={styles.groupOption}
+                        onClick={() => handleAddActorToDoc(actor.id)}
+                      >
+                        <span>{actor.name}</span>
+                        {actor.classification && actor.classification !== 'unknown' && (
+                          <span style={styles.memberType}>{actor.classification.replace(/_/g, ' ')}</span>
+                        )}
+                      </div>
+                    ))}
+                  {allActors.filter(a => !docActors.some(da => da.id === a.id)).length === 0 && (
+                    <div style={styles.emptyHint}>No other people available. Add people from the People page first.</div>
+                  )}
+                </div>
+                <button
+                  style={{ ...styles.cancelBtn, width: '100%', marginTop: spacing.sm }}
+                  onClick={() => { setShowActorPicker(false); setActorSearch(''); }}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                style={styles.addDateBtn}
+                onClick={() => { loadAllActors(); setShowActorPicker(true); }}
+              >
+                + Add person to document
               </button>
             )}
           </div>
@@ -1118,6 +1231,37 @@ function getStyles() {
     memberCount: {
       fontSize: typography.fontSize.xs,
       color: colors.textMuted
+    },
+
+    // Actor rows
+    actorRow: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: spacing.sm,
+      padding: spacing.sm,
+      background: colors.surfaceAlt,
+      borderRadius: radius.md
+    },
+    actorInitials: {
+      width: '28px',
+      height: '28px',
+      borderRadius: radius.full,
+      background: `${colors.primary}15`,
+      color: colors.primary,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.semibold,
+      flexShrink: 0
+    },
+    autoTag: {
+      fontSize: '10px',
+      color: colors.textMuted,
+      background: colors.surface,
+      padding: `1px ${spacing.xs}`,
+      borderRadius: radius.sm,
+      flexShrink: 0
     },
 
     // Meta grid

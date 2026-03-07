@@ -153,6 +153,40 @@ function openCase(caseId) {
     caseDb.exec("ALTER TABLE case_context ADD COLUMN jurisdiction TEXT DEFAULT 'both'");
   }
 
+  // Add dossier fields to actors (gender, disability, dates)
+  const actorColumns = caseDb.prepare("PRAGMA table_info(actors)").all();
+  const actorColumnNames = actorColumns.map(c => c.name);
+  if (!actorColumnNames.includes('gender')) {
+    caseDb.exec("ALTER TABLE actors ADD COLUMN gender TEXT");
+  }
+  if (!actorColumnNames.includes('disability_status')) {
+    caseDb.exec("ALTER TABLE actors ADD COLUMN disability_status TEXT");
+  }
+  if (!actorColumnNames.includes('start_date')) {
+    caseDb.exec("ALTER TABLE actors ADD COLUMN start_date TEXT");
+  }
+  if (!actorColumnNames.includes('end_date')) {
+    caseDb.exec("ALTER TABLE actors ADD COLUMN end_date TEXT");
+  }
+
+  // Add actor_id and period to pay_records
+  const payColumns = caseDb.prepare("PRAGMA table_info(pay_records)").all();
+  const payColumnNames = payColumns.map(c => c.name);
+  if (!payColumnNames.includes('actor_id')) {
+    caseDb.exec("ALTER TABLE pay_records ADD COLUMN actor_id TEXT REFERENCES actors(id)");
+    caseDb.exec("CREATE INDEX IF NOT EXISTS idx_pay_records_actor ON pay_records(actor_id)");
+  }
+  if (!payColumnNames.includes('period')) {
+    caseDb.exec("ALTER TABLE pay_records ADD COLUMN period TEXT");
+  }
+
+  // Add auto_detected column to actor_appearances (document-actor linking)
+  const aaColumns = caseDb.prepare("PRAGMA table_info(actor_appearances)").all();
+  const aaColumnNames = aaColumns.map(c => c.name);
+  if (!aaColumnNames.includes('auto_detected')) {
+    caseDb.exec("ALTER TABLE actor_appearances ADD COLUMN auto_detected BOOLEAN DEFAULT 0");
+  }
+
   return caseDb;
 }
 

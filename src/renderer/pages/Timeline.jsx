@@ -3,6 +3,7 @@ import { useTheme } from '../styles/ThemeContext';
 import { colors, shadows, spacing, typography, radius, getEvidenceColor, getSeverityColor } from '../styles/tokens';
 import CaseStrength from '../components/CaseStrength';
 import IncidentApproval from '../components/IncidentApproval';
+import ActorApproval from '../components/ActorApproval';
 
 // Evidence type icons
 const EVIDENCE_ICONS = {
@@ -56,6 +57,9 @@ export default function Timeline({ onSelectDocument }) {
   const [incidents, setIncidents] = useState([]);
   const [pendingIncidents, setPendingIncidents] = useState([]);
   const [showIncidentApproval, setShowIncidentApproval] = useState(false);
+  const [actors, setActors] = useState([]);
+  const [pendingActors, setPendingActors] = useState([]);
+  const [showActorApproval, setShowActorApproval] = useState(false);
   const [jurisdiction, setJurisdiction] = useState('both'); // 'federal' | 'state' | 'both'
   const [zoomLevel, setZoomLevel] = useState('day'); // 'year' | 'month' | 'day' | 'hour'
   const [linePositions, setLinePositions] = useState([]);
@@ -132,10 +136,24 @@ export default function Timeline({ onSelectDocument }) {
         setIngestProgress('');
         if (result.success) {
           // Check for detected incidents
-          if (result.detectedIncidents && result.detectedIncidents.length > 0) {
+          const hasIncidents = result.detectedIncidents && result.detectedIncidents.length > 0;
+          if (hasIncidents) {
             setPendingIncidents(result.detectedIncidents);
             setShowIncidentApproval(true);
           }
+
+          // Collect detected actors, filter out existing
+          if (result.detectedActors && result.detectedActors.length > 0) {
+            const existingNames = new Set(actors.map(a => a.name.toLowerCase()));
+            const newActors = result.detectedActors.filter(a => !existingNames.has(a.name.toLowerCase()));
+            if (newActors.length > 0) {
+              setPendingActors(newActors);
+              if (!hasIncidents) {
+                setShowActorApproval(true);
+              }
+            }
+          }
+
           loadTimeline();
         } else {
           console.error('[Timeline] ingest failed:', result.error);
@@ -169,12 +187,13 @@ export default function Timeline({ onSelectDocument }) {
   async function loadTimeline() {
     setLoading(true);
     try {
-      const [timelineResult, connectionsResult, precedentResult, incidentsResult, jurisdictionResult] = await Promise.all([
+      const [timelineResult, connectionsResult, precedentResult, incidentsResult, jurisdictionResult, actorsResult] = await Promise.all([
         window.api.timeline.get(),
         window.api.timeline.getConnections(),
         window.api.precedents.analyze(),
         window.api.incidents.list(),
-        window.api.jurisdiction.get()
+        window.api.jurisdiction.get(),
+        window.api.actors.list()
       ]);
 
       if (timelineResult.success) {
@@ -207,6 +226,9 @@ export default function Timeline({ onSelectDocument }) {
       }
       if (jurisdictionResult.success) {
         setJurisdiction(jurisdictionResult.jurisdiction);
+      }
+      if (actorsResult.success) {
+        setActors(actorsResult.actors || []);
       }
     } catch (err) {
       console.error('[Timeline] loadTimeline error:', err);
@@ -380,10 +402,24 @@ export default function Timeline({ onSelectDocument }) {
           alert(`Imported ${imported} file${imported !== 1 ? 's' : ''}. ${errCount} file${errCount !== 1 ? 's' : ''} had errors:\n${errMsgs}`);
         }
         // Check for detected incidents
-        if (ingestResult.detectedIncidents && ingestResult.detectedIncidents.length > 0) {
+        const hasIncidents = ingestResult.detectedIncidents && ingestResult.detectedIncidents.length > 0;
+        if (hasIncidents) {
           setPendingIncidents(ingestResult.detectedIncidents);
           setShowIncidentApproval(true);
         }
+
+        // Collect detected actors, filter out existing
+        if (ingestResult.detectedActors && ingestResult.detectedActors.length > 0) {
+          const existingNames = new Set(actors.map(a => a.name.toLowerCase()));
+          const newActors = ingestResult.detectedActors.filter(a => !existingNames.has(a.name.toLowerCase()));
+          if (newActors.length > 0) {
+            setPendingActors(newActors);
+            if (!hasIncidents) {
+              setShowActorApproval(true);
+            }
+          }
+        }
+
         loadTimeline();
       } else {
         console.error('[Timeline] import failed:', ingestResult.error);
@@ -426,6 +462,17 @@ export default function Timeline({ onSelectDocument }) {
 
   function handleDismissIncident(incident) {
     console.log('[Timeline] Dismissed incident:', incident.suggestedTitle);
+  }
+
+  async function handleApproveActor(actorData) {
+    const result = await window.api.actors.create(actorData);
+    if (result.success) {
+      setActors(prev => [...prev, result.actor]);
+    }
+  }
+
+  function handleDismissActor(actor) {
+    console.log('[Timeline] Dismissed actor:', actor.name);
   }
 
   // Merge incidents into timeline groups for rendering
@@ -909,6 +956,23 @@ export default function Timeline({ onSelectDocument }) {
           onClose={() => {
             setShowIncidentApproval(false);
             setPendingIncidents([]);
+            // Chain to actor approval if we have pending actors
+            if (pendingActors.length > 0) {
+              setShowActorApproval(true);
+            }
+          }}
+        />
+      )}
+
+      {/* Actor approval modal */}
+      {showActorApproval && pendingActors.length > 0 && (
+        <ActorApproval
+          actors={pendingActors}
+          onApprove={handleApproveActor}
+          onDismiss={handleDismissActor}
+          onClose={() => {
+            setShowActorApproval(false);
+            setPendingActors([]);
           }}
         />
       )}

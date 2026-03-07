@@ -67,6 +67,31 @@ contextBridge.exposeInMainWorld('api', {
     delete: (id) => ipcRenderer.invoke('incidents:delete', id)
   },
 
+  // Actor operations
+  actors: {
+    list: () => ipcRenderer.invoke('actors:list'),
+    create: (data) => ipcRenderer.invoke('actors:create', data),
+    update: (id, updates) => ipcRenderer.invoke('actors:update', id, updates),
+    delete: (id) => ipcRenderer.invoke('actors:delete', id),
+    merge: (keepId, mergeId) => ipcRenderer.invoke('actors:merge', keepId, mergeId),
+    getAppearances: (id) => ipcRenderer.invoke('actors:getAppearances', id),
+    setSelf: (id) => ipcRenderer.invoke('actors:setSelf', id),
+    checkDuplicates: () => ipcRenderer.invoke('actors:checkDuplicates'),
+    rescan: () => ipcRenderer.invoke('actors:rescan'),
+    getForDocument: (docId) => ipcRenderer.invoke('actors:getForDocument', docId),
+    addToDocument: (actorId, docId, role) => ipcRenderer.invoke('actors:addToDocument', actorId, docId, role),
+    removeFromDocument: (actorId, docId) => ipcRenderer.invoke('actors:removeFromDocument', actorId, docId)
+  },
+
+  // Pay record operations
+  payRecords: {
+    list: () => ipcRenderer.invoke('payRecords:list'),
+    create: (data) => ipcRenderer.invoke('payRecords:create', data),
+    update: (id, updates) => ipcRenderer.invoke('payRecords:update', id, updates),
+    delete: (id) => ipcRenderer.invoke('payRecords:delete', id),
+    getForActor: (actorId) => ipcRenderer.invoke('payRecords:getForActor', actorId)
+  },
+
   // Timeline operations
   timeline: {
     get: () => ipcRenderer.invoke('timeline:get'),
