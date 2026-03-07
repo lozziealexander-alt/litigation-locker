@@ -619,6 +619,27 @@ function analyzeElement(element, documents, incidents, actors, jurisdiction = 'b
     }
   }
 
+  // Check manual elements — auto-resolve protected class from self-actor data
+  if (element.checkType === 'manual' && ['based_on_protected_class', 'protected_class_member', 'protected_class'].includes(element.id)) {
+    const selfActor = actors.find(a => a.is_self);
+    if (selfActor) {
+      const hasGender = selfActor.gender && selfActor.gender !== 'unknown';
+      const hasDisability = selfActor.disability_status && selfActor.disability_status !== 'unknown' && selfActor.disability_status !== 'no';
+      const hasRace = selfActor.race && selfActor.race !== 'unknown';
+      const hasAge = selfActor.age_range && selfActor.age_range !== 'unknown';
+
+      if (hasGender || hasDisability || hasRace || hasAge) {
+        satisfied = true;
+        const classes = [];
+        if (hasGender) classes.push('gender: ' + selfActor.gender);
+        if (hasDisability) classes.push('disability');
+        if (hasRace) classes.push('race: ' + selfActor.race);
+        if (hasAge) classes.push('age: ' + selfActor.age_range);
+        note = `Protected class documented: ${classes.join(', ')}`;
+      }
+    }
+  }
+
   // Check actor relationship
   if (element.checkType === 'actor_relationship') {
     const supervisorActors = actors.filter(a =>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { colors, shadows, spacing, typography, radius, getEvidenceColor, getSeverityColor } from '../styles/tokens';
 
-export default function Dashboard({ onNavigateToTimeline, onSelectDocument }) {
+export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, onSelectDocument, onSelectActor }) {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState(null);
   const [precedentAnalysis, setPrecedentAnalysis] = useState(null);
@@ -10,6 +10,12 @@ export default function Dashboard({ onNavigateToTimeline, onSelectDocument }) {
   const [documents, setDocuments] = useState([]);
   const [connections, setConnections] = useState([]);
   const [escalation, setEscalation] = useState(null);
+  const [collapsedSections, setCollapsedSections] = useState({});
+  const [showCaseStrength, setShowCaseStrength] = useState(false);
+
+  function toggleSection(section) {
+    setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  }
 
   useEffect(() => {
     loadDashboardData();
@@ -164,6 +170,77 @@ export default function Dashboard({ onNavigateToTimeline, onSelectDocument }) {
     return alerts;
   }
 
+  // Get pattern insights
+  function getPatternInsights() {
+    const insights = [];
+
+    // Count requests for help
+    const helpCount = documents.filter(d => d.evidence_type === 'REQUEST_FOR_HELP').length;
+    if (helpCount > 0) {
+      insights.push({
+        icon: '\uD83D\uDE4B',
+        count: helpCount,
+        label: `time${helpCount !== 1 ? 's' : ''} you asked for help`,
+        legal: 'Protected activity under Title VII and ADA — documented requests for help establish you engaged in protected conduct'
+      });
+    }
+
+    // Count adverse actions
+    const adverseCount = documents.filter(d => d.evidence_type === 'ADVERSE_ACTION').length;
+    if (adverseCount > 0) {
+      insights.push({
+        icon: '\u26A0\uFE0F',
+        count: adverseCount,
+        label: `adverse action${adverseCount !== 1 ? 's' : ''} documented`,
+        legal: 'Each adverse action may constitute a separate claim — Burlington Northern v. White'
+      });
+    }
+
+    // Count incidents
+    if (incidents.length > 0) {
+      insights.push({
+        icon: '\u26A1',
+        count: incidents.length,
+        label: `incident${incidents.length !== 1 ? 's' : ''} recorded`,
+        legal: 'Pattern of incidents supports hostile work environment claim — Harris v. Forklift'
+      });
+    }
+
+    // Count retaliation chains
+    const retaliationCount = connections.filter(c => c.connectionType === 'retaliation_chain').length;
+    if (retaliationCount > 0) {
+      insights.push({
+        icon: '\uD83D\uDD17',
+        count: retaliationCount,
+        label: `retaliation chain${retaliationCount !== 1 ? 's' : ''} detected`,
+        legal: 'Temporal proximity between protected activity and adverse action supports retaliation inference'
+      });
+    }
+
+    // Escalation trend
+    if (escalation?.hasEscalation) {
+      insights.push({
+        icon: '\uD83D\uDCC8',
+        count: escalation.escalations,
+        label: `escalation${escalation.escalations !== 1 ? 's' : ''} vs ${escalation.deescalations} de-escalation${escalation.deescalations !== 1 ? 's' : ''}`,
+        legal: 'Escalating pattern demonstrates worsening hostile environment — Faragher v. City of Boca Raton'
+      });
+    }
+
+    // Count temporal clusters
+    const clusterCount = connections.filter(c => c.connectionType === 'temporal_cluster').length;
+    if (clusterCount > 0) {
+      insights.push({
+        icon: '\uD83D\uDCCD',
+        count: clusterCount,
+        label: `temporal cluster${clusterCount !== 1 ? 's' : ''} detected`,
+        legal: 'Clustering of events supports continuing violation theory — Morgan v. Nat\'l R.R. Passenger Corp.'
+      });
+    }
+
+    return insights;
+  }
+
   // Get evidence gaps
   function getGaps() {
     if (!precedentAnalysis?.precedents) return [];
@@ -215,6 +292,38 @@ export default function Dashboard({ onNavigateToTimeline, onSelectDocument }) {
           <p style={styles.summaryText}>{generateSummary()}</p>
         </div>
 
+        {/* Pattern Insights */}
+        {(() => {
+          const insights = getPatternInsights();
+          if (insights.length === 0) return null;
+          return (
+            <div style={styles.card}>
+              <h3
+                style={styles.collapsibleTitle}
+                onClick={() => toggleSection('insights')}
+              >
+                <span style={styles.chevron}>{collapsedSections.insights ? '\u25B6' : '\u25BC'}</span>
+                Pattern Insights
+                <span style={styles.badge}>{insights.length}</span>
+              </h3>
+              {!collapsedSections.insights && (
+                <div style={styles.insightsGrid}>
+                  {insights.map((insight, i) => (
+                    <div key={i} style={styles.insightItem}>
+                      <div style={styles.insightTop}>
+                        <span style={styles.insightIcon}>{insight.icon}</span>
+                        <span style={styles.insightCount}>{insight.count}</span>
+                        <span style={styles.insightLabel}>{insight.label}</span>
+                      </div>
+                      <div style={styles.insightLegal}>{insight.legal}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Stats Row */}
         <div style={styles.statsRow}>
           <StatCard
@@ -227,12 +336,14 @@ export default function Dashboard({ onNavigateToTimeline, onSelectDocument }) {
             icon={'\u26A1'}
             value={stats?.incidentCount || 0}
             label="Incidents"
+            onClick={onNavigateToTimeline}
           />
           <StatCard
             icon={'\uD83D\uDC65'}
             value={stats?.actorCount || 0}
             label="People"
             sublabel={stats?.badActorCount > 0 ? `${stats.badActorCount} bad actor${stats.badActorCount !== 1 ? 's' : ''}` : null}
+            onClick={onNavigateToPeople}
           />
           <StatCard
             icon={'\uD83D\uDCC5'}
@@ -244,34 +355,53 @@ export default function Dashboard({ onNavigateToTimeline, onSelectDocument }) {
         {/* Case Strength */}
         {precedentAnalysis && (
           <div style={styles.card}>
-            <h3 style={styles.cardTitle}>Case Strength</h3>
-            <div style={styles.strengthMeter}>
-              <div style={styles.strengthBarOuter}>
-                <div
-                  style={{
-                    ...styles.strengthBarInner,
-                    width: `${precedentAnalysis.caseStrength}%`,
-                    background: precedentAnalysis.caseStrength >= 70 ? colors.success :
-                               precedentAnalysis.caseStrength >= 40 ? colors.warning : colors.error
-                  }}
-                />
-              </div>
-              <span style={styles.strengthValue}>{precedentAnalysis.caseStrength}%</span>
-            </div>
-            <div style={styles.precedentRow}>
-              {Object.entries(precedentAnalysis.precedents).slice(0, 3).map(([key, prec]) => (
-                <div key={key} style={styles.precedentMini}>
-                  <span style={styles.precedentName}>{prec.name.split(' v.')[0]}</span>
-                  <span style={{
-                    ...styles.precedentScore,
-                    color: prec.alignmentPercent >= 70 ? colors.success :
-                           prec.alignmentPercent >= 40 ? colors.warning : colors.error
-                  }}>
-                    {prec.alignmentPercent}%
-                  </span>
+            <h3
+              style={styles.collapsibleTitle}
+              onClick={() => toggleSection('strength')}
+            >
+              <span style={styles.chevron}>{collapsedSections.strength ? '\u25B6' : '\u25BC'}</span>
+              Case Strength
+              <span style={{
+                ...styles.strengthBadge,
+                background: precedentAnalysis.caseStrength >= 70 ? colors.success :
+                             precedentAnalysis.caseStrength >= 40 ? colors.warning : colors.error
+              }}>{precedentAnalysis.caseStrength}%</span>
+            </h3>
+            {!collapsedSections.strength && (
+              <div
+                style={{ cursor: 'pointer' }}
+                onClick={() => setShowCaseStrength(true)}
+                title="Click for detailed precedent analysis"
+              >
+                <div style={styles.strengthMeter}>
+                  <div style={styles.strengthBarOuter}>
+                    <div
+                      style={{
+                        ...styles.strengthBarInner,
+                        width: `${precedentAnalysis.caseStrength}%`,
+                        background: precedentAnalysis.caseStrength >= 70 ? colors.success :
+                                   precedentAnalysis.caseStrength >= 40 ? colors.warning : colors.error
+                      }}
+                    />
+                  </div>
+                  <span style={styles.strengthValue}>{precedentAnalysis.caseStrength}%</span>
                 </div>
-              ))}
-            </div>
+                <div style={styles.precedentRow}>
+                  {Object.entries(precedentAnalysis.precedents).slice(0, 3).map(([key, prec]) => (
+                    <div key={key} style={styles.precedentMini}>
+                      <span style={styles.precedentName}>{prec.name.split(' v.')[0]}</span>
+                      <span style={{
+                        ...styles.precedentScore,
+                        color: prec.alignmentPercent >= 70 ? colors.success :
+                               prec.alignmentPercent >= 40 ? colors.warning : colors.error
+                      }}>
+                        {prec.alignmentPercent}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -280,48 +410,70 @@ export default function Dashboard({ onNavigateToTimeline, onSelectDocument }) {
           {/* Left: Alerts */}
           <div style={styles.column}>
             <div style={styles.card}>
-              <h3 style={styles.cardTitle}>
+              <h3
+                style={styles.collapsibleTitle}
+                onClick={() => toggleSection('alerts')}
+              >
+                <span style={styles.chevron}>{collapsedSections.alerts ? '\u25B6' : '\u25BC'}</span>
                 Pattern Alerts
                 {alerts.length > 0 && <span style={styles.badge}>{alerts.length}</span>}
               </h3>
-              {alerts.length === 0 ? (
-                <p style={styles.emptyText}>No patterns detected yet. Add more evidence to identify patterns.</p>
-              ) : (
-                <div style={styles.alertList}>
-                  {alerts.map((alert, i) => (
-                    <div key={i} style={{
-                      ...styles.alertItem,
-                      borderLeftColor: alert.severity === 'critical' ? colors.error :
-                                       alert.severity === 'warning' ? colors.warning : colors.primary
-                    }}>
-                      <div style={styles.alertTitle}>{alert.title}</div>
-                      <div style={styles.alertDesc}>{alert.description}</div>
-                      <div style={styles.alertLegal}>{alert.legal}</div>
-                    </div>
-                  ))}
-                </div>
+              {!collapsedSections.alerts && (
+                alerts.length === 0 ? (
+                  <p style={styles.emptyText}>No patterns detected yet. Add more evidence to identify patterns.</p>
+                ) : (
+                  <div style={styles.alertList}>
+                    {alerts.map((alert, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          ...styles.alertItem,
+                          ...styles.clickableItem,
+                          borderLeftColor: alert.severity === 'critical' ? colors.error :
+                                           alert.severity === 'warning' ? colors.warning : colors.primary
+                        }}
+                        onClick={onNavigateToTimeline}
+                        title="View on timeline"
+                      >
+                        <div style={styles.alertTitle}>{alert.title}</div>
+                        <div style={styles.alertDesc}>{alert.description}</div>
+                        <div style={styles.alertLegal}>{alert.legal}</div>
+                      </div>
+                    ))}
+                  </div>
+                )
               )}
             </div>
 
             {/* Filing Deadlines */}
             {stats?.fchrDaysRemaining && (
               <div style={styles.card}>
-                <h3 style={styles.cardTitle}>Filing Deadlines</h3>
-                <div style={styles.deadlineList}>
-                  <DeadlineItem
-                    agency="FCHR (Florida)"
-                    days={stats.fchrDaysRemaining}
-                    total={365}
-                  />
-                  <DeadlineItem
-                    agency="EEOC (Federal)"
-                    days={stats.eeocDaysRemaining}
-                    total={300}
-                  />
-                </div>
-                <p style={styles.deadlineNote}>
-                  Based on most recent documented incident
-                </p>
+                <h3
+                  style={styles.collapsibleTitle}
+                  onClick={() => toggleSection('deadlines')}
+                >
+                  <span style={styles.chevron}>{collapsedSections.deadlines ? '\u25B6' : '\u25BC'}</span>
+                  Filing Deadlines
+                </h3>
+                {!collapsedSections.deadlines && (
+                  <>
+                    <div style={styles.deadlineList}>
+                      <DeadlineItem
+                        agency="FCHR (Florida)"
+                        days={stats.fchrDaysRemaining}
+                        total={365}
+                      />
+                      <DeadlineItem
+                        agency="EEOC (Federal)"
+                        days={stats.eeocDaysRemaining}
+                        total={300}
+                      />
+                    </div>
+                    <p style={styles.deadlineNote}>
+                      Based on most recent documented incident
+                    </p>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -330,63 +482,133 @@ export default function Dashboard({ onNavigateToTimeline, onSelectDocument }) {
           <div style={styles.column}>
             {/* Evidence Gaps */}
             <div style={styles.card}>
-              <h3 style={styles.cardTitle}>
+              <h3
+                style={styles.collapsibleTitle}
+                onClick={() => toggleSection('gaps')}
+              >
+                <span style={styles.chevron}>{collapsedSections.gaps ? '\u25B6' : '\u25BC'}</span>
                 Evidence Gaps
                 {gaps.length > 0 && <span style={styles.badge}>{gaps.length}</span>}
               </h3>
-              {gaps.length === 0 ? (
-                <p style={styles.emptyText}>No critical gaps identified. Keep documenting!</p>
-              ) : (
-                <div style={styles.gapList}>
-                  {gaps.slice(0, 4).map((gap, i) => (
-                    <div key={i} style={styles.gapItem}>
-                      <div style={styles.gapElement}>{gap.element}</div>
-                      <div style={styles.gapRec}>{gap.recommendation}</div>
-                      <div style={styles.gapPrecedent}>{gap.precedent}</div>
-                    </div>
-                  ))}
-                  {gaps.length > 4 && (
-                    <div style={styles.moreText}>+{gaps.length - 4} more gaps</div>
-                  )}
-                </div>
+              {!collapsedSections.gaps && (
+                gaps.length === 0 ? (
+                  <p style={styles.emptyText}>No critical gaps identified. Keep documenting!</p>
+                ) : (
+                  <div style={styles.gapList}>
+                    {gaps.map((gap, i) => (
+                      <div
+                        key={i}
+                        style={{...styles.gapItem, ...styles.clickableItem}}
+                        onClick={() => onNavigateToTimeline?.()}
+                        title={`${gap.recommendation}\n\nPrecedent: ${gap.precedent}`}
+                      >
+                        <div style={styles.gapElement}>{gap.element}</div>
+                        <div style={styles.gapRec}>{gap.recommendation}</div>
+                        <div style={styles.gapPrecedent}>{gap.precedent}</div>
+                      </div>
+                    ))}
+                  </div>
+                )
               )}
             </div>
 
             {/* Key Players */}
             <div style={styles.card}>
-              <h3 style={styles.cardTitle}>Key Players</h3>
-              {topActors.length === 0 ? (
-                <p style={styles.emptyText}>No bad actors or enablers identified yet.</p>
-              ) : (
-                <div style={styles.actorList}>
-                  {topActors.map(actor => (
-                    <div key={actor.id} style={styles.actorItem}>
-                      <div style={{
-                        ...styles.actorBadge,
-                        background: actor.classification === 'bad_actor' ? '#DC262610' : '#F9731610',
-                        color: actor.classification === 'bad_actor' ? '#DC2626' : '#F97316'
-                      }}>
-                        {actor.name.split(' ').map(p => p[0]).join('').slice(0, 2)}
-                      </div>
-                      <div style={styles.actorInfo}>
-                        <div style={styles.actorName}>{actor.name}</div>
-                        <div style={styles.actorRole}>
-                          {actor.role || actor.relationship_to_self || actor.classification?.replace('_', ' ')}
+              <h3
+                style={styles.collapsibleTitle}
+                onClick={() => toggleSection('players')}
+              >
+                <span style={styles.chevron}>{collapsedSections.players ? '\u25B6' : '\u25BC'}</span>
+                Key Players
+              </h3>
+              {!collapsedSections.players && (
+                topActors.length === 0 ? (
+                  <p style={styles.emptyText}>No bad actors or enablers identified yet.</p>
+                ) : (
+                  <div style={styles.actorList}>
+                    {topActors.map(actor => (
+                      <div
+                        key={actor.id}
+                        style={{...styles.actorItem, ...styles.clickableItem}}
+                        onClick={() => onSelectActor?.(actor)}
+                        title="Click to view details"
+                      >
+                        <div style={{
+                          ...styles.actorBadge,
+                          background: actor.classification === 'bad_actor' ? '#DC262610' : '#F9731610',
+                          color: actor.classification === 'bad_actor' ? '#DC2626' : '#F97316'
+                        }}>
+                          {actor.name.split(' ').map(p => p[0]).join('').slice(0, 2)}
                         </div>
-                      </div>
-                      {actor.appearance_count > 0 && (
-                        <div style={styles.actorCount}>
-                          {actor.appearance_count} doc{actor.appearance_count !== 1 ? 's' : ''}
+                        <div style={styles.actorInfo}>
+                          <div style={styles.actorName}>{actor.name}</div>
+                          <div style={styles.actorRole}>
+                            {actor.role || actor.relationship_to_self || actor.classification?.replace('_', ' ')}
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                        {actor.appearance_count > 0 && (
+                          <div style={styles.actorCount}>
+                            {actor.appearance_count} doc{actor.appearance_count !== 1 ? 's' : ''}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )
               )}
             </div>
           </div>
         </div>
       </div>
+
+      {/* Case Strength Overlay */}
+      {showCaseStrength && precedentAnalysis && (
+        <div style={styles.overlay} onClick={() => setShowCaseStrength(false)}>
+          <div style={styles.overlayPanel} onClick={e => e.stopPropagation()}>
+            <div style={styles.overlayHeader}>
+              <h2 style={styles.overlayTitle}>Case Strength Analysis</h2>
+              <button style={styles.overlayClose} onClick={() => setShowCaseStrength(false)}>{'\u2715'}</button>
+            </div>
+            <div style={styles.overlayContent}>
+              <div style={styles.strengthMeter}>
+                <div style={styles.strengthBarOuter}>
+                  <div style={{
+                    ...styles.strengthBarInner,
+                    width: `${precedentAnalysis.caseStrength}%`,
+                    background: precedentAnalysis.caseStrength >= 70 ? colors.success :
+                               precedentAnalysis.caseStrength >= 40 ? colors.warning : colors.error
+                  }} />
+                </div>
+                <span style={styles.strengthValue}>{precedentAnalysis.caseStrength}%</span>
+              </div>
+              {Object.entries(precedentAnalysis.precedents).map(([key, prec]) => (
+                <div key={key} style={styles.precedentDetail}>
+                  <div style={styles.precedentDetailHeader}>
+                    <span style={styles.precedentDetailName}>{prec.name}</span>
+                    <span style={{
+                      ...styles.precedentScore,
+                      color: prec.alignmentPercent >= 70 ? colors.success :
+                             prec.alignmentPercent >= 40 ? colors.warning : colors.error
+                    }}>{prec.alignmentPercent}%</span>
+                  </div>
+                  <div style={styles.precedentElements}>
+                    {prec.elements?.map((el, i) => (
+                      <div key={i} style={styles.precedentElement}>
+                        <span style={{
+                          ...styles.elementStatus,
+                          color: el.satisfied ? colors.success : colors.error
+                        }}>{el.satisfied ? '\u2713' : '\u2717'}</span>
+                        <span style={styles.elementName}>{el.element}</span>
+                        {el.note && <span style={styles.elementNote}>{el.note}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -767,5 +989,161 @@ const styles = {
     background: colors.surface,
     padding: `2px ${spacing.sm}`,
     borderRadius: radius.full
+  },
+
+  // Collapsible + Clickable
+  collapsibleTitle: {
+    fontSize: typography.fontSize.base,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.textPrimary,
+    margin: `0 0 ${spacing.md} 0`,
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.sm,
+    cursor: 'pointer',
+    userSelect: 'none'
+  },
+  chevron: {
+    fontSize: '10px',
+    color: colors.textMuted,
+    width: '14px',
+    textAlign: 'center',
+    flexShrink: 0
+  },
+  strengthBadge: {
+    color: '#fff',
+    fontSize: typography.fontSize.xs,
+    fontWeight: typography.fontWeight.semibold,
+    padding: `2px ${spacing.sm}`,
+    borderRadius: radius.full,
+    marginLeft: 'auto'
+  },
+  clickableItem: {
+    cursor: 'pointer',
+    transition: 'opacity 0.15s ease'
+  },
+
+  // Case Strength Overlay
+  overlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: 'rgba(0,0,0,0.5)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000
+  },
+  overlayPanel: {
+    background: colors.surface,
+    borderRadius: radius.xl,
+    width: '600px',
+    maxHeight: '80vh',
+    display: 'flex',
+    flexDirection: 'column',
+    boxShadow: shadows.lg
+  },
+  overlayHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: spacing.lg,
+    borderBottom: `1px solid ${colors.border}`
+  },
+  overlayTitle: {
+    fontSize: typography.fontSize.lg,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.textPrimary,
+    margin: 0
+  },
+  overlayClose: {
+    background: 'none',
+    border: 'none',
+    fontSize: '18px',
+    color: colors.textMuted,
+    cursor: 'pointer',
+    padding: spacing.sm
+  },
+  overlayContent: {
+    padding: spacing.lg,
+    overflowY: 'auto'
+  },
+  precedentDetail: {
+    marginBottom: spacing.lg,
+    padding: spacing.md,
+    background: colors.surfaceAlt,
+    borderRadius: radius.md
+  },
+  precedentDetailHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.sm
+  },
+  precedentDetailName: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.textPrimary
+  },
+  precedentElements: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: spacing.xs
+  },
+  precedentElement: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    fontSize: typography.fontSize.sm
+  },
+  elementStatus: {
+    fontWeight: typography.fontWeight.bold,
+    flexShrink: 0
+  },
+  elementName: {
+    color: colors.textPrimary
+  },
+  elementNote: {
+    color: colors.textMuted,
+    fontSize: typography.fontSize.xs,
+    marginLeft: 'auto'
+  },
+
+  // Pattern Insights
+  insightsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, 1fr)',
+    gap: spacing.sm
+  },
+  insightItem: {
+    padding: spacing.md,
+    background: colors.surfaceAlt,
+    borderRadius: radius.md
+  },
+  insightTop: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.xs
+  },
+  insightIcon: {
+    fontSize: '16px'
+  },
+  insightCount: {
+    fontSize: typography.fontSize.xl,
+    fontWeight: typography.fontWeight.bold,
+    color: colors.textPrimary
+  },
+  insightLabel: {
+    fontSize: typography.fontSize.sm,
+    color: colors.textSecondary
+  },
+  insightLegal: {
+    fontSize: typography.fontSize.xs,
+    color: colors.textMuted,
+    fontStyle: 'italic',
+    lineHeight: typography.lineHeight.relaxed
   }
 };

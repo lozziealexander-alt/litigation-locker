@@ -42,7 +42,10 @@ contextBridge.exposeInMainWorld('api', {
     getDateEntries: (docId) => ipcRenderer.invoke('documents:getDateEntries', docId),
     // Group linking
     setGroup: (docId, groupId) => ipcRenderer.invoke('documents:setGroup', docId, groupId),
-    removeGroup: (docId) => ipcRenderer.invoke('documents:removeGroup', docId)
+    removeGroup: (docId) => ipcRenderer.invoke('documents:removeGroup', docId),
+    // Recap status
+    updateRecapStatus: (docId, isRecap, responseReceived) => ipcRenderer.invoke('documents:updateRecapStatus', docId, isRecap, responseReceived),
+    delete: (docId) => ipcRenderer.invoke('documents:delete', docId)
   },
 
   // Group operations (document linking)
@@ -121,7 +124,9 @@ contextBridge.exposeInMainWorld('api', {
     getPrecedents: (caseId, anchorId) => ipcRenderer.invoke('anchors:getPrecedents', caseId, anchorId),
     breakApart: (caseId, anchorId) => ipcRenderer.invoke('anchors:breakApart', caseId, anchorId),
     linkIncident: (caseId, anchorId, incidentId) => ipcRenderer.invoke('anchors:linkIncident', caseId, anchorId, incidentId),
-    unlinkIncident: (caseId, anchorId, incidentId) => ipcRenderer.invoke('anchors:unlinkIncident', caseId, anchorId, incidentId)
+    unlinkIncident: (caseId, anchorId, incidentId) => ipcRenderer.invoke('anchors:unlinkIncident', caseId, anchorId, incidentId),
+    linkActor: (caseId, anchorId, actorId, role) => ipcRenderer.invoke('anchors:linkActor', caseId, anchorId, actorId, role),
+    unlinkActor: (caseId, anchorId, actorId) => ipcRenderer.invoke('anchors:unlinkActor', caseId, anchorId, actorId)
   },
 
   // Case context

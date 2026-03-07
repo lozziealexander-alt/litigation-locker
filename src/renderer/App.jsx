@@ -228,7 +228,9 @@ export default function App() {
         {currentPage === 'dashboard' && (
           <Dashboard
             onNavigateToTimeline={() => setCurrentPage('timeline')}
+            onNavigateToPeople={() => setCurrentPage('people')}
             onSelectDocument={setSelectedDocument}
+            onSelectActor={setSelectedActor}
           />
         )}
       </div>

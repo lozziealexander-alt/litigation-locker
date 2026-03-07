@@ -25,6 +25,23 @@ const {
 let currentCaseDb = null;
 let currentCaseId = null;
 
+/**
+ * Compute Jaccard similarity between two text strings (word-level).
+ * Returns a value between 0 and 1.
+ */
+function textSimilarity(textA, textB) {
+  if (!textA || !textB) return 0;
+  const wordsA = new Set(textA.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const wordsB = new Set(textB.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+  const union = wordsA.size + wordsB.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
 function registerIpcHandlers() {
 
   // ==================== VAULT ====================
@@ -138,6 +155,14 @@ function registerIpcHandlers() {
       }
 
       // Insert documents into case database
+      // Ensure media_subtype and is_recap columns exist (migration)
+      try { currentCaseDb.prepare('SELECT media_subtype FROM documents LIMIT 1').get(); }
+      catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN media_subtype TEXT DEFAULT NULL'); } catch (e2) {} }
+      try { currentCaseDb.prepare('SELECT is_recap FROM documents LIMIT 1').get(); }
+      catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN is_recap BOOLEAN DEFAULT 0'); } catch (e2) {} }
+      try { currentCaseDb.prepare('SELECT response_received FROM documents LIMIT 1').get(); }
+      catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN response_received BOOLEAN DEFAULT NULL'); } catch (e2) {} }
+
       const insertStmt = currentCaseDb.prepare(`
         INSERT INTO documents (
           id, filename, original_path, file_type, file_size, sha256_hash,
@@ -145,18 +170,21 @@ function registerIpcHandlers() {
           file_created_at, file_modified_at,
           document_date, document_date_confidence, content_dates_json,
           extracted_text, ocr_text, evidence_type,
-          evidence_confidence, evidence_secondary, evidence_scores_json
+          evidence_confidence, evidence_secondary, evidence_scores_json,
+          media_subtype, is_recap
         ) VALUES (
           ?, ?, ?, ?, ?, ?,
           ?, ?,
           ?, ?,
           ?, ?, ?,
           ?, ?, ?,
-          ?, ?, ?
+          ?, ?, ?,
+          ?, ?
         )
       `);
 
       const inserted = [];
+      const nearDuplicates = [];
       for (const doc of documents) {
         // Check for duplicate by hash
         const existing = currentCaseDb.prepare(
@@ -168,13 +196,45 @@ function registerIpcHandlers() {
           continue;
         }
 
+        // Check for near-duplicate by text similarity
+        const docText = [doc.extracted_text, doc.ocr_text].filter(Boolean).join(' ');
+        if (docText && docText.length > 50) {
+          const existingDocs = currentCaseDb.prepare(
+            'SELECT id, filename, extracted_text, ocr_text FROM documents WHERE extracted_text IS NOT NULL OR ocr_text IS NOT NULL'
+          ).all();
+
+          let bestMatch = null;
+          let bestSimilarity = 0;
+          for (const existing of existingDocs) {
+            const existingText = [existing.extracted_text, existing.ocr_text].filter(Boolean).join(' ');
+            if (!existingText || existingText.length < 50) continue;
+            const sim = textSimilarity(docText, existingText);
+            if (sim > bestSimilarity) {
+              bestSimilarity = sim;
+              bestMatch = existing;
+            }
+          }
+
+          if (bestSimilarity > 0.85 && bestMatch) {
+            // Flag as near-duplicate but still insert — let user decide later
+            nearDuplicates.push({
+              newFile: doc.filename,
+              newDocId: doc.id,
+              existingFile: bestMatch.filename,
+              existingDocId: bestMatch.id,
+              similarity: Math.round(bestSimilarity * 100)
+            });
+          }
+        }
+
         insertStmt.run(
           doc.id, doc.filename, doc.original_path, doc.file_type, doc.file_size, doc.sha256_hash,
           doc.encrypted_content, doc.metadata_json,
           doc.file_created_at, doc.file_modified_at,
           doc.document_date, doc.document_date_confidence, doc.content_dates_json,
           doc.extracted_text, doc.ocr_text, doc.evidence_type,
-          doc.evidence_confidence, doc.evidence_secondary, doc.evidence_scores_json
+          doc.evidence_confidence, doc.evidence_secondary, doc.evidence_scores_json,
+          doc.media_subtype || null, doc.is_recap || 0
         );
         inserted.push(docToSummary(doc));
       }
@@ -203,8 +263,8 @@ function registerIpcHandlers() {
         }
       }
 
-      console.log('[IPC] inserted', inserted.length, 'documents,', allDetectedIncidents.length, 'potential incidents,', allDetectedActors.length, 'potential actors detected');
-      return { success: true, documents: inserted, errors, detectedIncidents: allDetectedIncidents, detectedActors: allDetectedActors };
+      console.log('[IPC] inserted', inserted.length, 'documents,', allDetectedIncidents.length, 'potential incidents,', allDetectedActors.length, 'potential actors detected,', nearDuplicates.length, 'near-duplicates flagged');
+      return { success: true, documents: inserted, errors, detectedIncidents: allDetectedIncidents, detectedActors: allDetectedActors, nearDuplicates };
     } catch (error) {
       console.error('[IPC] documents:ingest EXCEPTION:', error.message, error.stack);
       return { success: false, error: error.message };
@@ -353,6 +413,26 @@ function registerIpcHandlers() {
     }
   });
 
+  // ==================== DELETE DOCUMENT ====================
+
+  ipcMain.handle('documents:delete', async (event, docId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      // Delete from documents table
+      currentCaseDb.prepare('DELETE FROM documents WHERE id = ?').run(docId);
+
+      // Clean up related date_entries if table exists
+      try { currentCaseDb.prepare('DELETE FROM date_entries WHERE document_id = ?').run(docId); } catch (e) {}
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // ==================== RECLASSIFY ====================
 
   ipcMain.handle('documents:reclassify', async () => {
@@ -409,6 +489,28 @@ function registerIpcHandlers() {
       return { success: true, updated };
     } catch (error) {
       console.error('[IPC] reclassify error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Update recap status on a document
+  ipcMain.handle('documents:updateRecapStatus', async (event, docId, isRecap, responseReceived) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+      // Ensure columns exist
+      try { currentCaseDb.prepare('SELECT is_recap FROM documents LIMIT 1').get(); }
+      catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN is_recap BOOLEAN DEFAULT 0'); } catch (e2) {} }
+      try { currentCaseDb.prepare('SELECT response_received FROM documents LIMIT 1').get(); }
+      catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN response_received BOOLEAN DEFAULT NULL'); } catch (e2) {} }
+
+      currentCaseDb.prepare(`
+        UPDATE documents SET is_recap = ?, response_received = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).run(isRecap ? 1 : 0, responseReceived != null ? (responseReceived ? 1 : 0) : null, docId);
+
+      return { success: true };
+    } catch (error) {
       return { success: false, error: error.message };
     }
   });
@@ -1502,6 +1604,7 @@ function registerIpcHandlers() {
           is_expanded BOOLEAN DEFAULT 0,
           contains_multiple_events BOOLEAN DEFAULT 0,
           event_count INTEGER DEFAULT 1,
+          action_direction TEXT DEFAULT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
@@ -1597,6 +1700,7 @@ function registerIpcHandlers() {
           is_expanded BOOLEAN DEFAULT 0,
           contains_multiple_events BOOLEAN DEFAULT 0,
           event_count INTEGER DEFAULT 1,
+          action_direction TEXT DEFAULT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
@@ -1688,12 +1792,19 @@ function registerIpcHandlers() {
         return { success: true, count: 0, actorsFound: 0, actors: [], skipped: true };
       }
 
+      // Migrate: add action_direction column if missing
+      try {
+        caseDb.prepare('SELECT action_direction FROM anchors LIMIT 1').get();
+      } catch (e) {
+        try { caseDb.exec('ALTER TABLE anchors ADD COLUMN action_direction TEXT DEFAULT NULL'); } catch (e2) {}
+      }
+
       const insertStmt = caseDb.prepare(`
         INSERT INTO anchors (
           id, anchor_type, title, description, anchor_date, date_confidence,
           what_happened, severity, is_auto_generated, user_edited, sort_order,
-          contains_multiple_events, event_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          contains_multiple_events, event_count, action_direction
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       // Detect actors from narrative for linking
@@ -1730,6 +1841,14 @@ function registerIpcHandlers() {
         // Skip if user-edited version exists
         if (userEditedAnchors.some(u => u.id === anchor.id)) continue;
 
+        // Detect action direction for ADVERSE_ACTION anchors
+        let actionDirection = null;
+        if (anchor.anchor_type === 'ADVERSE_ACTION') {
+          const anchorText = ((anchor.what_happened || '') + ' ' + (anchor.description || '') + ' ' + (anchor.title || '')).toLowerCase();
+          const towardOffenderPatterns = /eligible for rehire|given severance|let go|retired|discipline|consequence for|fired him|fired her|terminated him|terminated her|pip for him|pip for her|disciplined|reprimanded him|reprimanded her/;
+          actionDirection = towardOffenderPatterns.test(anchorText) ? 'toward_offender' : 'toward_me';
+        }
+
         insertStmt.run(
           anchor.id,
           anchor.anchor_type,
@@ -1743,7 +1862,8 @@ function registerIpcHandlers() {
           0,
           anchor.sort_order,
           anchor.contains_multiple_events || 0,
-          anchor.event_count || 1
+          anchor.event_count || 1,
+          actionDirection
         );
 
         // Link source document if exists
@@ -1778,6 +1898,31 @@ function registerIpcHandlers() {
         }
       }
 
+      // Step 3: Auto-link precedents based on anchor type
+      try {
+        const precedentMapping = {
+          'REPORTED': ['faragher', 'joshua_filing'],
+          'ADVERSE_ACTION': ['burlington_northern', 'harris', 'muldrow_some_harm'],
+          'HELP': ['faragher'],
+          'END': ['burlington_northern']
+        };
+        for (const anchor of allAnchors) {
+          const relevantPrecedents = precedentMapping[anchor.anchor_type];
+          if (relevantPrecedents) {
+            for (const precId of relevantPrecedents) {
+              try {
+                caseDb.prepare(`
+                  INSERT OR IGNORE INTO anchor_precedents (anchor_id, precedent_id, relevance_note, linked_at)
+                  VALUES (?, ?, ?, datetime('now'))
+                `).run(anchor.id, precId, 'Auto-linked based on anchor type');
+              } catch (e) {}
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[IPC] Auto-link precedents error:', e.message);
+      }
+
       // Update last scanned
       try {
         caseDb.prepare(`
@@ -1801,6 +1946,16 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:create', async (event, caseId, anchorData) => {
     try {
+      // Future date validation
+      if (anchorData.date) {
+        const anchorDate = new Date(anchorData.date);
+        const today = new Date();
+        today.setHours(23, 59, 59, 999);
+        if (anchorDate > today) {
+          return { success: false, error: 'Date cannot be in the future' };
+        }
+      }
+
       const caseDb = db.openCase(caseId);
       const id = uuidv4();
 
@@ -1837,6 +1992,16 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:update', async (event, caseId, anchorId, updates) => {
     try {
+      // Future date validation
+      if (updates.date) {
+        const anchorDate = new Date(updates.date);
+        const today = new Date();
+        today.setHours(23, 59, 59, 999);
+        if (anchorDate > today) {
+          return { success: false, error: 'Date cannot be in the future' };
+        }
+      }
+
       const caseDb = db.openCase(caseId);
 
       const fields = [];
@@ -1854,7 +2019,8 @@ function registerIpcHandlers() {
         severity: 'severity',
         sortOrder: 'sort_order',
         containsMultipleEvents: 'contains_multiple_events',
-        eventCount: 'event_count'
+        eventCount: 'event_count',
+        actionDirection: 'action_direction'
       };
 
       for (const [key, dbField] of Object.entries(fieldMap)) {
@@ -2257,6 +2423,31 @@ function registerIpcHandlers() {
     try {
       const caseDb = db.openCase(caseId);
       caseDb.prepare('DELETE FROM anchor_incidents WHERE anchor_id = ? AND incident_id = ?').run(anchorId, incidentId);
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:linkActor', async (event, caseId, anchorId, actorId, roleInAnchor) => {
+    try {
+      const caseDb = db.openCase(caseId);
+      caseDb.prepare(`
+        INSERT OR IGNORE INTO anchor_actors (anchor_id, actor_id, role_in_anchor)
+        VALUES (?, ?, ?)
+      `).run(anchorId, actorId, roleInAnchor || 'involved');
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:unlinkActor', async (event, caseId, anchorId, actorId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+      caseDb.prepare('DELETE FROM anchor_actors WHERE anchor_id = ? AND actor_id = ?').run(anchorId, actorId);
       caseDb.close();
       return { success: true };
     } catch (error) {

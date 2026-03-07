@@ -64,6 +64,12 @@ export default function Timeline({ onSelectDocument }) {
   const [zoomLevel, setZoomLevel] = useState('day'); // 'year' | 'month' | 'day' | 'hour'
   const [linePositions, setLinePositions] = useState([]);
   const [svgDimensions, setSvgDimensions] = useState({ width: 0, height: 0 });
+  const [hiddenTypes, setHiddenTypes] = useState(new Set());
+  const [hideRecaps, setHideRecaps] = useState(false);
+  const [showConnections, setShowConnections] = useState(false);
+  const [highlightedEventId, setHighlightedEventId] = useState(null);
+  const [nearDuplicates, setNearDuplicates] = useState([]);
+  const [showDuplicateReview, setShowDuplicateReview] = useState(false);
   const timelineRef = useRef(null);
   const timelineInnerRef = useRef(null);
   const containerRef = useRef(null);
@@ -154,6 +160,12 @@ export default function Timeline({ onSelectDocument }) {
             }
           }
 
+          // Check for near-duplicates
+          if (result.nearDuplicates && result.nearDuplicates.length > 0) {
+            setNearDuplicates(result.nearDuplicates);
+            setShowDuplicateReview(true);
+          }
+
           loadTimeline();
         } else {
           console.error('[Timeline] ingest failed:', result.error);
@@ -236,13 +248,30 @@ export default function Timeline({ onSelectDocument }) {
     setLoading(false);
   }
 
+  // ---- Filter dated/undated by hidden types and recap toggle ----
+  const filteredDated = useMemo(() => {
+    return dated.filter(doc => {
+      if (hiddenTypes.size > 0 && hiddenTypes.has(doc.evidence_type)) return false;
+      if (hideRecaps && doc.is_recap) return false;
+      return true;
+    });
+  }, [dated, hiddenTypes, hideRecaps]);
+
+  const filteredUndated = useMemo(() => {
+    return undated.filter(doc => {
+      if (hiddenTypes.size > 0 && hiddenTypes.has(doc.evidence_type)) return false;
+      if (hideRecaps && doc.is_recap) return false;
+      return true;
+    });
+  }, [undated, hiddenTypes, hideRecaps]);
+
   // ---- Semantic zoom groupings ----
   const timeline = useMemo(() => {
-    if (dated.length === 0) return [];
+    if (filteredDated.length === 0) return [];
 
     if (zoomLevel === 'year') {
       const groups = {};
-      for (const doc of dated) {
+      for (const doc of filteredDated) {
         const d = new Date(doc.document_date);
         const key = `${d.getFullYear()}`;
         if (!groups[key]) groups[key] = { key, label: key, documents: [] };
@@ -253,7 +282,7 @@ export default function Timeline({ onSelectDocument }) {
 
     if (zoomLevel === 'month') {
       const groups = {};
-      for (const doc of dated) {
+      for (const doc of filteredDated) {
         const d = new Date(doc.document_date);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
         const label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -265,7 +294,7 @@ export default function Timeline({ onSelectDocument }) {
 
     if (zoomLevel === 'hour') {
       const groups = {};
-      for (const doc of dated) {
+      for (const doc of filteredDated) {
         const d = new Date(doc.document_date);
         const dateStr = doc.document_date?.split('T')[0] || doc.document_date;
         const hour = d.getHours();
@@ -287,7 +316,7 @@ export default function Timeline({ onSelectDocument }) {
 
     // day level (default)
     const groups = {};
-    for (const doc of dated) {
+    for (const doc of filteredDated) {
       const dateKey = doc.document_date?.split('T')[0] || doc.document_date;
       if (!groups[dateKey]) {
         const d = new Date(dateKey + 'T12:00:00');
@@ -302,7 +331,7 @@ export default function Timeline({ onSelectDocument }) {
       groups[dateKey].documents.push(doc);
     }
     return Object.values(groups).sort((a, b) => a.key.localeCompare(b.key));
-  }, [dated, zoomLevel]);
+  }, [filteredDated, zoomLevel]);
 
   // Active evidence types for legend
   const activeTypes = useMemo(() => {
@@ -420,6 +449,12 @@ export default function Timeline({ onSelectDocument }) {
           }
         }
 
+        // Check for near-duplicates
+        if (ingestResult.nearDuplicates && ingestResult.nearDuplicates.length > 0) {
+          setNearDuplicates(ingestResult.nearDuplicates);
+          setShowDuplicateReview(true);
+        }
+
         loadTimeline();
       } else {
         console.error('[Timeline] import failed:', ingestResult.error);
@@ -505,6 +540,8 @@ export default function Timeline({ onSelectDocument }) {
     : 'No documents yet';
 
   const totalDocs = dated.length + undated.length;
+  const filteredTotal = filteredDated.length + filteredUndated.length;
+  const hasRecaps = dated.some(d => d.is_recap) || undated.some(d => d.is_recap);
   const canZoomIn = ZOOM_LEVELS.indexOf(zoomLevel) < ZOOM_LEVELS.length - 1;
   const canZoomOut = ZOOM_LEVELS.indexOf(zoomLevel) > 0;
 
@@ -645,24 +682,122 @@ export default function Timeline({ onSelectDocument }) {
         </div>
       </div>
 
-      {/* Evidence type legend */}
+      {/* Evidence type legend — clickable filters */}
       {activeTypes.length > 0 && (
         <div style={styles.legend}>
-          {activeTypes.map(type => (
-            <div key={type} style={styles.legendItem}>
-              <span style={{
-                ...styles.legendDot,
-                background: getEvidenceColor(type)
-              }} />
-              <span style={styles.legendIcon}>{getEvidenceIcon(type)}</span>
-              <span style={styles.legendLabel}>{formatEvidenceType(type)}</span>
+          <div style={styles.legendControls}>
+            <button
+              style={styles.legendControlBtn}
+              onClick={() => setHiddenTypes(new Set())}
+              title="Show all evidence types"
+            >Show All</button>
+            <button
+              style={styles.legendControlBtn}
+              onClick={() => setHiddenTypes(new Set(activeTypes))}
+              title="Hide all evidence types"
+            >Hide All</button>
+          </div>
+          <div style={styles.legendPills}>
+            {activeTypes.map(type => {
+              const isHidden = hiddenTypes.has(type);
+              return (
+                <button
+                  key={type}
+                  style={{
+                    ...styles.legendPill,
+                    ...(isHidden ? styles.legendPillHidden : {}),
+                    borderColor: getEvidenceColor(type)
+                  }}
+                  onClick={() => {
+                    setHiddenTypes(prev => {
+                      const next = new Set(prev);
+                      if (next.has(type)) next.delete(type);
+                      else next.add(type);
+                      return next;
+                    });
+                  }}
+                  title={isHidden ? `Show ${formatEvidenceType(type)}` : `Hide ${formatEvidenceType(type)}`}
+                >
+                  <span style={{
+                    ...styles.legendDot,
+                    background: isHidden ? 'transparent' : getEvidenceColor(type),
+                    border: isHidden ? `2px solid ${getEvidenceColor(type)}` : 'none'
+                  }} />
+                  <span style={styles.legendIcon}>{getEvidenceIcon(type)}</span>
+                  <span style={{
+                    ...styles.legendLabel,
+                    ...(isHidden ? { textDecoration: 'line-through', opacity: 0.5 } : {})
+                  }}>{formatEvidenceType(type)}</span>
+                </button>
+              );
+            })}
+            {/* Recap filter */}
+            {hasRecaps && (
+              <button
+                style={{
+                  ...styles.legendPill,
+                  ...(hideRecaps ? styles.legendPillHidden : {}),
+                  borderColor: colors.primary
+                }}
+                onClick={() => setHideRecaps(prev => !prev)}
+                title={hideRecaps ? 'Show recap/self-doc emails' : 'Hide recap/self-doc emails'}
+              >
+                <span style={{
+                  ...styles.legendDot,
+                  background: hideRecaps ? 'transparent' : colors.primary,
+                  border: hideRecaps ? `2px solid ${colors.primary}` : 'none'
+                }} />
+                <span style={styles.legendIcon}>{'\uD83D\uDCDD'}</span>
+                <span style={{
+                  ...styles.legendLabel,
+                  ...(hideRecaps ? { textDecoration: 'line-through', opacity: 0.5 } : {})
+                }}>Recap / Self-Doc</span>
+              </button>
+            )}
+          </div>
+          {/* Connection toggle */}
+          {connections.length > 0 && (
+            <div style={styles.connectionToggle}>
+              <button
+                style={{
+                  ...styles.connectionToggleBtn,
+                  ...(showConnections ? styles.connectionToggleBtnActive : {})
+                }}
+                onClick={() => {
+                  setShowConnections(prev => !prev);
+                  setHighlightedEventId(null);
+                }}
+              >
+                {showConnections ? '\uD83D\uDD17 Hide Connections' : '\uD83D\uDD17 Show Connections'}
+              </button>
+              {showConnections && (
+                <div style={styles.connectionLegend}>
+                  <span style={styles.connectionLegendItem}>
+                    <span style={{...styles.connectionLegendDot, background: colors.connectionRetaliation}} />
+                    Retaliation
+                  </span>
+                  <span style={styles.connectionLegendItem}>
+                    <span style={{...styles.connectionLegendDot, background: colors.connectionEscalation}} />
+                    Escalation
+                  </span>
+                  <span style={styles.connectionLegendItem}>
+                    <span style={{...styles.connectionLegendDot, background: colors.connectionCluster, border: `1px dashed ${colors.connectionCluster}`}} />
+                    Cluster
+                  </span>
+                </div>
+              )}
             </div>
-          ))}
+          )}
+          {hiddenTypes.size > 0 && (
+            <span style={styles.filterInfo}>
+              Showing {filteredTotal} of {totalDocs} documents
+            </span>
+          )}
         </div>
       )}
 
       {/* Empty state */}
-      {timeline.length === 0 && undated.length === 0 && (
+      {timeline.length === 0 && filteredUndated.length === 0 && totalDocs === 0 && (
         <div style={styles.emptyState}>
           <div style={styles.emptyIcon}>{'\uD83D\uDCC4'}</div>
           <h2 style={styles.emptyTitle}>Add evidence to begin</h2>
@@ -686,7 +821,7 @@ export default function Timeline({ onSelectDocument }) {
         <div style={styles.timelineWrapper} ref={timelineRef}>
           <div style={styles.timeline} ref={timelineInnerRef}>
             {/* Connection lines SVG overlay — inside scrollable content */}
-            {linePositions.length > 0 && (
+            {showConnections && linePositions.length > 0 && (
               <svg style={styles.connectionsLayer} width={svgDimensions.width || '100%'} height={svgDimensions.height || '100%'}>
                 <defs>
                   <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
@@ -703,16 +838,28 @@ export default function Timeline({ onSelectDocument }) {
                   const markerId = line.color === colors.connectionRetaliation ? 'arrowRed'
                     : line.color === colors.connectionEscalation ? 'arrowOrange'
                     : 'arrowBlue';
+                  // Determine if this line should be highlighted or dimmed
+                  const isHighlighted = !highlightedEventId ||
+                    line.key.startsWith(highlightedEventId + '-') ||
+                    line.key.includes('-' + highlightedEventId + '-');
+                  // Quadratic bezier curve for smoother arcs
+                  const midX = (line.x1 + line.x2) / 2;
+                  const midY = (line.y1 + line.y2) / 2;
+                  const dx = line.x2 - line.x1;
+                  const offsetX = Math.abs(dx) < 50 ? (dx >= 0 ? 60 : -60) : dx * 0.3;
+                  const cx = midX + offsetX;
+                  const cy = midY;
                   return (
-                    <line
+                    <path
                       key={line.key}
-                      x1={line.x1} y1={line.y1}
-                      x2={line.x2} y2={line.y2}
+                      d={`M ${line.x1} ${line.y1} Q ${cx} ${cy} ${line.x2} ${line.y2}`}
                       stroke={line.color}
                       strokeWidth="2.5"
                       strokeDasharray={line.dashed ? '6,4' : undefined}
-                      opacity="0.7"
+                      opacity={isHighlighted ? 0.7 : 0.15}
+                      fill="none"
                       markerEnd={`url(#${markerId})`}
+                      style={{ transition: 'opacity 0.2s ease' }}
                     />
                   );
                 })}
@@ -788,9 +935,15 @@ export default function Timeline({ onSelectDocument }) {
                             ...styles.eventCard,
                             borderLeftColor: getEvidenceColor(doc.evidence_type),
                             ...(doc.isDateEntry ? styles.eventCardPinned : {}),
-                            ...(hoveredEvent === doc.id ? styles.eventCardHover : {})
+                            ...(hoveredEvent === doc.id ? styles.eventCardHover : {}),
+                            ...(highlightedEventId === doc.id ? { boxShadow: `0 0 0 2px ${getEvidenceColor(doc.evidence_type)}` } : {})
                           }}
-                          onClick={() => onSelectDocument && onSelectDocument(doc)}
+                          onClick={() => {
+                            if (showConnections && eventConnections.length > 0) {
+                              setHighlightedEventId(prev => prev === doc.id ? null : doc.id);
+                            }
+                            onSelectDocument && onSelectDocument(doc);
+                          }}
                           onMouseEnter={() => setHoveredEvent(doc.id)}
                           onMouseLeave={() => setHoveredEvent(null)}
                         >
@@ -902,14 +1055,14 @@ export default function Timeline({ onSelectDocument }) {
       )}
 
       {/* Undated documents tray */}
-      {undated.length > 0 && (
+      {filteredUndated.length > 0 && (
         <div style={styles.undatedTray}>
           <div style={styles.undatedHeader}>
             <span style={styles.undatedTitle}>Undated Documents</span>
-            <span style={styles.undatedCount}>{undated.length}</span>
+            <span style={styles.undatedCount}>{filteredUndated.length}</span>
           </div>
           <div style={styles.undatedList}>
-            {undated.map(doc => (
+            {filteredUndated.map(doc => (
               <button
                 key={doc.id}
                 onClick={() => onSelectDocument && onSelectDocument(doc)}
@@ -975,6 +1128,68 @@ export default function Timeline({ onSelectDocument }) {
             setPendingActors([]);
           }}
         />
+      )}
+
+      {/* Near-duplicate review overlay */}
+      {showDuplicateReview && nearDuplicates.length > 0 && (
+        <div style={styles.dupOverlay}>
+          <div style={styles.dupPanel}>
+            <div style={styles.dupHeader}>
+              <h3 style={styles.dupTitle}>{'\u26A0\uFE0F'} Potential Duplicates Detected</h3>
+              <button style={styles.dupCloseBtn} onClick={() => {
+                setShowDuplicateReview(false);
+                setNearDuplicates([]);
+              }}>{'\u2715'}</button>
+            </div>
+            <p style={styles.dupDesc}>
+              The following newly imported files appear very similar to existing documents.
+              You can remove the duplicate or keep both copies.
+            </p>
+            <div style={styles.dupList}>
+              {nearDuplicates.map((dup, i) => (
+                <div key={i} style={styles.dupItem}>
+                  <div style={styles.dupInfo}>
+                    <div style={styles.dupFileRow}>
+                      <span style={styles.dupLabel}>New:</span>
+                      <span style={styles.dupFileName}>{dup.newFile}</span>
+                    </div>
+                    <div style={styles.dupFileRow}>
+                      <span style={styles.dupLabel}>Matches:</span>
+                      <span style={styles.dupFileName}>{dup.existingFile}</span>
+                    </div>
+                    <div style={styles.dupSimilarity}>
+                      {dup.similarity}% similar
+                    </div>
+                  </div>
+                  <div style={styles.dupActions}>
+                    <button
+                      style={styles.dupRemoveBtn}
+                      onClick={async () => {
+                        await window.api.documents.delete(dup.newDocId);
+                        const remaining = nearDuplicates.filter((_, j) => j !== i);
+                        setNearDuplicates(remaining);
+                        if (remaining.length === 0) setShowDuplicateReview(false);
+                        loadTimeline();
+                      }}
+                    >
+                      Remove New
+                    </button>
+                    <button
+                      style={styles.dupKeepBtn}
+                      onClick={() => {
+                        const remaining = nearDuplicates.filter((_, j) => j !== i);
+                        setNearDuplicates(remaining);
+                        if (remaining.length === 0) setShowDuplicateReview(false);
+                      }}
+                    >
+                      Keep Both
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1271,18 +1486,50 @@ function getStyles() {
     // Legend
     legend: {
       display: 'flex',
-      flexWrap: 'wrap',
-      gap: spacing.md,
+      flexDirection: 'column',
+      gap: spacing.xs,
       padding: `${spacing.sm} ${spacing.xl}`,
       borderBottom: `1px solid ${colors.border}`,
       background: colors.surface
     },
-    legendItem: {
+    legendControls: {
       display: 'flex',
+      gap: spacing.xs
+    },
+    legendControlBtn: {
+      background: 'transparent',
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.sm,
+      padding: `2px ${spacing.sm}`,
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      cursor: 'pointer'
+    },
+    legendPills: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: spacing.xs
+    },
+    legendPill: {
+      display: 'inline-flex',
       alignItems: 'center',
       gap: spacing.xs,
       fontSize: typography.fontSize.xs,
-      color: colors.textSecondary
+      color: colors.textSecondary,
+      padding: `4px ${spacing.md}`,
+      border: '2px solid',
+      borderRadius: radius.full,
+      background: `${colors.surface}`,
+      cursor: 'pointer',
+      transition: 'all 0.15s ease',
+      fontFamily: 'inherit',
+      outline: 'none',
+      userSelect: 'none'
+    },
+    legendPillHidden: {
+      opacity: 0.35,
+      background: 'transparent',
+      borderStyle: 'dashed'
     },
     legendDot: {
       width: '8px',
@@ -1296,6 +1543,47 @@ function getStyles() {
     },
     legendLabel: {
       whiteSpace: 'nowrap'
+    },
+    connectionToggle: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: spacing.md
+    },
+    connectionToggleBtn: {
+      background: 'transparent',
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.md,
+      padding: `3px ${spacing.sm}`,
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      cursor: 'pointer',
+      transition: 'all 0.15s ease'
+    },
+    connectionToggleBtnActive: {
+      background: colors.primary + '18',
+      borderColor: colors.primary,
+      color: colors.primary
+    },
+    connectionLegend: {
+      display: 'flex',
+      gap: spacing.md,
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted
+    },
+    connectionLegendItem: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: spacing.xs
+    },
+    connectionLegendDot: {
+      width: '10px',
+      height: '4px',
+      borderRadius: '2px'
+    },
+    filterInfo: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      fontStyle: 'italic'
     },
 
     // Empty state
@@ -1751,6 +2039,122 @@ function getStyles() {
       padding: `2px ${spacing.sm}`,
       borderRadius: radius.sm,
       textTransform: 'capitalize'
+    },
+
+    // Duplicate review overlay
+    dupOverlay: {
+      position: 'fixed',
+      top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.5)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 1000
+    },
+    dupPanel: {
+      background: colors.surface,
+      borderRadius: radius.lg,
+      padding: spacing.xl,
+      maxWidth: '520px',
+      width: '90%',
+      maxHeight: '80vh',
+      overflow: 'auto',
+      boxShadow: shadows.lg
+    },
+    dupHeader: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: spacing.md
+    },
+    dupTitle: {
+      fontSize: typography.fontSize.lg,
+      fontWeight: typography.fontWeight.semibold,
+      color: colors.textPrimary,
+      margin: 0
+    },
+    dupCloseBtn: {
+      background: 'none',
+      border: 'none',
+      fontSize: '18px',
+      color: colors.textMuted,
+      cursor: 'pointer'
+    },
+    dupDesc: {
+      fontSize: typography.fontSize.sm,
+      color: colors.textMuted,
+      margin: `0 0 ${spacing.lg} 0`
+    },
+    dupList: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: spacing.md
+    },
+    dupItem: {
+      background: colors.surfaceAlt,
+      borderRadius: radius.md,
+      padding: spacing.md,
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: spacing.md
+    },
+    dupInfo: {
+      flex: 1,
+      minWidth: 0
+    },
+    dupFileRow: {
+      display: 'flex',
+      gap: spacing.sm,
+      alignItems: 'baseline',
+      marginBottom: '2px'
+    },
+    dupLabel: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      flexShrink: 0,
+      width: '55px'
+    },
+    dupFileName: {
+      fontSize: typography.fontSize.sm,
+      color: colors.textPrimary,
+      fontWeight: typography.fontWeight.medium,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    },
+    dupSimilarity: {
+      fontSize: typography.fontSize.xs,
+      color: '#F59E0B',
+      fontWeight: typography.fontWeight.semibold,
+      marginTop: spacing.xs
+    },
+    dupActions: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: spacing.xs,
+      flexShrink: 0
+    },
+    dupRemoveBtn: {
+      padding: `${spacing.xs} ${spacing.md}`,
+      background: '#7F1D1D',
+      color: '#FCA5A5',
+      border: 'none',
+      borderRadius: radius.sm,
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.semibold,
+      cursor: 'pointer',
+      whiteSpace: 'nowrap'
+    },
+    dupKeepBtn: {
+      padding: `${spacing.xs} ${spacing.md}`,
+      background: 'transparent',
+      color: colors.textMuted,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.sm,
+      fontSize: typography.fontSize.xs,
+      cursor: 'pointer',
+      whiteSpace: 'nowrap'
     }
   };
 }

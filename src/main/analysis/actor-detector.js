@@ -52,12 +52,63 @@ const NAME_BLACKLIST = new Set([
   'he', 'she', 'they', 'him', 'her', 'his', 'hers', 'their', 'theirs', 'them',
   'we', 'our', 'ours', 'us', 'it', 'its', 'who', 'whom', 'whose',
   'myself', 'yourself', 'himself', 'herself', 'itself', 'themselves', 'ourselves',
-  // Common verbs/words that start capitalized at sentence beginnings
+  // Common verbs/auxiliaries that appear capitalized at sentence starts
+  'has', 'had', 'have', 'having', 'is', 'was', 'were', 'are', 'been', 'being',
+  'do', 'does', 'did', 'done', 'doing', 'can', 'could', 'should', 'shall',
+  'might', 'must', 'need', 'want', 'get', 'got', 'make', 'made', 'take', 'took',
+  'said', 'told', 'asked', 'gave', 'went', 'came', 'know', 'knew', 'think',
+  'thought', 'feel', 'felt', 'see', 'saw', 'seem', 'seemed', 'keep', 'kept',
+  'let', 'put', 'set', 'say', 'says', 'tell', 'told', 'give', 'go', 'come',
+  // Common words that start capitalized at sentence beginnings
   'after', 'before', 'during', 'since', 'until', 'while', 'because',
   'however', 'also', 'then', 'there', 'here', 'later', 'today', 'yesterday',
   'everyone', 'someone', 'anyone', 'nobody', 'nothing', 'everything',
-  'about', 'just', 'only', 'even', 'still', 'already', 'never', 'always'
+  'about', 'just', 'only', 'even', 'still', 'already', 'never', 'always',
+  'both', 'each', 'every', 'some', 'any', 'all', 'most', 'many', 'few',
+  'much', 'more', 'other', 'another', 'such', 'own', 'same', 'able',
+  'first', 'last', 'next', 'new', 'old', 'long', 'great', 'little', 'right',
+  'being', 'once', 'upon', 'into', 'over', 'under', 'between', 'through',
+  // Department names
+  'compliance', 'engineering', 'marketing', 'legal', 'finance', 'accounting',
+  'operations', 'sales', 'support', 'security', 'procurement', 'logistics',
+  'payroll', 'benefits', 'training', 'development', 'research', 'quality',
+  'audit', 'risk', 'strategy', 'communications', 'administration', 'facilities',
+  // Location words
+  'building', 'floor', 'suite', 'county', 'district', 'office', 'campus',
+  'tower', 'plaza', 'center', 'centre', 'park', 'street', 'avenue', 'boulevard',
+  'room', 'wing', 'annex', 'location', 'branch', 'region', 'area', 'zone',
+  // Generic business terms
+  'general', 'counsel', 'senior', 'interim', 'written', 'formal', 'final',
+  'initial', 'annual', 'quarterly', 'monthly', 'weekly', 'daily', 'internal',
+  'external', 'corporate', 'executive', 'management', 'advisory', 'committee',
+  'board', 'panel', 'review', 'notice', 'policy', 'procedure', 'standard',
+  'report', 'summary', 'overview', 'update', 'response', 'request', 'approval',
+  'termination', 'suspension', 'investigation', 'complaint', 'grievance',
+  'warning', 'corrective', 'disciplinary', 'progressive', 'adverse',
+  'reasonable', 'accommodation', 'transfer', 'demotion', 'promotion',
+  'separation', 'resignation', 'retirement', 'leave', 'absence',
+  // Additional sentence-start words that cause false positives
+  'although', 'furthermore', 'moreover', 'nevertheless', 'subsequently',
+  'meanwhile', 'regarding', 'according', 'following', 'concerning',
+  'despite', 'within', 'without', 'throughout', 'immediately',
+  'therefore', 'consequently', 'additionally', 'specifically', 'apparently',
+  'essentially', 'unfortunately', 'thankfully', 'hopefully', 'obviously',
+  'clearly', 'certainly', 'perhaps', 'maybe', 'sometimes', 'often',
+  'typically', 'normally', 'usually', 'frequently', 'occasionally',
+  'eventually', 'finally', 'recently', 'previously', 'initially',
+  'currently', 'basically', 'actually', 'honestly', 'frankly',
+  // Common two-word false positive starters
+  'if', 'so', 'but', 'yet', 'nor', 'for', 'not', 'no', 'yes', 'too',
+  'how', 'why', 'now', 'per', 'via', 'etc', 'out', 'off', 'up', 'down',
+  // Common document / workplace terms that appear capitalized
+  'performance', 'improvement', 'plan', 'evaluation', 'assessment',
+  'record', 'information', 'schedule', 'position', 'change',
+  'document', 'evidence', 'statement', 'prior', 'current', 'pending',
+  'written', 'verbal', 'official', 'unofficial', 'total'
 ]);
+
+// Patterns that indicate a department, organization, or place rather than a person
+const DEPT_OR_PLACE_SUFFIXES = /\b(?:department|division|group|team|unit|bureau|office|branch|section|university|college|institute|school|inc|llc|corp|corporation|company|associates|partners|services|solutions|holdings|enterprises|foundation|authority|agency|commission|council|board)\b/i;
 
 /**
  * Detect actors from document text
@@ -66,6 +117,13 @@ function detectActors(text, documentId = null) {
   if (!text || typeof text !== 'string') {
     return [];
   }
+
+  // Skip very short text or text that looks like OCR gibberish
+  const trimmed = text.trim();
+  if (trimmed.length < 40) return [];
+  // If the ratio of alphabetic chars to total is too low, it's likely garbled OCR
+  const alphaCount = (trimmed.match(/[a-zA-Z]/g) || []).length;
+  if (alphaCount / trimmed.length < 0.5) return [];
 
   const detected = new Map(); // Use Map to dedupe by normalized name
 
@@ -121,6 +179,15 @@ function detectActors(text, documentId = null) {
     }
   }
 
+  // Count name appearances for contextual validation of action patterns
+  const nameAppearanceCounts = new Map();
+  const simpleNameScan = /\b([A-Z][a-z]{1,15}(?:\s+[A-Z][a-z]{1,20})?)\b/g;
+  let scanMatch;
+  while ((scanMatch = simpleNameScan.exec(text)) !== null) {
+    const scannedKey = cleanName(scanMatch[1]).toLowerCase();
+    nameAppearanceCounts.set(scannedKey, (nameAppearanceCounts.get(scannedKey) || 0) + 1);
+  }
+
   // Process action patterns
   for (const { pattern, context, suggestedClassification } of ACTION_PATTERNS) {
     let match;
@@ -130,6 +197,9 @@ function detectActors(text, documentId = null) {
       if (isValidName(name)) {
         const key = name.toLowerCase();
         if (!detected.has(key)) {
+          // Lower confidence for single-occurrence action pattern matches
+          const appearances = nameAppearanceCounts.get(key) || 1;
+          const confidence = appearances >= 2 ? 0.7 : 0.45;
           detected.set(key, {
             id: `pending_actor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             name,
@@ -137,7 +207,7 @@ function detectActors(text, documentId = null) {
             suggestedRelationship: null,
             suggestedClassification: suggestedClassification || null,
             source: context,
-            confidence: 0.7,
+            confidence,
             matchedText: match[0].slice(0, 100),
             sourceDocumentId: documentId,
             needsReview: true
@@ -229,9 +299,9 @@ function detectActors(text, documentId = null) {
       }
     }
   }
-  // Add names — threshold of 1 is fine since blacklist filters out false positives
+  // Add names — require at least 2 mentions to reduce false positives
   for (const [key, count] of nameCounts) {
-    if (count >= 1 && !detected.has(key)) {
+    if (count >= 2 && !detected.has(key)) {
       const parts = key.split(' ');
       const properName = parts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
       detected.set(key, {
@@ -291,7 +361,7 @@ function detectActors(text, documentId = null) {
             suggestedRelationship: null,
             suggestedClassification: null,
             source: 'email_address',
-            confidence: 0.6,
+            confidence: 0.4,
             matchedText: email,
             sourceDocumentId: documentId,
             needsReview: true
@@ -316,16 +386,41 @@ function cleanName(name) {
 }
 
 /**
+ * Check if a name looks like a department, organization, or place
+ */
+function looksLikeDepartmentOrPlace(name) {
+  return DEPT_OR_PLACE_SUFFIXES.test(name);
+}
+
+/**
  * Validate that string looks like a real name
  */
+// Common two-word phrases that get matched as names
+const COMMON_PHRASES = new Set([
+  'performance improvement', 'human resources', 'written warning',
+  'corrective action', 'adverse action', 'protected activity',
+  'reasonable accommodation', 'formal complaint', 'final warning',
+  'annual review', 'quarterly review', 'internal investigation',
+  'progressive discipline', 'leave absence', 'general counsel',
+  'senior management', 'executive team', 'after that', 'however this',
+  'despite that', 'although this', 'furthermore this', 'moreover this',
+  'before that', 'during this', 'since then', 'until then'
+]);
+
 function isValidName(name) {
   if (!name) return false;
 
   const lower = name.toLowerCase();
 
-  // Check blacklist
+  // Check blacklist — whole name and each word
   if (NAME_BLACKLIST.has(lower)) return false;
   if (lower.split(' ').some(word => NAME_BLACKLIST.has(word))) return false;
+
+  // Reject common two-word phrases
+  if (COMMON_PHRASES.has(lower)) return false;
+
+  // Filter out department/org/place names
+  if (looksLikeDepartmentOrPlace(name)) return false;
 
   // Basic validation
   if (name.length < 2) return false;
@@ -336,6 +431,23 @@ function isValidName(name) {
 
   // Should have at least one vowel
   if (!/[aeiouAEIOU]/.test(name)) return false;
+
+  // Each part of name must be at least 2 characters
+  const parts = name.split(' ');
+  if (parts.some(part => part.length < 2)) return false;
+
+  // Single-word "names" must be at least 3 chars and not look like a common word
+  if (parts.length === 1 && parts[0].length < 3) return false;
+
+  // If name has two parts, neither should be a common preposition/conjunction/article
+  const FILLER_WORDS = new Set(['the', 'and', 'for', 'but', 'nor', 'yet', 'so', 'or', 'an', 'at', 'by', 'in', 'of', 'on', 'to', 'up', 'as', 'if', 'it', 'no', 'do']);
+  if (parts.length === 2 && parts.some(p => FILLER_WORDS.has(p.toLowerCase()))) return false;
+
+  // Reject names where all letters are uppercase (likely OCR artifacts like "TOUR", "EXIT")
+  if (/^[A-Z]+$/.test(name.replace(/\s+/g, ''))) return false;
+
+  // Reject if it looks like an all-caps label followed by lowercase (OCR noise)
+  if (/^[A-Z]{3,}\s/.test(name)) return false;
 
   return true;
 }

@@ -333,6 +333,24 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
             </select>
           </div>
 
+          {/* Recap / Feedback toggle */}
+          <div style={styles.section}>
+            <label style={styles.recapToggle}>
+              <input
+                type="checkbox"
+                checked={!!displayDoc.is_recap}
+                onChange={async (e) => {
+                  const newVal = e.target.checked ? 1 : 0;
+                  await window.api.documents.updateRecapStatus(displayDoc.id, newVal, displayDoc.response_received ?? null);
+                  setFullDoc(prev => prev ? { ...prev, is_recap: newVal } : prev);
+                  onDocumentUpdated?.();
+                }}
+                style={{ marginRight: spacing.sm }}
+              />
+              <span style={styles.recapLabel}>{'\uD83D\uDCDD'} Recap / Feedback Email</span>
+            </label>
+          </div>
+
           {/* Primary date with editing */}
           <div style={styles.section}>
             <h3 style={styles.sectionTitle}>Document Date</h3>
@@ -933,6 +951,17 @@ function getStyles() {
       cursor: 'pointer',
       outline: 'none',
       fontFamily: 'inherit'
+    },
+
+    recapToggle: {
+      display: 'flex',
+      alignItems: 'center',
+      cursor: 'pointer',
+      padding: `${spacing.sm} 0`
+    },
+    recapLabel: {
+      fontSize: typography.fontSize.sm,
+      color: colors.textSecondary
     },
 
     // Date editing

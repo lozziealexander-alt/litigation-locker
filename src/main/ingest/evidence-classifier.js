@@ -214,6 +214,36 @@ function runMetadataRules(metadata, ext, mimeType) {
     scores['PAY_RECORD'] += 0.7;
   }
 
+  // ---- File size heuristics ----
+  const fileSize = meta.fileSize || meta.file_size || 0;
+  if (fileSize > 0) {
+    // Pay stubs are typically small (<100KB)
+    if (fileSize < 100000) {
+      scores['PAY_RECORD'] += 0.1;
+    }
+    // Legal filings and policies tend to be larger (>200KB)
+    if (fileSize > 200000) {
+      scores['SUPPORTING'] += 0.1;
+      scores['CLAIM_YOU_MADE'] += 0.05;
+    }
+  }
+
+  // ---- Multi-page detection (PDFs) ----
+  const pageCount = meta.pageCount || meta.numPages || meta.Pages || 0;
+  if (pageCount > 10) {
+    scores['SUPPORTING'] += 0.3; // Long docs = handbooks, policies
+    scores['CONTEXT'] += 0.2;
+  } else if (pageCount >= 3 && pageCount <= 6) {
+    scores['CLAIM_YOU_MADE'] += 0.1; // Mid-length = formal filings
+    scores['RESPONSE'] += 0.1;
+  }
+
+  // ---- Attachment context ----
+  const hasAttachments = meta.hasAttachments || meta.attachments || meta.attachmentCount;
+  if (hasAttachments) {
+    scores['SUPPORTING'] += 0.15;
+  }
+
   // Normalize: cap all scores at 1.0
   for (const type of EVIDENCE_TYPES) {
     scores[type] = Math.min(scores[type], 1.0);
@@ -283,6 +313,27 @@ function runFilenameHeuristics(filename) {
   if (/screenshot|screen[_\s-]?cap|snip/.test(lower)) {
     scores['INCIDENT'] += 0.2;
     scores['CONTEXT'] += 0.2;
+  }
+
+  // Witness/declaration/affidavit → SUPPORTING
+  if (/witness|statement|declaration|affidavit|sworn/.test(lower)) {
+    scores['SUPPORTING'] += 0.7;
+  }
+
+  // Accommodation / ADA / FMLA → PROTECTED_ACTIVITY
+  if (/accommodat|ada[_\s-]?request|\bfmla\b|leave[_\s-]?request/.test(lower)) {
+    scores['PROTECTED_ACTIVITY'] += 0.6;
+    scores['REQUEST_FOR_HELP'] += 0.3;
+  }
+
+  // 1099 tax docs
+  if (/1099|ten[_-]?ninety[_-]?nine/.test(lower)) {
+    scores['PAY_RECORD'] += 0.8;
+  }
+
+  // Org chart / job description → CONTEXT
+  if (/org[_\s-]?chart|job[_\s-]?desc|floor[_\s-]?plan|seating/.test(lower)) {
+    scores['CONTEXT'] += 0.6;
   }
 
   // Cap at 1.0
@@ -501,8 +552,164 @@ function safeParse(str) {
   }
 }
 
+// ============================================================
+// Image Subtype Detection (Step 10)
+// ============================================================
+
+/**
+ * Detect whether an image is a screenshot, handwritten document, photo, or scan.
+ *
+ * @param {Object} metadata - Image metadata (EXIF, dimensions, DPI)
+ * @param {Object} ocrResult - OCR result with confidence info
+ * @param {Buffer} buffer - Raw file buffer (unused for now, reserved for future)
+ * @returns {'screenshot'|'handwritten'|'photo'|'scan'|'unknown'}
+ */
+function detectMediaSubtype(metadata, ocrResult, buffer) {
+  const meta = typeof metadata === 'string' ? safeParse(metadata) : (metadata || {});
+
+  const width = meta.width || meta.Width || 0;
+  const height = meta.height || meta.Height || 0;
+  const dpi = meta.dpi || meta.DPI || meta.density || meta.xResolution || 0;
+  const hasCamera = !!(meta.make || meta.Make || meta.model || meta.Model ||
+                       meta.cameraMake || meta.cameraModel);
+  const hasGPS = !!(meta.gps || meta.GPSLatitude || meta.latitude || meta.GPSInfo);
+  const ocrConfidence = ocrResult?.confidence ?? ocrResult?.meanConfidence ?? -1;
+
+  // Standard screen resolutions
+  const screenDimensions = [
+    [1920, 1080], [2560, 1440], [1440, 900], [1366, 768],
+    [1280, 720], [1280, 800], [1024, 768], [2560, 1600],
+    [3840, 2160], [1536, 864], [1680, 1050], [3440, 1440],
+    [750, 1334], [1125, 2436], [1170, 2532], [1284, 2778],  // iPhone
+    [1080, 1920], [1080, 2400], [1440, 3200], [1440, 2960], // Android
+    [2048, 2732], [1668, 2388], // iPad
+  ];
+
+  const isScreenRes = screenDimensions.some(([w, h]) =>
+    (width === w && height === h) || (width === h && height === w)
+  );
+
+  // Standard paper sizes in pixels at 300 DPI
+  const paperSizes = [
+    [2550, 3300], // Letter 8.5x11
+    [2480, 3508], // A4
+    [2480, 3507], // A4 variant
+    [2550, 3301], // Letter variant
+  ];
+  const isPaperSize = paperSizes.some(([w, h]) =>
+    (Math.abs(width - w) < 50 && Math.abs(height - h) < 50) ||
+    (Math.abs(width - h) < 50 && Math.abs(height - w) < 50)
+  );
+
+  // Photo: has camera EXIF data or GPS
+  if (hasCamera || hasGPS) {
+    return 'photo';
+  }
+
+  // Screenshot: standard screen resolution, no camera, low DPI (72/96)
+  if (isScreenRes && !hasCamera && (dpi <= 96 || dpi === 0)) {
+    return 'screenshot';
+  }
+
+  // Scan: 300 DPI, paper dimensions, high OCR confidence
+  if (dpi >= 250 && isPaperSize && ocrConfidence > 70) {
+    return 'scan';
+  }
+
+  // Handwritten: low OCR confidence, no camera data
+  if (ocrConfidence >= 0 && ocrConfidence < 50 && !hasCamera) {
+    return 'handwritten';
+  }
+
+  // Scan fallback: high DPI even without perfect paper size
+  if (dpi >= 250 && ocrConfidence > 60) {
+    return 'scan';
+  }
+
+  // Screenshot fallback: no camera, low/no DPI, decent OCR
+  if (!hasCamera && (dpi <= 96 || dpi === 0) && ocrConfidence > 80) {
+    return 'screenshot';
+  }
+
+  return 'unknown';
+}
+
+// ============================================================
+// Recap Email Detection (Step 11)
+// ============================================================
+
+/**
+ * Detect whether a document is a "recap" / self-documentation email.
+ * Recap emails are sent to oneself or to HR to create a paper trail.
+ * They should not count toward severity but are important evidence.
+ *
+ * @param {Object} metadata - Email metadata (from, to, subject, etc.)
+ * @param {string} text - Extracted text content
+ * @returns {{ isRecap: boolean, confidence: number }}
+ */
+function detectRecapEmail(metadata, text) {
+  const meta = typeof metadata === 'string' ? safeParse(metadata) : (metadata || {});
+
+  const from = (meta.from || '').toLowerCase().trim();
+  const to = (meta.to || '').toLowerCase().trim();
+  const subject = (meta.subject || '').toLowerCase();
+  const lower = (text || '').toLowerCase();
+
+  let score = 0;
+
+  // Self-sent email (to and from are the same person)
+  if (from && to && from === to) {
+    score += 0.5;
+  }
+
+  // Also check if the sender's address appears in the to list (for multi-recipient)
+  if (from && to.includes(from.split('@')[0]) && to.includes(from.split('@')[1])) {
+    score += 0.3;
+  }
+
+  // Subject line signals
+  const recapSubjectPatterns = /\b(recap|follow[- ]?up|for my records|documenting|summary of|notes from|fyi|cya|for the record|putting in writing|paper trail|confirmation of)\b/;
+  if (recapSubjectPatterns.test(subject)) {
+    score += 0.4;
+  }
+
+  // Body starts with recap language
+  const first200 = lower.substring(0, 200);
+  const recapBodyPatterns = /^.{0,50}(wanted to document|putting this in writing|for the record|just to confirm|to summarize what|following up on our|as discussed|per our conversation|to recap|documenting this for|writing this down|wanted to make sure this is documented|creating a record of)/;
+  if (recapBodyPatterns.test(first200)) {
+    score += 0.35;
+  }
+
+  // Additional body signals (anywhere in text)
+  const bodySignals = [
+    /for my (own )?records/,
+    /in case (I|we) need (it|this) later/,
+    /documenting (this|the|what)/,
+    /paper trail/,
+    /want(ed)? to have (this|a record) in writing/,
+    /confirming what (was|we) discussed/,
+    /putting this in (my|the) file/
+  ];
+
+  for (const pattern of bodySignals) {
+    if (pattern.test(lower)) {
+      score += 0.15;
+    }
+  }
+
+  // Cap at 1.0
+  score = Math.min(score, 1.0);
+
+  return {
+    isRecap: score >= 0.45,
+    confidence: Math.round(score * 100) / 100
+  };
+}
+
 module.exports = {
   classifyEvidence,
   detectEvidenceType,
+  detectMediaSubtype,
+  detectRecapEmail,
   EVIDENCE_TYPES
 };

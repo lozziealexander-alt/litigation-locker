@@ -6,7 +6,7 @@ const mime = require('mime-types');
 
 const { extractMetadata } = require('./metadata-extractor');
 const { extractDatesFromText } = require('./date-extractor');
-const { classifyEvidence } = require('./evidence-classifier');
+const { classifyEvidence, detectMediaSubtype, detectRecapEmail } = require('./evidence-classifier');
 const { runOcr } = require('./ocr-engine');
 const { encrypt } = require('../crypto/vault');
 
@@ -80,6 +80,21 @@ async function processFile(filePath, caseKey) {
     contentDates
   });
 
+  // Detect image subtype (screenshot, photo, handwritten, scan)
+  let mediaSubtype = null;
+  if (isImage) {
+    mediaSubtype = detectMediaSubtype(
+      { ...metadata.raw, width: metadata.width, height: metadata.height,
+        dpi: metadata.dpi, fileSize: stats.size },
+      { confidence: metadata.ocrConfidence },
+      rawContent
+    );
+  }
+
+  // Detect recap/self-documentation emails
+  const recapResult = detectRecapEmail(metadata.raw, allText);
+  const isRecap = recapResult.isRecap ? 1 : 0;
+
   return {
     id: docId,
     filename,
@@ -101,7 +116,9 @@ async function processFile(filePath, caseKey) {
                          classification.confidence === 'medium' ? 0.6 :
                          classification.confidence === 'low' ? 0.3 : 0.1,
     evidence_secondary: classification.secondary,
-    evidence_scores_json: JSON.stringify(classification.allScores)
+    evidence_scores_json: JSON.stringify(classification.allScores),
+    media_subtype: mediaSubtype,
+    is_recap: isRecap
   };
 }
 
