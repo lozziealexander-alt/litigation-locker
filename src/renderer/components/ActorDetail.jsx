@@ -61,15 +61,20 @@ export default function ActorDetail({ actor, onClose, onActorUpdated }) {
   }, [actor.id]);
 
   async function loadDetails() {
-    const [actorsResult, appearResult, payResult] = await Promise.all([
-      window.api.actors.list(),
-      window.api.actors.getAppearances(actor.id),
-      window.api.payRecords.getForActor(actor.id)
-    ]);
+    try {
+      const [actorsResult, appearResult, payResult] = await Promise.all([
+        window.api.actors.list(),
+        window.api.actors.getAppearances(actor.id),
+        window.api.payRecords?.getForActor(actor.id).catch(() => ({ success: false }))
+          || Promise.resolve({ success: false })
+      ]);
 
-    if (actorsResult.success) setAllActors(actorsResult.actors.filter(a => a.id !== actor.id));
-    if (appearResult.success) setAppearances(appearResult.appearances);
-    if (payResult.success) setPayRecords(payResult.records);
+      if (actorsResult.success) setAllActors(actorsResult.actors.filter(a => a.id !== actor.id));
+      if (appearResult.success) setAppearances(appearResult.appearances);
+      if (payResult?.success) setPayRecords(payResult.records || []);
+    } catch (err) {
+      console.error('[ActorDetail] loadDetails error:', err);
+    }
   }
 
   function handleChange(field, value) {
@@ -93,19 +98,29 @@ export default function ActorDetail({ actor, onClose, onActorUpdated }) {
       endDate: editedActor.end_date
     };
 
-    const result = await window.api.actors.update(actor.id, updates);
-    if (result.success) {
-      setDirty(false);
-      onActorUpdated();
+    try {
+      const result = await window.api.actors.update(actor.id, updates);
+      console.log('[ActorDetail] save result:', result);
+      if (result.success) {
+        setDirty(false);
+        onActorUpdated();
+      } else {
+        console.error('[ActorDetail] save failed:', result);
+        alert('Failed to save: ' + (result.error || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error('[ActorDetail] save error:', err);
+      alert('Error saving: ' + err.message);
     }
   }
 
   async function handleSetSelf() {
-    await window.api.actors.setSelf(actor.id);
-    handleChange('classification', 'self');
-    handleChange('is_self', 1);
-    setDirty(false);
-    onActorUpdated();
+    const result = await window.api.actors.setSelf(actor.id);
+    if (result.success) {
+      handleChange('classification', 'self');
+      handleChange('is_self', 1);
+      setDirty(false);
+    }
   }
 
   async function handleDelete() {

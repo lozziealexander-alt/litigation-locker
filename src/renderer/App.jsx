@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Unlock from './pages/Unlock';
 import Timeline from './pages/Timeline';
 import People from './pages/People';
+import Dashboard from './pages/Dashboard';
 import DocumentPanel from './components/DocumentPanel';
 import ActorDetail from './components/ActorDetail';
 import { useTheme } from './styles/ThemeContext';
@@ -17,6 +18,7 @@ export default function App() {
   const [selectedActor, setSelectedActor] = useState(null);
   const [currentPage, setCurrentPage] = useState('timeline');
   const [timelineKey, setTimelineKey] = useState(0);
+  const [peopleKey, setPeopleKey] = useState(0);
 
   // Recompute styles each render so they pick up current theme colors
   const styles = getStyles();
@@ -150,6 +152,16 @@ export default function App() {
             <span style={styles.caseIcon}>{'\u{1F465}'}</span>
             <span style={styles.caseName}>People</span>
           </button>
+          <button
+            style={{
+              ...styles.caseButton,
+              ...(currentPage === 'dashboard' ? styles.navButtonActive : {})
+            }}
+            onClick={() => setCurrentPage('dashboard')}
+          >
+            <span style={styles.caseIcon}>{'\uD83D\uDCCA'}</span>
+            <span style={styles.caseName}>Dashboard</span>
+          </button>
 
           <div style={{ ...styles.sidebarLabel, marginTop: spacing.lg }}>CASES</div>
           {cases.map(c => (
@@ -195,7 +207,14 @@ export default function App() {
         )}
         {currentPage === 'people' && (
           <People
+            key={peopleKey}
             onSelectActor={setSelectedActor}
+          />
+        )}
+        {currentPage === 'dashboard' && (
+          <Dashboard
+            onNavigateToTimeline={() => setCurrentPage('timeline')}
+            onSelectDocument={setSelectedDocument}
           />
         )}
       </div>
@@ -217,6 +236,7 @@ export default function App() {
           onActorUpdated={() => {
             setSelectedActor(null);
             setTimelineKey(k => k + 1);
+            setPeopleKey(k => k + 1);
           }}
         />
       )}

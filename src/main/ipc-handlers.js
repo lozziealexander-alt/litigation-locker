@@ -844,7 +844,7 @@ function registerIpcHandlers() {
         values.push(updates.type);
       }
 
-      fields.push('updated_at = datetime("now")');
+      fields.push("updated_at = datetime('now')");
       values.push(incidentId);
 
       const stmt = currentCaseDb.prepare(
@@ -1049,7 +1049,7 @@ function registerIpcHandlers() {
         return { success: true };
       }
 
-      fields.push('updated_at = datetime("now")');
+      fields.push("updated_at = datetime('now')");
       values.push(actorId);
 
       const stmt = currentCaseDb.prepare(`UPDATE actors SET ${fields.join(', ')} WHERE id = ?`);
