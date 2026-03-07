@@ -3,6 +3,10 @@ const path = require('path');
 const { registerIpcHandlers } = require('./ipc-handlers');
 const { terminateOcr } = require('./ingest/ocr-engine');
 
+// Prevent EPIPE crashes from console.log when stdout pipe is broken
+process.stdout?.on?.('error', () => {});
+process.stderr?.on?.('error', () => {});
+
 let mainWindow = null;
 
 function createWindow() {

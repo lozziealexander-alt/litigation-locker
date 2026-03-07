@@ -187,6 +187,88 @@ function openCase(caseId) {
     caseDb.exec("ALTER TABLE actor_appearances ADD COLUMN auto_detected BOOLEAN DEFAULT 0");
   }
 
+  // Add anchors tables (Session 7: hub-spoke narrative)
+  const hasAnchors = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='anchors'").get();
+  if (!hasAnchors) {
+    caseDb.exec(`
+      CREATE TABLE IF NOT EXISTS anchors (
+        id TEXT PRIMARY KEY,
+        anchor_type TEXT NOT NULL CHECK(anchor_type IN ('START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'MILESTONE', 'END')),
+        title TEXT NOT NULL,
+        description TEXT,
+        anchor_date DATE,
+        date_confidence TEXT DEFAULT 'exact',
+        what_happened TEXT,
+        where_location TEXT,
+        impact_summary TEXT,
+        severity TEXT CHECK(severity IN ('minor', 'moderate', 'severe', 'egregious')),
+        is_auto_generated BOOLEAN DEFAULT 1,
+        user_edited BOOLEAN DEFAULT 0,
+        source_context TEXT,
+        sort_order INTEGER,
+        is_expanded BOOLEAN DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS anchor_incidents (
+        anchor_id TEXT NOT NULL REFERENCES anchors(id),
+        incident_id TEXT NOT NULL REFERENCES incidents(id),
+        PRIMARY KEY (anchor_id, incident_id)
+      );
+      CREATE TABLE IF NOT EXISTS anchor_documents (
+        anchor_id TEXT NOT NULL REFERENCES anchors(id),
+        document_id TEXT NOT NULL REFERENCES documents(id),
+        relevance TEXT DEFAULT 'supports',
+        PRIMARY KEY (anchor_id, document_id)
+      );
+      CREATE TABLE IF NOT EXISTS anchor_actors (
+        anchor_id TEXT NOT NULL REFERENCES anchors(id),
+        actor_id TEXT NOT NULL REFERENCES actors(id),
+        role_in_anchor TEXT,
+        PRIMARY KEY (anchor_id, actor_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_anchors_date ON anchors(anchor_date);
+      CREATE INDEX IF NOT EXISTS idx_anchors_type ON anchors(anchor_type);
+    `);
+  }
+
+  // Add anchor_precedents junction table
+  const hasAnchorPrecedents = caseDb.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='anchor_precedents'"
+  ).get();
+  if (!hasAnchorPrecedents) {
+    caseDb.exec(`
+      CREATE TABLE IF NOT EXISTS anchor_precedents (
+        anchor_id TEXT NOT NULL REFERENCES anchors(id),
+        precedent_id TEXT NOT NULL,
+        relevance_note TEXT,
+        linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (anchor_id, precedent_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_anchor_precedents_anchor ON anchor_precedents(anchor_id);
+    `);
+  }
+
+  // Add multi-event tracking columns to anchors
+  const anchorCols = caseDb.prepare("PRAGMA table_info(anchors)").all();
+  const anchorColNames = anchorCols.map(c => c.name);
+  if (!anchorColNames.includes('contains_multiple_events')) {
+    caseDb.exec("ALTER TABLE anchors ADD COLUMN contains_multiple_events BOOLEAN DEFAULT 0");
+  }
+  if (!anchorColNames.includes('event_count')) {
+    caseDb.exec("ALTER TABLE anchors ADD COLUMN event_count INTEGER DEFAULT 1");
+  }
+
+  // Add end_date and last_scanned_at to case_context if missing
+  const ctxCols2 = caseDb.prepare("PRAGMA table_info(case_context)").all();
+  const ctxColNames2 = ctxCols2.map(c => c.name);
+  if (!ctxColNames2.includes('end_date')) {
+    caseDb.exec("ALTER TABLE case_context ADD COLUMN end_date DATE");
+  }
+  if (!ctxColNames2.includes('last_scanned_at')) {
+    caseDb.exec("ALTER TABLE case_context ADD COLUMN last_scanned_at DATETIME");
+  }
+
   return caseDb;
 }
 

@@ -228,11 +228,80 @@ CREATE TABLE IF NOT EXISTS case_context (
   narrative TEXT,
   voice_note_path TEXT,
   hire_date DATE,
+  end_date DATE,
   protected_activities_json TEXT,
   case_type TEXT,
   jurisdiction TEXT CHECK(jurisdiction IN ('federal', 'state', 'both')) DEFAULT 'both',
+  last_scanned_at DATETIME,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Anchors (major case milestones)
+CREATE TABLE IF NOT EXISTS anchors (
+  id TEXT PRIMARY KEY,
+  anchor_type TEXT NOT NULL CHECK(anchor_type IN ('START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'MILESTONE', 'END')),
+  title TEXT NOT NULL,
+  description TEXT,
+  anchor_date DATE,
+  date_confidence TEXT DEFAULT 'exact',
+
+  -- What/Where
+  what_happened TEXT,
+  where_location TEXT,
+
+  -- Impact assessment
+  impact_summary TEXT,
+  severity TEXT CHECK(severity IN ('minor', 'moderate', 'severe', 'egregious')),
+
+  -- Generation
+  is_auto_generated BOOLEAN DEFAULT 1,
+  user_edited BOOLEAN DEFAULT 0,
+  source_context TEXT,
+
+  -- Display
+  sort_order INTEGER,
+  is_expanded BOOLEAN DEFAULT 0,
+
+  -- Multi-event tracking
+  contains_multiple_events BOOLEAN DEFAULT 0,
+  event_count INTEGER DEFAULT 1,
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Link anchors to incidents
+CREATE TABLE IF NOT EXISTS anchor_incidents (
+  anchor_id TEXT NOT NULL REFERENCES anchors(id),
+  incident_id TEXT NOT NULL REFERENCES incidents(id),
+  PRIMARY KEY (anchor_id, incident_id)
+);
+
+-- Link anchors to documents
+CREATE TABLE IF NOT EXISTS anchor_documents (
+  anchor_id TEXT NOT NULL REFERENCES anchors(id),
+  document_id TEXT NOT NULL REFERENCES documents(id),
+  relevance TEXT DEFAULT 'supports',
+  PRIMARY KEY (anchor_id, document_id)
+);
+
+-- Link anchors to actors
+CREATE TABLE IF NOT EXISTS anchor_actors (
+  anchor_id TEXT NOT NULL REFERENCES anchors(id),
+  actor_id TEXT NOT NULL REFERENCES actors(id),
+  role_in_anchor TEXT,
+  PRIMARY KEY (anchor_id, actor_id)
+);
+
+-- Link anchors to precedents
+CREATE TABLE IF NOT EXISTS anchor_precedents (
+  anchor_id TEXT NOT NULL REFERENCES anchors(id),
+  precedent_id TEXT NOT NULL,
+  relevance_note TEXT,
+  linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (anchor_id, precedent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_anchor_precedents_anchor ON anchor_precedents(anchor_id);
 
 -- Document date entries (allow one document to appear at multiple timeline dates)
 CREATE TABLE IF NOT EXISTS document_date_entries (
@@ -256,3 +325,5 @@ CREATE INDEX IF NOT EXISTS idx_timeline_target ON timeline_connections(target_id
 CREATE INDEX IF NOT EXISTS idx_date_entries_doc ON document_date_entries(document_id);
 CREATE INDEX IF NOT EXISTS idx_date_entries_date ON document_date_entries(entry_date);
 CREATE INDEX IF NOT EXISTS idx_pay_records_actor ON pay_records(actor_id);
+CREATE INDEX IF NOT EXISTS idx_anchors_date ON anchors(anchor_date);
+CREATE INDEX IF NOT EXISTS idx_anchors_type ON anchors(anchor_type);

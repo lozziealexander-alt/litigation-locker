@@ -3,6 +3,7 @@ import Unlock from './pages/Unlock';
 import Timeline from './pages/Timeline';
 import People from './pages/People';
 import Dashboard from './pages/Dashboard';
+import Anchors from './pages/Anchors';
 import DocumentPanel from './components/DocumentPanel';
 import ActorDetail from './components/ActorDetail';
 import { useTheme } from './styles/ThemeContext';
@@ -16,7 +17,7 @@ export default function App() {
   const [activeCase, setActiveCase] = useState(null);
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [selectedActor, setSelectedActor] = useState(null);
-  const [currentPage, setCurrentPage] = useState('timeline');
+  const [currentPage, setCurrentPage] = useState('anchors');
   const [timelineKey, setTimelineKey] = useState(0);
   const [peopleKey, setPeopleKey] = useState(0);
 
@@ -135,6 +136,16 @@ export default function App() {
           <button
             style={{
               ...styles.caseButton,
+              ...(currentPage === 'anchors' ? styles.navButtonActive : {})
+            }}
+            onClick={() => setCurrentPage('anchors')}
+          >
+            <span style={styles.caseIcon}>{'\u{1F4CD}'}</span>
+            <span style={styles.caseName}>Anchors</span>
+          </button>
+          <button
+            style={{
+              ...styles.caseButton,
               ...(currentPage === 'timeline' ? styles.navButtonActive : {})
             }}
             onClick={() => setCurrentPage('timeline')}
@@ -199,6 +210,9 @@ export default function App() {
 
       {/* Main content */}
       <div style={styles.main}>
+        {currentPage === 'anchors' && (
+          <Anchors caseId={activeCase.id} />
+        )}
         {currentPage === 'timeline' && (
           <Timeline
             key={timelineKey}

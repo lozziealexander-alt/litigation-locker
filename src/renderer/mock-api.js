@@ -174,6 +174,43 @@ window.api = {
     delete: () => Promise.resolve({ success: true }),
     getForActor: () => Promise.resolve({ success: true, records: [] })
   },
+  anchors: {
+    list: () => Promise.resolve({ success: true, anchors: [
+      { id: 'anc-1', anchor_type: 'START', title: 'Employment Started', anchor_date: '2023-06-15', date_confidence: 'exact', description: 'Started working at Acme Corp as Senior Analyst', is_auto_generated: true, user_edited: false, sort_order: 0, contains_multiple_events: 0, event_count: 1, documents: [], incidents: [], actors: [], precedents: [] },
+      { id: 'anc-2', anchor_type: 'REPORTED', title: 'Reported Discrimination to HR', anchor_date: '2024-01-10', date_confidence: 'exact', description: 'Filed formal complaint with HR about discriminatory treatment by supervisor', is_auto_generated: true, user_edited: false, sort_order: 1, contains_multiple_events: 0, event_count: 1, documents: [{ id: 'doc-1', filename: 'Discrimination_Complaint.eml', evidence_type: 'PROTECTED_ACTIVITY' }], incidents: [], actors: [{ id: 'act-2', name: 'Tom HR', classification: 'enabler', role_in_anchor: 'received complaint' }], precedents: [{ precedent_id: 'faragher', relevance_note: 'Reported to employer' }] },
+      { id: 'anc-6', anchor_type: 'ADVERSE_ACTION', title: 'Excluded from Key Meetings', anchor_date: '2024-01-20', date_confidence: 'approximate', description: 'After reporting, was systematically excluded from team meetings and decision-making processes', is_auto_generated: true, user_edited: false, sort_order: 2, contains_multiple_events: 1, event_count: 3, documents: [], incidents: [], actors: [{ id: 'act-1', name: 'Jane Manager', classification: 'bad_actor', role_in_anchor: 'excluded' }], precedents: [{ precedent_id: 'muldrow_some_harm', relevance_note: 'Some harm standard' }] },
+      { id: 'anc-7', anchor_type: 'ADVERSE_ACTION', title: 'Gendered Language Used', anchor_date: null, date_confidence: 'unknown', description: 'Manager referred to employee as "sweetheart" and "honey" in professional settings', is_auto_generated: true, user_edited: false, sort_order: 3, contains_multiple_events: 0, event_count: 1, documents: [], incidents: [], actors: [{ id: 'act-1', name: 'Jane Manager', classification: 'bad_actor', role_in_anchor: 'harasser' }], precedents: [{ precedent_id: 'harris', relevance_note: 'Hostile environment' }] },
+      { id: 'anc-3', anchor_type: 'ADVERSE_ACTION', title: 'Written Warning Issued', anchor_date: '2024-02-15', date_confidence: 'exact', description: 'Received written warning 36 days after filing discrimination complaint', severity: 'severe', is_auto_generated: true, user_edited: false, sort_order: 4, contains_multiple_events: 0, event_count: 1, documents: [{ id: 'doc-5', filename: 'Written_Warning.pdf', evidence_type: 'ADVERSE_ACTION' }], incidents: [{ id: 'inc-2', title: 'Written warning', computed_severity: 'severe' }], actors: [{ id: 'act-1', name: 'Jane Manager', classification: 'bad_actor', role_in_anchor: 'issued warning' }], precedents: [{ precedent_id: 'burlington_northern', relevance_note: 'Materially adverse action' }, { precedent_id: 'thomas_proximity', relevance_note: 'Close temporal proximity' }] },
+      { id: 'anc-8', anchor_type: 'ADVERSE_ACTION', title: 'Told to Stop Documenting', anchor_date: '2024-02-20', date_confidence: 'approximate', description: 'Manager told employee to stop documenting workplace issues, suggesting retaliation for protected activity', severity: 'severe', is_auto_generated: true, user_edited: false, sort_order: 5, contains_multiple_events: 0, event_count: 1, documents: [], incidents: [], actors: [{ id: 'act-1', name: 'Jane Manager', classification: 'bad_actor', role_in_anchor: 'retaliated' }], precedents: [{ precedent_id: 'monaghan_retaliation', relevance_note: 'Dissuade standard' }] },
+      { id: 'anc-4', anchor_type: 'REPORTED', title: 'EEOC Charge Filed', anchor_date: '2024-03-01', date_confidence: 'exact', description: 'Filed formal EEOC charge of discrimination', is_auto_generated: true, user_edited: false, sort_order: 6, contains_multiple_events: 0, event_count: 1, documents: [{ id: 'doc-6', filename: 'EEOC_Charge_Filed.pdf', evidence_type: 'PROTECTED_ACTIVITY' }], incidents: [], actors: [], precedents: [{ precedent_id: 'joshua_filing', relevance_note: 'Timely FCHR filing' }] },
+      { id: 'anc-5', anchor_type: 'END', title: 'Employment Terminated', anchor_date: '2024-03-15', date_confidence: 'exact', description: 'Terminated 14 days after filing EEOC charge', severity: 'egregious', is_auto_generated: true, user_edited: false, sort_order: 7, contains_multiple_events: 0, event_count: 1, documents: [{ id: 'doc-7', filename: 'Termination_Letter.pdf', evidence_type: 'ADVERSE_ACTION' }], incidents: [{ id: 'inc-3', title: 'Termination', computed_severity: 'egregious' }], actors: [{ id: 'act-1', name: 'Jane Manager', classification: 'bad_actor', role_in_anchor: 'terminated' }, { id: 'act-2', name: 'Tom HR', classification: 'enabler', role_in_anchor: 'processed termination' }], precedents: [{ precedent_id: 'burlington_northern', relevance_note: 'Materially adverse action' }] }
+    ]}),
+    generate: () => Promise.resolve({ success: true, count: 8, actorsFound: 2, actors: [{ name: 'Jane Manager', classification: 'bad_actor', id: 'act-1' }, { name: 'Tom HR', classification: 'enabler', id: 'act-2' }] }),
+    create: (caseId, data) => Promise.resolve({ success: true, anchor: { id: 'anc-new', ...data } }),
+    update: () => Promise.resolve({ success: true }),
+    delete: () => Promise.resolve({ success: true }),
+    linkEvidence: () => Promise.resolve({ success: true }),
+    unlinkEvidence: () => Promise.resolve({ success: true }),
+    getRelatedEvidence: (caseId, anchorId) => Promise.resolve({ success: true, anchor: { id: anchorId, anchor_type: 'ADVERSE_ACTION', title: 'Written Warning Issued', anchor_date: '2024-02-15', date_confidence: 'exact', what_happened: 'Received written warning 36 days after filing discrimination complaint. No prior performance issues documented.', where_location: 'HR Office, Building A', impact_summary: 'Created paper trail for eventual termination. Damaged professional reputation.', severity: 'severe', contains_multiple_events: 0, event_count: 1 }, linked: { documents: [{ id: 'doc-5', filename: 'Written_Warning.pdf', evidence_type: 'ADVERSE_ACTION', relevance: 'source' }], incidents: [{ id: 'inc-2', title: 'Written warning issued', computed_severity: 'severe' }], actors: [{ id: 'act-1', name: 'Jane Manager', classification: 'bad_actor', role_in_anchor: 'issued warning' }, { id: 'act-2', name: 'Tom HR', classification: 'enabler', role_in_anchor: 'present in meeting' }], precedents: [{ precedent_id: 'burlington_northern', relevance_note: 'Materially adverse action' }, { precedent_id: 'thomas_proximity', relevance_note: 'Close temporal proximity' }] }, nearby: { documents: [{ id: 'doc-4', filename: 'Coworker_Witness_Statement.pdf' }] } }),
+    clone: () => Promise.resolve({ success: true, newId: 'anc-cloned' }),
+    reorder: () => Promise.resolve({ success: true }),
+    linkPrecedent: () => Promise.resolve({ success: true }),
+    unlinkPrecedent: () => Promise.resolve({ success: true }),
+    getPrecedents: () => Promise.resolve({ success: true, precedents: [] }),
+    breakApart: () => Promise.resolve({ success: true, newAnchors: [{ id: 'anc-split-1', title: 'Part 1' }, { id: 'anc-split-2', title: 'Part 2' }] }),
+    linkIncident: () => Promise.resolve({ success: true }),
+    unlinkIncident: () => Promise.resolve({ success: true })
+  },
+  context: {
+    get: () => Promise.resolve({ success: true, context: { id: 1, narrative: 'I started working at Acme Corp in June 2023 as a Senior Analyst. In January 2024, I reported discrimination to HR after my supervisor made repeated comments about my age. After I filed the complaint, my manager put me on a performance improvement plan and gave me a written warning. I then filed an EEOC charge in March 2024. Two weeks later, I was terminated.', hire_date: '2023-06-15', end_date: '2024-03-15', case_type: 'retaliation' } }),
+    update: () => Promise.resolve({ success: true })
+  },
+  groups: {
+    create: () => Promise.resolve({ success: true, group: { id: 'grp-new' } }),
+    list: () => Promise.resolve({ success: true, groups: [] }),
+    delete: () => Promise.resolve({ success: true }),
+    getMembers: () => Promise.resolve({ success: true, members: [] })
+  },
   dialog: {
     openFiles: () => Promise.resolve({ canceled: true, filePaths: [] })
   }

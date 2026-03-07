@@ -104,6 +104,32 @@ contextBridge.exposeInMainWorld('api', {
     getDocumentBadges: (docId) => ipcRenderer.invoke('precedents:getDocumentBadges', docId)
   },
 
+  // Anchors
+  anchors: {
+    list: (caseId) => ipcRenderer.invoke('anchors:list', caseId),
+    generate: (caseId) => ipcRenderer.invoke('anchors:generate', caseId),
+    create: (caseId, data) => ipcRenderer.invoke('anchors:create', caseId, data),
+    update: (caseId, id, updates) => ipcRenderer.invoke('anchors:update', caseId, id, updates),
+    delete: (caseId, id) => ipcRenderer.invoke('anchors:delete', caseId, id),
+    linkEvidence: (caseId, anchorId, docId) => ipcRenderer.invoke('anchors:linkEvidence', caseId, anchorId, docId),
+    unlinkEvidence: (caseId, anchorId, docId) => ipcRenderer.invoke('anchors:unlinkEvidence', caseId, anchorId, docId),
+    getRelatedEvidence: (caseId, anchorId) => ipcRenderer.invoke('anchors:getRelatedEvidence', caseId, anchorId),
+    clone: (caseId, anchorId) => ipcRenderer.invoke('anchors:clone', caseId, anchorId),
+    reorder: (caseId, orderedIds) => ipcRenderer.invoke('anchors:reorder', caseId, orderedIds),
+    linkPrecedent: (caseId, anchorId, precedentId, note) => ipcRenderer.invoke('anchors:linkPrecedent', caseId, anchorId, precedentId, note),
+    unlinkPrecedent: (caseId, anchorId, precedentId) => ipcRenderer.invoke('anchors:unlinkPrecedent', caseId, anchorId, precedentId),
+    getPrecedents: (caseId, anchorId) => ipcRenderer.invoke('anchors:getPrecedents', caseId, anchorId),
+    breakApart: (caseId, anchorId) => ipcRenderer.invoke('anchors:breakApart', caseId, anchorId),
+    linkIncident: (caseId, anchorId, incidentId) => ipcRenderer.invoke('anchors:linkIncident', caseId, anchorId, incidentId),
+    unlinkIncident: (caseId, anchorId, incidentId) => ipcRenderer.invoke('anchors:unlinkIncident', caseId, anchorId, incidentId)
+  },
+
+  // Case context
+  context: {
+    get: (caseId) => ipcRenderer.invoke('context:get', caseId),
+    update: (caseId, updates) => ipcRenderer.invoke('context:update', caseId, updates)
+  },
+
   // File dialog
   dialog: {
     openFiles: () => ipcRenderer.invoke('dialog:openFiles')

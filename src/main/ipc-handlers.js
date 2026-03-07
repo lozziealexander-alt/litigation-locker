@@ -10,6 +10,16 @@ const { analyzeAllPrecedents, getDocumentPrecedentBadges } = require('./analysis
 const { classifyEvidence } = require('./ingest/evidence-classifier');
 const { detectIncidents, computeSeverity } = require('./analysis/incident-detector');
 const { detectActors, findPotentialDuplicates } = require('./analysis/actor-detector');
+const {
+  generateAnchorsFromContext,
+  generateAnchorsFromIncidents,
+  generateAnchorsFromDocuments,
+  mergeAnchors,
+  splitAnchorSegment,
+  extractDate,
+  extractActorsFromNarrative,
+  ANCHOR_PATTERNS
+} = require('./analysis/anchor-generator');
 
 // Track currently open case
 let currentCaseDb = null;
@@ -1463,6 +1473,879 @@ function registerIpcHandlers() {
     } catch (error) {
       console.error('[DEBUG] testIngest EXCEPTION:', error.message, error.stack);
       return { success: false, error: error.message, stack: error.stack };
+    }
+  });
+
+  // ==================== ANCHORS ====================
+
+  ipcMain.handle('anchors:list', async (event, caseId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      // Ensure tables exist
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS anchors (
+          id TEXT PRIMARY KEY,
+          anchor_type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          anchor_date DATE,
+          date_confidence TEXT DEFAULT 'exact',
+          what_happened TEXT,
+          where_location TEXT,
+          impact_summary TEXT,
+          severity TEXT,
+          is_auto_generated BOOLEAN DEFAULT 1,
+          user_edited BOOLEAN DEFAULT 0,
+          source_context TEXT,
+          sort_order INTEGER,
+          is_expanded BOOLEAN DEFAULT 0,
+          contains_multiple_events BOOLEAN DEFAULT 0,
+          event_count INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS anchor_incidents (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          incident_id TEXT NOT NULL REFERENCES incidents(id),
+          PRIMARY KEY (anchor_id, incident_id)
+        );
+        CREATE TABLE IF NOT EXISTS anchor_documents (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          document_id TEXT NOT NULL REFERENCES documents(id),
+          relevance TEXT DEFAULT 'supports',
+          PRIMARY KEY (anchor_id, document_id)
+        );
+        CREATE TABLE IF NOT EXISTS anchor_actors (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          actor_id TEXT NOT NULL REFERENCES actors(id),
+          role_in_anchor TEXT,
+          PRIMARY KEY (anchor_id, actor_id)
+        );
+      `);
+
+      const stmt = caseDb.prepare(`
+        SELECT * FROM anchors ORDER BY sort_order, anchor_date
+      `);
+      const anchors = stmt.all();
+
+      // Get linked items for each anchor
+      for (const anchor of anchors) {
+        try {
+          anchor.documents = caseDb.prepare(`
+            SELECT d.*, ad.relevance
+            FROM documents d
+            JOIN anchor_documents ad ON ad.document_id = d.id
+            WHERE ad.anchor_id = ?
+          `).all(anchor.id);
+        } catch (e) { anchor.documents = []; }
+
+        try {
+          anchor.incidents = caseDb.prepare(`
+            SELECT i.*
+            FROM incidents i
+            JOIN anchor_incidents ai ON ai.incident_id = i.id
+            WHERE ai.anchor_id = ?
+          `).all(anchor.id);
+        } catch (e) { anchor.incidents = []; }
+
+        try {
+          anchor.actors = caseDb.prepare(`
+            SELECT a.*, aa.role_in_anchor
+            FROM actors a
+            JOIN anchor_actors aa ON aa.actor_id = a.id
+            WHERE aa.anchor_id = ?
+          `).all(anchor.id);
+        } catch (e) { anchor.actors = []; }
+
+        // Get linked precedents
+        try {
+          anchor.precedents = caseDb.prepare(`
+            SELECT * FROM anchor_precedents WHERE anchor_id = ?
+          `).all(anchor.id);
+        } catch (e) { anchor.precedents = []; }
+      }
+
+      caseDb.close();
+      return { success: true, anchors };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:generate', async (event, caseId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      // Ensure anchor tables exist
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS anchors (
+          id TEXT PRIMARY KEY,
+          anchor_type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          anchor_date DATE,
+          date_confidence TEXT DEFAULT 'exact',
+          what_happened TEXT,
+          where_location TEXT,
+          impact_summary TEXT,
+          severity TEXT,
+          is_auto_generated BOOLEAN DEFAULT 1,
+          user_edited BOOLEAN DEFAULT 0,
+          source_context TEXT,
+          sort_order INTEGER,
+          is_expanded BOOLEAN DEFAULT 0,
+          contains_multiple_events BOOLEAN DEFAULT 0,
+          event_count INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS anchor_incidents (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          incident_id TEXT NOT NULL REFERENCES incidents(id),
+          PRIMARY KEY (anchor_id, incident_id)
+        );
+        CREATE TABLE IF NOT EXISTS anchor_documents (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          document_id TEXT NOT NULL REFERENCES documents(id),
+          relevance TEXT DEFAULT 'supports',
+          PRIMARY KEY (anchor_id, document_id)
+        );
+        CREATE TABLE IF NOT EXISTS anchor_actors (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          actor_id TEXT NOT NULL REFERENCES actors(id),
+          role_in_anchor TEXT,
+          PRIMARY KEY (anchor_id, actor_id)
+        );
+      `);
+
+      // Get existing data
+      const documents = caseDb.prepare('SELECT * FROM documents').all();
+
+      let incidents = [];
+      try {
+        incidents = caseDb.prepare('SELECT * FROM incidents').all();
+      } catch (e) {}
+
+      let context = null;
+      try {
+        context = caseDb.prepare('SELECT * FROM case_context WHERE id = 1').get();
+      } catch (e) {}
+
+      let userEditedAnchors = [];
+      try {
+        userEditedAnchors = caseDb.prepare('SELECT * FROM anchors WHERE user_edited = 1').all();
+      } catch (e) {}
+
+      // Generate anchors from each source
+      const contextAnchors = context?.narrative
+        ? generateAnchorsFromContext(context.narrative, userEditedAnchors)
+        : [];
+      const incidentAnchors = generateAnchorsFromIncidents(incidents);
+      const documentAnchors = generateAnchorsFromDocuments(documents);
+
+      // Merge all
+      const allAnchors = mergeAnchors(contextAnchors, incidentAnchors, documentAnchors);
+
+      // Add START anchor if hire_date exists
+      if (context?.hire_date && !allAnchors.some(a => a.anchor_type === 'START')) {
+        allAnchors.unshift({
+          id: uuidv4(),
+          anchor_type: 'START',
+          title: 'Employment Started',
+          anchor_date: context.hire_date,
+          date_confidence: 'exact',
+          is_auto_generated: true,
+          sort_order: 0
+        });
+      }
+
+      // Ensure anchor_precedents table exists
+      try {
+        caseDb.exec(`
+          CREATE TABLE IF NOT EXISTS anchor_precedents (
+            anchor_id TEXT NOT NULL REFERENCES anchors(id),
+            precedent_id TEXT NOT NULL,
+            relevance_note TEXT,
+            linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (anchor_id, precedent_id)
+          );
+        `);
+      } catch (e) {}
+
+      // Safety: only delete old auto-anchors if we actually generated new ones
+      // This prevents wiping everything when narrative is empty or generator fails
+      if (allAnchors.length > 0) {
+        caseDb.prepare('DELETE FROM anchor_documents WHERE anchor_id IN (SELECT id FROM anchors WHERE user_edited = 0)').run();
+        caseDb.prepare('DELETE FROM anchor_incidents WHERE anchor_id IN (SELECT id FROM anchors WHERE user_edited = 0)').run();
+        caseDb.prepare('DELETE FROM anchor_actors WHERE anchor_id IN (SELECT id FROM anchors WHERE user_edited = 0)').run();
+        try {
+          caseDb.prepare('DELETE FROM anchor_precedents WHERE anchor_id IN (SELECT id FROM anchors WHERE user_edited = 0)').run();
+        } catch (e) {}
+        caseDb.prepare('DELETE FROM anchors WHERE user_edited = 0').run();
+      } else {
+        caseDb.close();
+        return { success: true, count: 0, actorsFound: 0, actors: [], skipped: true };
+      }
+
+      const insertStmt = caseDb.prepare(`
+        INSERT INTO anchors (
+          id, anchor_type, title, description, anchor_date, date_confidence,
+          what_happened, severity, is_auto_generated, user_edited, sort_order,
+          contains_multiple_events, event_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      // Detect actors from narrative for linking
+      let detectedActors = [];
+      if (context?.narrative) {
+        try {
+          detectedActors = extractActorsFromNarrative(context.narrative);
+        } catch (e) {
+          console.error('[IPC] Actor extraction during anchor gen:', e.message);
+        }
+      }
+
+      // Insert or upsert detected actors into actors table
+      const actorInsertStmt = caseDb.prepare(`
+        INSERT OR IGNORE INTO actors (id, name, classification)
+        VALUES (?, ?, ?)
+      `);
+      for (const actor of detectedActors) {
+        try {
+          const existingActor = caseDb.prepare('SELECT id FROM actors WHERE LOWER(name) = LOWER(?)').get(actor.name);
+          if (!existingActor) {
+            const actorId = uuidv4();
+            actorInsertStmt.run(actorId, actor.name, actor.suggestedClassification || 'unknown');
+            actor.dbId = actorId;
+          } else {
+            actor.dbId = existingActor.id;
+          }
+        } catch (e) {
+          // Skip actor if insert fails (e.g. CHECK constraint)
+        }
+      }
+
+      for (const anchor of allAnchors) {
+        // Skip if user-edited version exists
+        if (userEditedAnchors.some(u => u.id === anchor.id)) continue;
+
+        insertStmt.run(
+          anchor.id,
+          anchor.anchor_type,
+          anchor.title,
+          anchor.description || null,
+          anchor.anchor_date || null,
+          anchor.date_confidence || 'unknown',
+          anchor.what_happened || null,
+          anchor.severity || null,
+          anchor.is_auto_generated ? 1 : 0,
+          0,
+          anchor.sort_order,
+          anchor.contains_multiple_events || 0,
+          anchor.event_count || 1
+        );
+
+        // Link source document if exists
+        if (anchor.source_document_id) {
+          caseDb.prepare(`
+            INSERT OR IGNORE INTO anchor_documents (anchor_id, document_id, relevance)
+            VALUES (?, ?, 'source')
+          `).run(anchor.id, anchor.source_document_id);
+        }
+
+        // Link source incident if exists
+        if (anchor.source_incident_id) {
+          caseDb.prepare(`
+            INSERT OR IGNORE INTO anchor_incidents (anchor_id, incident_id)
+            VALUES (?, ?)
+          `).run(anchor.id, anchor.source_incident_id);
+        }
+
+        // Link detected actors to this anchor based on name mention in anchor text
+        if (anchor.what_happened || anchor.description) {
+          const anchorText = (anchor.what_happened || '') + ' ' + (anchor.description || '');
+          for (const actor of detectedActors) {
+            if (actor.dbId && actor.name && anchorText.toLowerCase().includes(actor.name.toLowerCase())) {
+              try {
+                caseDb.prepare(`
+                  INSERT OR IGNORE INTO anchor_actors (anchor_id, actor_id, role_in_anchor)
+                  VALUES (?, ?, ?)
+                `).run(anchor.id, actor.dbId, actor.suggestedClassification || 'mentioned');
+              } catch (e) {}
+            }
+          }
+        }
+      }
+
+      // Update last scanned
+      try {
+        caseDb.prepare(`
+          UPDATE case_context SET last_scanned_at = datetime('now') WHERE id = 1
+        `).run();
+      } catch (e) {}
+
+      caseDb.close();
+
+      return {
+        success: true,
+        count: allAnchors.length,
+        actorsFound: detectedActors.length,
+        actors: detectedActors.map(a => ({ name: a.name, classification: a.suggestedClassification, id: a.dbId }))
+      };
+    } catch (error) {
+      console.error('[IPC] anchors:generate error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:create', async (event, caseId, anchorData) => {
+    try {
+      const caseDb = db.openCase(caseId);
+      const id = uuidv4();
+
+      // Get max sort order
+      const maxOrder = caseDb.prepare('SELECT MAX(sort_order) as max FROM anchors').get();
+      const sortOrder = (maxOrder?.max || 0) + 1;
+
+      caseDb.prepare(`
+        INSERT INTO anchors (
+          id, anchor_type, title, description, anchor_date, date_confidence,
+          what_happened, where_location, impact_summary, severity,
+          is_auto_generated, user_edited, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?)
+      `).run(
+        id,
+        anchorData.type,
+        anchorData.title,
+        anchorData.description || null,
+        anchorData.date || null,
+        anchorData.dateConfidence || 'exact',
+        anchorData.whatHappened || null,
+        anchorData.where || null,
+        anchorData.impact || null,
+        anchorData.severity || null,
+        sortOrder
+      );
+
+      caseDb.close();
+      return { success: true, anchor: { id, ...anchorData } };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:update', async (event, caseId, anchorId, updates) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      const fields = [];
+      const values = [];
+
+      const fieldMap = {
+        title: 'title',
+        description: 'description',
+        date: 'anchor_date',
+        dateConfidence: 'date_confidence',
+        type: 'anchor_type',
+        whatHappened: 'what_happened',
+        where: 'where_location',
+        impact: 'impact_summary',
+        severity: 'severity',
+        sortOrder: 'sort_order',
+        containsMultipleEvents: 'contains_multiple_events',
+        eventCount: 'event_count'
+      };
+
+      for (const [key, dbField] of Object.entries(fieldMap)) {
+        if (updates[key] !== undefined) {
+          fields.push(`${dbField} = ?`);
+          values.push(updates[key]);
+        }
+      }
+
+      // Mark as user edited
+      fields.push('user_edited = 1');
+      fields.push("updated_at = datetime('now')");
+      values.push(anchorId);
+
+      const stmt = caseDb.prepare(`UPDATE anchors SET ${fields.join(', ')} WHERE id = ?`);
+      stmt.run(...values);
+
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:delete', async (event, caseId, anchorId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      // Delete links
+      caseDb.prepare('DELETE FROM anchor_documents WHERE anchor_id = ?').run(anchorId);
+      caseDb.prepare('DELETE FROM anchor_incidents WHERE anchor_id = ?').run(anchorId);
+      caseDb.prepare('DELETE FROM anchor_actors WHERE anchor_id = ?').run(anchorId);
+      try {
+        caseDb.prepare('DELETE FROM anchor_precedents WHERE anchor_id = ?').run(anchorId);
+      } catch (e) {}
+
+      // Delete anchor
+      caseDb.prepare('DELETE FROM anchors WHERE id = ?').run(anchorId);
+
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:linkEvidence', async (event, caseId, anchorId, documentId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      caseDb.prepare(`
+        INSERT OR IGNORE INTO anchor_documents (anchor_id, document_id, relevance)
+        VALUES (?, ?, 'supports')
+      `).run(anchorId, documentId);
+
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:getRelatedEvidence', async (event, caseId, anchorId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      const anchor = caseDb.prepare('SELECT * FROM anchors WHERE id = ?').get(anchorId);
+      if (!anchor) {
+        caseDb.close();
+        return { success: false, error: 'Anchor not found' };
+      }
+
+      // Get linked documents
+      let linkedDocs = [];
+      try {
+        linkedDocs = caseDb.prepare(`
+          SELECT d.*, ad.relevance
+          FROM documents d
+          JOIN anchor_documents ad ON ad.document_id = d.id
+          WHERE ad.anchor_id = ?
+        `).all(anchorId);
+      } catch (e) {}
+
+      // Get linked incidents
+      let linkedIncidents = [];
+      try {
+        linkedIncidents = caseDb.prepare(`
+          SELECT i.*
+          FROM incidents i
+          JOIN anchor_incidents ai ON ai.incident_id = i.id
+          WHERE ai.anchor_id = ?
+        `).all(anchorId);
+      } catch (e) {}
+
+      // Get linked actors
+      let linkedActors = [];
+      try {
+        linkedActors = caseDb.prepare(`
+          SELECT a.*, aa.role_in_anchor
+          FROM actors a
+          JOIN anchor_actors aa ON aa.actor_id = a.id
+          WHERE aa.anchor_id = ?
+        `).all(anchorId);
+      } catch (e) {}
+
+      // Find nearby evidence (within 14 days if anchor has date)
+      let nearbyDocs = [];
+      if (anchor.anchor_date) {
+        try {
+          const allDocs = caseDb.prepare('SELECT * FROM documents').all();
+          const anchorDate = new Date(anchor.anchor_date);
+
+          nearbyDocs = allDocs.filter(d => {
+            if (!d.document_date) return false;
+            if (linkedDocs.some(ld => ld.id === d.id)) return false;
+
+            const docDate = new Date(d.document_date);
+            const daysDiff = Math.abs((docDate - anchorDate) / (1000 * 60 * 60 * 24));
+            return daysDiff <= 14;
+          }).slice(0, 10);
+        } catch (e) {}
+      }
+
+      // Get linked precedents
+      let linkedPrecedents = [];
+      try {
+        linkedPrecedents = caseDb.prepare(`
+          SELECT * FROM anchor_precedents WHERE anchor_id = ?
+        `).all(anchorId);
+      } catch (e) {}
+
+      caseDb.close();
+
+      return {
+        success: true,
+        anchor,
+        linked: {
+          documents: linkedDocs,
+          incidents: linkedIncidents,
+          actors: linkedActors,
+          precedents: linkedPrecedents
+        },
+        nearby: {
+          documents: nearbyDocs
+        }
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== ANCHOR EXTENDED OPERATIONS ====================
+
+  ipcMain.handle('anchors:clone', async (event, caseId, anchorId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      const original = caseDb.prepare('SELECT * FROM anchors WHERE id = ?').get(anchorId);
+      if (!original) {
+        caseDb.close();
+        return { success: false, error: 'Anchor not found' };
+      }
+
+      const newId = uuidv4();
+      const maxOrder = caseDb.prepare('SELECT MAX(sort_order) as max FROM anchors').get();
+      const newOrder = (maxOrder?.max || 0) + 1;
+
+      caseDb.prepare(`
+        INSERT INTO anchors (
+          id, anchor_type, title, description, anchor_date, date_confidence,
+          what_happened, where_location, impact_summary, severity,
+          is_auto_generated, user_edited, source_context, sort_order,
+          contains_multiple_events, event_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?, ?)
+      `).run(
+        newId,
+        original.anchor_type,
+        original.title + ' (copy)',
+        original.description,
+        original.anchor_date,
+        original.date_confidence,
+        original.what_happened,
+        original.where_location,
+        original.impact_summary,
+        original.severity,
+        original.source_context,
+        newOrder,
+        original.contains_multiple_events || 0,
+        original.event_count || 1
+      );
+
+      // Clone linked documents
+      try {
+        const docs = caseDb.prepare('SELECT * FROM anchor_documents WHERE anchor_id = ?').all(anchorId);
+        for (const doc of docs) {
+          caseDb.prepare('INSERT OR IGNORE INTO anchor_documents (anchor_id, document_id, relevance) VALUES (?, ?, ?)').run(newId, doc.document_id, doc.relevance);
+        }
+      } catch (e) {}
+
+      // Clone linked incidents
+      try {
+        const incs = caseDb.prepare('SELECT * FROM anchor_incidents WHERE anchor_id = ?').all(anchorId);
+        for (const inc of incs) {
+          caseDb.prepare('INSERT OR IGNORE INTO anchor_incidents (anchor_id, incident_id) VALUES (?, ?)').run(newId, inc.incident_id);
+        }
+      } catch (e) {}
+
+      // Clone linked actors
+      try {
+        const actors = caseDb.prepare('SELECT * FROM anchor_actors WHERE anchor_id = ?').all(anchorId);
+        for (const actor of actors) {
+          caseDb.prepare('INSERT OR IGNORE INTO anchor_actors (anchor_id, actor_id, role_in_anchor) VALUES (?, ?, ?)').run(newId, actor.actor_id, actor.role_in_anchor);
+        }
+      } catch (e) {}
+
+      // Clone linked precedents
+      try {
+        const precs = caseDb.prepare('SELECT * FROM anchor_precedents WHERE anchor_id = ?').all(anchorId);
+        for (const prec of precs) {
+          caseDb.prepare('INSERT OR IGNORE INTO anchor_precedents (anchor_id, precedent_id, relevance_note) VALUES (?, ?, ?)').run(newId, prec.precedent_id, prec.relevance_note);
+        }
+      } catch (e) {}
+
+      caseDb.close();
+      return { success: true, newId };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:reorder', async (event, caseId, orderedIds) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      const updateStmt = caseDb.prepare("UPDATE anchors SET sort_order = ?, updated_at = datetime('now') WHERE id = ?");
+      const txn = caseDb.transaction(() => {
+        for (let i = 0; i < orderedIds.length; i++) {
+          updateStmt.run(i, orderedIds[i]);
+        }
+      });
+      txn();
+
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:linkPrecedent', async (event, caseId, anchorId, precedentId, relevanceNote) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      // Ensure table exists
+      try {
+        caseDb.exec(`
+          CREATE TABLE IF NOT EXISTS anchor_precedents (
+            anchor_id TEXT NOT NULL REFERENCES anchors(id),
+            precedent_id TEXT NOT NULL,
+            relevance_note TEXT,
+            linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (anchor_id, precedent_id)
+          );
+        `);
+      } catch (e) {}
+
+      caseDb.prepare(`
+        INSERT OR REPLACE INTO anchor_precedents (anchor_id, precedent_id, relevance_note, linked_at)
+        VALUES (?, ?, ?, datetime('now'))
+      `).run(anchorId, precedentId, relevanceNote || null);
+
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:unlinkPrecedent', async (event, caseId, anchorId, precedentId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+      caseDb.prepare('DELETE FROM anchor_precedents WHERE anchor_id = ? AND precedent_id = ?').run(anchorId, precedentId);
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:getPrecedents', async (event, caseId, anchorId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      let precedents = [];
+      try {
+        precedents = caseDb.prepare('SELECT * FROM anchor_precedents WHERE anchor_id = ?').all(anchorId);
+      } catch (e) {}
+
+      caseDb.close();
+      return { success: true, precedents };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:breakApart', async (event, caseId, anchorId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      const original = caseDb.prepare('SELECT * FROM anchors WHERE id = ?').get(anchorId);
+      if (!original) {
+        caseDb.close();
+        return { success: false, error: 'Anchor not found' };
+      }
+
+      const textToSplit = original.what_happened || original.description || '';
+      const subSegments = splitAnchorSegment(textToSplit);
+
+      if (subSegments.length <= 1) {
+        caseDb.close();
+        return { success: false, error: 'Cannot break apart — only one event detected' };
+      }
+
+      const newAnchors = [];
+      const baseOrder = original.sort_order || 0;
+
+      for (let i = 0; i < subSegments.length; i++) {
+        const segment = subSegments[i].trim();
+        if (segment.length < 10) continue;
+
+        const newId = uuidv4();
+        const dateInfo = extractDate(segment);
+        const title = segment.slice(0, 60).replace(/[,.]$/, '').trim();
+
+        caseDb.prepare(`
+          INSERT INTO anchors (
+            id, anchor_type, title, description, anchor_date, date_confidence,
+            what_happened, where_location, impact_summary, severity,
+            is_auto_generated, user_edited, source_context, sort_order,
+            contains_multiple_events, event_count
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, 0, 1)
+        `).run(
+          newId,
+          original.anchor_type,
+          title,
+          segment.slice(0, 500),
+          dateInfo.date || original.anchor_date,
+          dateInfo.confidence || original.date_confidence,
+          segment,
+          original.where_location,
+          null,
+          original.severity,
+          segment.slice(0, 200),
+          baseOrder + i + 1
+        );
+
+        newAnchors.push({ id: newId, title, segment });
+      }
+
+      // Delete the original anchor and its links
+      caseDb.prepare('DELETE FROM anchor_documents WHERE anchor_id = ?').run(anchorId);
+      caseDb.prepare('DELETE FROM anchor_incidents WHERE anchor_id = ?').run(anchorId);
+      caseDb.prepare('DELETE FROM anchor_actors WHERE anchor_id = ?').run(anchorId);
+      try { caseDb.prepare('DELETE FROM anchor_precedents WHERE anchor_id = ?').run(anchorId); } catch (e) {}
+      caseDb.prepare('DELETE FROM anchors WHERE id = ?').run(anchorId);
+
+      caseDb.close();
+      return { success: true, newAnchors };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:linkIncident', async (event, caseId, anchorId, incidentId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+      caseDb.prepare(`
+        INSERT OR IGNORE INTO anchor_incidents (anchor_id, incident_id)
+        VALUES (?, ?)
+      `).run(anchorId, incidentId);
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:unlinkEvidence', async (event, caseId, anchorId, documentId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+      caseDb.prepare('DELETE FROM anchor_documents WHERE anchor_id = ? AND document_id = ?').run(anchorId, documentId);
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:unlinkIncident', async (event, caseId, anchorId, incidentId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+      caseDb.prepare('DELETE FROM anchor_incidents WHERE anchor_id = ? AND incident_id = ?').run(anchorId, incidentId);
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== CASE CONTEXT ====================
+
+  ipcMain.handle('context:get', async (event, caseId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      // Ensure table exists and has a row
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS case_context (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          narrative TEXT,
+          voice_note_path TEXT,
+          hire_date DATE,
+          end_date DATE,
+          protected_activities_json TEXT,
+          case_type TEXT,
+          jurisdiction TEXT DEFAULT 'both',
+          last_scanned_at DATETIME,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT OR IGNORE INTO case_context (id) VALUES (1);
+      `);
+
+      const context = caseDb.prepare('SELECT * FROM case_context WHERE id = 1').get();
+
+      caseDb.close();
+      return { success: true, context };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('context:update', async (event, caseId, updates) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      // Ensure table exists
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS case_context (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          narrative TEXT,
+          voice_note_path TEXT,
+          hire_date DATE,
+          end_date DATE,
+          protected_activities_json TEXT,
+          case_type TEXT,
+          jurisdiction TEXT DEFAULT 'both',
+          last_scanned_at DATETIME,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT OR IGNORE INTO case_context (id) VALUES (1);
+      `);
+
+      const fields = [];
+      const values = [];
+
+      if (updates.narrative !== undefined) {
+        fields.push('narrative = ?');
+        values.push(updates.narrative);
+      }
+      if (updates.hireDate !== undefined) {
+        fields.push('hire_date = ?');
+        values.push(updates.hireDate);
+      }
+      if (updates.endDate !== undefined) {
+        fields.push('end_date = ?');
+        values.push(updates.endDate);
+      }
+      if (updates.caseType !== undefined) {
+        fields.push('case_type = ?');
+        values.push(updates.caseType);
+      }
+
+      fields.push("updated_at = datetime('now')");
+
+      const stmt = caseDb.prepare(`UPDATE case_context SET ${fields.join(', ')} WHERE id = 1`);
+      stmt.run(...values);
+
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
     }
   });
 }
