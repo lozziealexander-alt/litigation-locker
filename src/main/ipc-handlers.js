@@ -236,6 +236,9 @@ function registerIpcHandlers() {
           doc.evidence_confidence, doc.evidence_secondary, doc.evidence_scores_json,
           doc.media_subtype || null, doc.is_recap || 0
         );
+        // Verify the insert actually persisted
+        const verify = currentCaseDb.prepare('SELECT count(*) as cnt FROM documents').get();
+        console.log('[IPC] VERIFY after insert:', doc.filename, '-> total docs now:', verify.cnt);
         inserted.push(docToSummary(doc));
       }
 
@@ -421,11 +424,13 @@ function registerIpcHandlers() {
         return { success: false, error: 'No case is open' };
       }
 
+      // Clean up related records
+      try { currentCaseDb.prepare('DELETE FROM document_date_entries WHERE document_id = ?').run(docId); } catch (e) {}
+      try { currentCaseDb.prepare('DELETE FROM actor_appearances WHERE document_id = ?').run(docId); } catch (e) {}
+      try { currentCaseDb.prepare('DELETE FROM anchor_evidence WHERE document_id = ?').run(docId); } catch (e) {}
+
       // Delete from documents table
       currentCaseDb.prepare('DELETE FROM documents WHERE id = ?').run(docId);
-
-      // Clean up related document_date_entries if table exists
-      try { currentCaseDb.prepare('DELETE FROM document_date_entries WHERE document_id = ?').run(docId); } catch (e) {}
 
       return { success: true };
     } catch (error) {
@@ -655,7 +660,12 @@ function registerIpcHandlers() {
         FROM actors
       `).all();
 
-      const analysis = analyzeAllPrecedents(documents, incidents, actors, jurisdiction);
+      // Fetch actor-document links so precedent checks can be per-incident
+      const actorAppearances = currentCaseDb.prepare(`
+        SELECT actor_id, document_id FROM actor_appearances
+      `).all();
+
+      const analysis = analyzeAllPrecedents(documents, incidents, actors, jurisdiction, actorAppearances);
 
       return { success: true, analysis, jurisdiction };
     } catch (error) {
@@ -1651,7 +1661,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:list', async (event, caseId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       // Ensure tables exist
       caseDb.exec(`
@@ -1737,8 +1747,6 @@ function registerIpcHandlers() {
           `).all(anchor.id);
         } catch (e) { anchor.precedents = []; }
       }
-
-      caseDb.close();
       return { success: true, anchors };
     } catch (error) {
       return { success: false, error: error.message };
@@ -1747,7 +1755,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:generate', async (event, caseId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       // Ensure anchor tables exist
       caseDb.exec(`
@@ -1857,7 +1865,6 @@ function registerIpcHandlers() {
         } catch (e) {}
         caseDb.prepare('DELETE FROM anchors WHERE user_edited = 0').run();
       } else {
-        caseDb.close();
         return { success: true, count: 0, actorsFound: 0, actors: [], skipped: true };
       }
 
@@ -1999,8 +2006,6 @@ function registerIpcHandlers() {
         `).run();
       } catch (e) {}
 
-      caseDb.close();
-
       return {
         success: true,
         count: allAnchors.length,
@@ -2025,7 +2030,7 @@ function registerIpcHandlers() {
         }
       }
 
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
       const id = uuidv4();
 
       // Get max sort order
@@ -2051,8 +2056,6 @@ function registerIpcHandlers() {
         anchorData.severity || null,
         sortOrder
       );
-
-      caseDb.close();
       return { success: true, anchor: { id, ...anchorData } };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2071,7 +2074,7 @@ function registerIpcHandlers() {
         }
       }
 
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       const fields = [];
       const values = [];
@@ -2106,8 +2109,6 @@ function registerIpcHandlers() {
 
       const stmt = caseDb.prepare(`UPDATE anchors SET ${fields.join(', ')} WHERE id = ?`);
       stmt.run(...values);
-
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2116,7 +2117,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:delete', async (event, caseId, anchorId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       // Delete links
       caseDb.prepare('DELETE FROM anchor_documents WHERE anchor_id = ?').run(anchorId);
@@ -2128,8 +2129,6 @@ function registerIpcHandlers() {
 
       // Delete anchor
       caseDb.prepare('DELETE FROM anchors WHERE id = ?').run(anchorId);
-
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2138,14 +2137,12 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:linkEvidence', async (event, caseId, anchorId, documentId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       caseDb.prepare(`
         INSERT OR IGNORE INTO anchor_documents (anchor_id, document_id, relevance)
         VALUES (?, ?, 'supports')
       `).run(anchorId, documentId);
-
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2154,11 +2151,10 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:getRelatedEvidence', async (event, caseId, anchorId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       const anchor = caseDb.prepare('SELECT * FROM anchors WHERE id = ?').get(anchorId);
       if (!anchor) {
-        caseDb.close();
         return { success: false, error: 'Anchor not found' };
       }
 
@@ -2221,8 +2217,6 @@ function registerIpcHandlers() {
         `).all(anchorId);
       } catch (e) {}
 
-      caseDb.close();
-
       return {
         success: true,
         anchor,
@@ -2245,11 +2239,10 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:clone', async (event, caseId, anchorId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       const original = caseDb.prepare('SELECT * FROM anchors WHERE id = ?').get(anchorId);
       if (!original) {
-        caseDb.close();
         return { success: false, error: 'Anchor not found' };
       }
 
@@ -2312,8 +2305,6 @@ function registerIpcHandlers() {
           caseDb.prepare('INSERT OR IGNORE INTO anchor_precedents (anchor_id, precedent_id, relevance_note) VALUES (?, ?, ?)').run(newId, prec.precedent_id, prec.relevance_note);
         }
       } catch (e) {}
-
-      caseDb.close();
       return { success: true, newId };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2322,7 +2313,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:reorder', async (event, caseId, orderedIds) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       const updateStmt = caseDb.prepare("UPDATE anchors SET sort_order = ?, updated_at = datetime('now') WHERE id = ?");
       const txn = caseDb.transaction(() => {
@@ -2331,8 +2322,6 @@ function registerIpcHandlers() {
         }
       });
       txn();
-
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2341,7 +2330,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:linkPrecedent', async (event, caseId, anchorId, precedentId, relevanceNote) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       // Ensure table exists
       try {
@@ -2360,8 +2349,6 @@ function registerIpcHandlers() {
         INSERT OR REPLACE INTO anchor_precedents (anchor_id, precedent_id, relevance_note, linked_at)
         VALUES (?, ?, ?, datetime('now'))
       `).run(anchorId, precedentId, relevanceNote || null);
-
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2370,9 +2357,8 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:unlinkPrecedent', async (event, caseId, anchorId, precedentId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM anchor_precedents WHERE anchor_id = ? AND precedent_id = ?').run(anchorId, precedentId);
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2381,14 +2367,12 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:getPrecedents', async (event, caseId, anchorId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       let precedents = [];
       try {
         precedents = caseDb.prepare('SELECT * FROM anchor_precedents WHERE anchor_id = ?').all(anchorId);
       } catch (e) {}
-
-      caseDb.close();
       return { success: true, precedents };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2397,11 +2381,10 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:breakApart', async (event, caseId, anchorId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       const original = caseDb.prepare('SELECT * FROM anchors WHERE id = ?').get(anchorId);
       if (!original) {
-        caseDb.close();
         return { success: false, error: 'Anchor not found' };
       }
 
@@ -2409,7 +2392,6 @@ function registerIpcHandlers() {
       const subSegments = splitAnchorSegment(textToSplit);
 
       if (subSegments.length <= 1) {
-        caseDb.close();
         return { success: false, error: 'Cannot break apart — only one event detected' };
       }
 
@@ -2455,8 +2437,6 @@ function registerIpcHandlers() {
       caseDb.prepare('DELETE FROM anchor_actors WHERE anchor_id = ?').run(anchorId);
       try { caseDb.prepare('DELETE FROM anchor_precedents WHERE anchor_id = ?').run(anchorId); } catch (e) {}
       caseDb.prepare('DELETE FROM anchors WHERE id = ?').run(anchorId);
-
-      caseDb.close();
       return { success: true, newAnchors };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2465,12 +2445,11 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:linkIncident', async (event, caseId, anchorId, incidentId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
       caseDb.prepare(`
         INSERT OR IGNORE INTO anchor_incidents (anchor_id, incident_id)
         VALUES (?, ?)
       `).run(anchorId, incidentId);
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2479,9 +2458,8 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:unlinkEvidence', async (event, caseId, anchorId, documentId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM anchor_documents WHERE anchor_id = ? AND document_id = ?').run(anchorId, documentId);
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2490,9 +2468,8 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:unlinkIncident', async (event, caseId, anchorId, incidentId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM anchor_incidents WHERE anchor_id = ? AND incident_id = ?').run(anchorId, incidentId);
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2501,12 +2478,11 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:linkActor', async (event, caseId, anchorId, actorId, roleInAnchor) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
       caseDb.prepare(`
         INSERT OR IGNORE INTO anchor_actors (anchor_id, actor_id, role_in_anchor)
         VALUES (?, ?, ?)
       `).run(anchorId, actorId, roleInAnchor || 'involved');
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2515,9 +2491,8 @@ function registerIpcHandlers() {
 
   ipcMain.handle('anchors:unlinkActor', async (event, caseId, anchorId, actorId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM anchor_actors WHERE anchor_id = ? AND actor_id = ?').run(anchorId, actorId);
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2528,7 +2503,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('context:get', async (event, caseId) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       // Ensure table exists and has a row
       caseDb.exec(`
@@ -2548,8 +2523,6 @@ function registerIpcHandlers() {
       `);
 
       const context = caseDb.prepare('SELECT * FROM case_context WHERE id = 1').get();
-
-      caseDb.close();
       return { success: true, context };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2558,7 +2531,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('context:update', async (event, caseId, updates) => {
     try {
-      const caseDb = db.openCase(caseId);
+      const caseDb = currentCaseDb;
 
       // Ensure table exists
       caseDb.exec(`
@@ -2601,8 +2574,6 @@ function registerIpcHandlers() {
 
       const stmt = caseDb.prepare(`UPDATE case_context SET ${fields.join(', ')} WHERE id = 1`);
       stmt.run(...values);
-
-      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };

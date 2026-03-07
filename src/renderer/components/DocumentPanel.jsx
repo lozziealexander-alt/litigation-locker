@@ -724,6 +724,26 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
               </div>
             )}
           </div>
+
+          {/* Delete document */}
+          <div style={styles.dangerSection}>
+            <button
+              style={styles.deleteButton}
+              onClick={async () => {
+                if (confirm(`Delete "${displayDoc.filename}"?\n\nThis cannot be undone.`)) {
+                  const result = await window.api.documents.delete(displayDoc.id);
+                  if (result.success) {
+                    onDocumentUpdated?.();
+                    onClose();
+                  } else {
+                    alert('Error deleting document: ' + (result.error || 'Unknown error'));
+                  }
+                }
+              }}
+            >
+              {'\uD83D\uDDD1\uFE0F'} Delete Document
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1337,6 +1357,23 @@ function getStyles() {
     truncated: {
       color: colors.textMuted,
       fontStyle: 'italic'
+    },
+
+    // Delete
+    dangerSection: {
+      padding: `${spacing.lg} ${spacing.lg} ${spacing.xl}`,
+      borderTop: `1px solid ${colors.border}`
+    },
+    deleteButton: {
+      width: '100%',
+      padding: `${spacing.sm} ${spacing.md}`,
+      background: 'transparent',
+      border: `1px solid #7F1D1D`,
+      borderRadius: radius.md,
+      color: '#DC2626',
+      fontSize: typography.fontSize.sm,
+      cursor: 'pointer',
+      transition: 'background 0.15s ease'
     },
 
     // Preview overlay

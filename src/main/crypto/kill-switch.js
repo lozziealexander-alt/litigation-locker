@@ -31,7 +31,7 @@ async function burn(scope = 'all') {
     if (scope === 'all') {
       // Delete everything
       const targets = [
-        path.join(userDataPath, 'databases'),
+        path.join(userDataPath, 'case-databases'),
         path.join(userDataPath, 'documents'),
         path.join(userDataPath, 'cache'),
         path.join(userDataPath, 'master.db'),
@@ -89,7 +89,7 @@ async function burn(scope = 'all') {
 function verifyBurn() {
   const userDataPath = app.getPath('userData');
   const targets = [
-    path.join(userDataPath, 'databases'),
+    path.join(userDataPath, 'case-databases'),
     path.join(userDataPath, 'documents'),
     path.join(userDataPath, 'master.db'),
     path.join(userDataPath, 'salt')

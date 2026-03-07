@@ -452,7 +452,7 @@ const PRECEDENTS = {
 /**
  * Analyze case evidence against all precedents
  */
-function analyzeAllPrecedents(documents, incidents = [], actors = [], jurisdiction = 'both') {
+function analyzeAllPrecedents(documents, incidents = [], actors = [], jurisdiction = 'both', actorAppearances = []) {
   const results = {};
 
   for (const [key, precedent] of Object.entries(PRECEDENTS)) {
@@ -461,7 +461,7 @@ function analyzeAllPrecedents(documents, incidents = [], actors = [], jurisdicti
     if (jurisdiction === 'federal' && precJurisdiction === 'FL') continue;
     if (jurisdiction === 'state' && precJurisdiction === 'federal') continue;
 
-    results[key] = analyzePrecedent(precedent, documents, incidents, actors, jurisdiction);
+    results[key] = analyzePrecedent(precedent, documents, incidents, actors, jurisdiction, actorAppearances);
   }
 
   // Build key precedents based on jurisdiction
@@ -502,19 +502,27 @@ function analyzeAllPrecedents(documents, incidents = [], actors = [], jurisdicti
 /**
  * Analyze single precedent
  */
-function analyzePrecedent(precedent, documents, incidents, actors, jurisdiction = 'both') {
+function analyzePrecedent(precedent, documents, incidents, actors, jurisdiction = 'both', actorAppearances = []) {
   const elementResults = {};
 
   for (const element of precedent.elements) {
-    elementResults[element.id] = analyzeElement(element, documents, incidents, actors, jurisdiction);
+    elementResults[element.id] = analyzeElement(element, documents, incidents, actors, jurisdiction, actorAppearances);
   }
 
-  // Calculate alignment
+  // Calculate alignment — use required elements if any, otherwise use all elements
   const requiredElements = precedent.elements.filter(e => e.required);
-  const satisfiedRequired = requiredElements.filter(e => elementResults[e.id].satisfied);
-  const alignmentPercent = requiredElements.length > 0
-    ? Math.round((satisfiedRequired.length / requiredElements.length) * 100)
+  const scoringElements = requiredElements.length > 0 ? requiredElements : precedent.elements;
+  const satisfiedScoring = scoringElements.filter(e => elementResults[e.id].satisfied);
+  const alignmentPercent = scoringElements.length > 0
+    ? Math.round((satisfiedScoring.length / scoringElements.length) * 100)
     : 0;
+
+  // Build elements as array for rendering
+  const elementsArray = precedent.elements.map(e => ({
+    ...e,
+    ...elementResults[e.id],
+    element: e.name  // alias for overlay display
+  }));
 
   // Find gaps
   const gaps = precedent.elements
@@ -527,9 +535,9 @@ function analyzePrecedent(precedent, documents, incidents, actors, jurisdiction 
 
   return {
     ...precedent,
-    elements: elementResults,
-    satisfiedCount: satisfiedRequired.length,
-    totalRequired: requiredElements.length,
+    elements: elementsArray,
+    satisfiedCount: satisfiedScoring.length,
+    totalRequired: scoringElements.length,
     alignmentPercent,
     strength: alignmentPercent >= 75 ? 'strong' : alignmentPercent >= 50 ? 'moderate' : 'weak',
     gaps
@@ -539,7 +547,7 @@ function analyzePrecedent(precedent, documents, incidents, actors, jurisdiction 
 /**
  * Analyze single element
  */
-function analyzeElement(element, documents, incidents, actors, jurisdiction = 'both') {
+function analyzeElement(element, documents, incidents, actors, jurisdiction = 'both', actorAppearances = []) {
   let satisfied = false;
   let evidence = [];
   let note = '';
@@ -640,16 +648,39 @@ function analyzeElement(element, documents, incidents, actors, jurisdiction = 'b
     }
   }
 
-  // Check actor relationship
+  // Check actor relationship — harasser must be a supervisor (Vance standard)
+  // Per-incident: only count supervisors who appear on incident/adverse action documents
   if (element.checkType === 'actor_relationship') {
-    const supervisorActors = actors.filter(a =>
+    const supervisorRolePattern = /\b(director|vp|svp|evp|chief|ceo|coo|cto|cfo)\b/i;
+    const supervisorRelationships = ['supervisor', 'executive', 'manager'];
+    const isSupervisor = (a) =>
       element.relationships.includes(a.relationship_to_self) ||
+      supervisorRelationships.includes(a.relationship_to_self) ||
       element.relationships.includes(a.role) ||
-      a.classification === 'bad_actor'
+      (a.role && supervisorRolePattern.test(a.role));
+    const isBadActor = (a) => a.classification === 'bad_actor' || a.classification === 'enabler';
+
+    // Find documents that are incidents or adverse actions
+    const incidentDocIds = new Set(
+      documents
+        .filter(d => ['INCIDENT', 'ADVERSE_ACTION'].includes(d.evidence_type))
+        .map(d => d.id)
     );
-    satisfied = supervisorActors.length > 0;
+
+    // Build a set of actor IDs that appear on those incident/adverse action documents
+    const actorsOnIncidents = new Set(
+      actorAppearances
+        .filter(aa => incidentDocIds.has(aa.document_id))
+        .map(aa => aa.actor_id)
+    );
+
+    // Only count actors who are a supervisor, at fault, AND linked to an incident document
+    const supervisorHarassers = actors.filter(a =>
+      isSupervisor(a) && isBadActor(a) && actorsOnIncidents.has(a.id)
+    );
+    satisfied = supervisorHarassers.length > 0;
     if (satisfied) {
-      note = `Supervisor involvement: ${supervisorActors.map(a => a.name).join(', ')}`;
+      note = `Supervisor involvement: ${supervisorHarassers.map(a => a.name).join(', ')}`;
     }
   }
 

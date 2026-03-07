@@ -24,13 +24,13 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
 
   async function loadDashboardData() {
     setLoading(true);
-
+    try {
     const [docsResult, incidentsResult, actorsResult, precedentResult, connectionsResult] = await Promise.all([
-      window.api.documents.list(),
-      window.api.incidents.list(),
-      window.api.actors.list(),
-      window.api.precedents.analyze(),
-      window.api.timeline.getConnections()
+      window.api.documents.list().catch(e => ({ success: false })),
+      window.api.incidents.list().catch(e => ({ success: false })),
+      window.api.actors.list().catch(e => ({ success: false })),
+      window.api.precedents.analyze().catch(e => ({ success: false })),
+      window.api.timeline.getConnections().catch(e => ({ success: false }))
     ]);
 
     if (docsResult.success) setDocuments(docsResult.documents);
@@ -90,6 +90,9 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     }
 
     setStats(computed);
+    } catch (err) {
+      console.error('[Dashboard] loadDashboardData error:', err);
+    }
     setLoading(false);
   }
 

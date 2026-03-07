@@ -1,7 +1,7 @@
 {
   "name": "litigation-locker",
   "version": "1.0.0",
-  "description": "",
+  "description": "Litigation case management vault",
   "main": "src/main/index.js",
   "scripts": {
     "bundle": "esbuild src/renderer/index.jsx --bundle --outfile=src/renderer/bundle.js --platform=browser --target=chrome120 --define:process.env.NODE_ENV=\\\"production\\\"",
@@ -17,7 +17,6 @@
     "argon2": "^0.44.0",
     "better-sqlite3": "^12.6.2",
     "chrono-node": "^2.9.0",
-    "electron": "^40.8.0",
     "exif-reader": "^2.0.3",
     "mailparser": "^3.9.3",
     "mime-types": "^3.0.2",
@@ -29,8 +28,16 @@
     "tesseract.js": "^7.0.0",
     "uuid": "^13.0.0"
   },
+  "build": {
+    "appId": "com.litigation-locker.app",
+    "productName": "Litigation Locker",
+    "mac": {
+      "icon": "build/icon.icns"
+    }
+  },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
+    "electron": "^40.8.0",
     "autoprefixer": "^10.4.27",
     "electron-builder": "^26.8.1",
     "esbuild": "^0.27.3",

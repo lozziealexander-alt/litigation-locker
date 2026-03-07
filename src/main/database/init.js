@@ -21,9 +21,6 @@ function initMasterDb(masterKey) {
 
   masterDb = new Database(dbPath);
 
-  // Enable SQLCipher encryption
-  masterDb.pragma(`key = "x'${masterKey.toString('hex')}'"`);
-
   // Create master tables
   masterDb.exec(`
     CREATE TABLE IF NOT EXISTS cases (
@@ -54,7 +51,7 @@ function createCase(name) {
   const caseKey = keyManager.deriveCaseKey(caseId);
 
   // Create databases directory
-  const dbDir = path.join(userDataPath, 'databases');
+  const dbDir = path.join(userDataPath, 'case-databases');
   if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
@@ -63,7 +60,6 @@ function createCase(name) {
 
   // Create case database
   const caseDb = new Database(dbPath);
-  caseDb.pragma(`key = "x'${caseKey.toString('hex')}'"`);
 
   // Read and execute schema
   const schemaPath = path.join(__dirname, 'schema.sql');
@@ -101,15 +97,21 @@ function openCase(caseId) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
-  const caseDb = new Database(row.db_path);
-  caseDb.pragma(`key = "x'${caseKey.toString('hex')}'"`);
+  const fileSize = fs.existsSync(row.db_path) ? fs.statSync(row.db_path).size : 0;
+  console.log('[DB] openCase path=' + row.db_path + ' fileSize=' + fileSize);
 
-  // If the DB file was just created (empty), apply schema
+  const caseDb = new Database(row.db_path);
+
   const tables = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
-  if (tables.length === 0) {
+  console.log('[DB] openCase tables=' + tables.length);
+  if (tables.length === 0 && fileSize < 4096) {
+    console.log('[DB] Fresh DB, applying schema');
     const schemaPath = path.join(__dirname, 'schema.sql');
     const schema = fs.readFileSync(schemaPath, 'utf8');
     caseDb.exec(schema);
+  } else if (tables.length === 0 && fileSize >= 4096) {
+    console.log('[DB] ERROR: Existing file has 0 tables - refusing to overwrite');
+    throw new Error('Database file exists but has no readable tables. File may be corrupted.');
   }
 
   // ---- Migrations for existing databases ----

@@ -38,6 +38,8 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  console.log('[STARTUP] userData:', app.getPath('userData'));
+  console.log('[STARTUP] app name:', app.getName());
   registerIpcHandlers();
   createWindow();
 });

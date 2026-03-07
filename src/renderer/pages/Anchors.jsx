@@ -342,9 +342,12 @@ export default function Anchors({ caseId }) {
     const reordered = [...sortedAnchors];
     const [moved] = reordered.splice(fromIndex, 1);
     reordered.splice(index, 0, moved);
-    setAnchors(reordered);
+    // Update sort_order in local state so useMemo keeps the new order
+    const withOrder = reordered.map((a, i) => ({ ...a, sort_order: i }));
+    setSortMode('manual');
+    setAnchors(withOrder);
     setDragState({ dragging: null, over: null });
-    await window.api.anchors.reorder(caseId, reordered.map(a => a.id));
+    await window.api.anchors.reorder(caseId, withOrder.map(a => a.id));
   }
   function handleDragEnd() { setDragState({ dragging: null, over: null }); }
 
