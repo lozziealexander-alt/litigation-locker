@@ -1,6 +1,68 @@
 import React, { useState, useEffect } from 'react';
 import { colors, shadows, spacing, typography, radius, getEvidenceColor, getSeverityColor } from '../styles/tokens';
 
+// ── Thread Registry (mirrored from src/main/analysis/thread-registry.js) ──────
+const THREAD_DEFINITIONS = [
+  { id: 'sexual_harassment',   name: 'Sexual Harassment',     description: 'Unwanted sexual conduct, propositions, or comments',                        tag_signals: ['sexual_harassment','harassment'],                              precedents: ['harris-v-forklift','faragher-ellerth'], color: '#8B5CF6' },
+  { id: 'gender_harassment',   name: 'Gender Harassment',     description: 'Gender-based comments, stereotyping, or discriminatory treatment',           tag_signals: ['gender_harassment','harassment'],                              precedents: ['harris-v-forklift'],                    color: '#EC4899' },
+  { id: 'retaliation',         name: 'Retaliation',           description: 'Adverse actions taken after protected activity',                             tag_signals: ['retaliation','protected_activity','adverse_action'],          precedents: ['burlington-northern','vance'],          color: '#F59E0B' },
+  { id: 'exclusion',           name: 'Exclusion & Isolation', description: 'Systematic exclusion from meetings, decisions, or team activities',          tag_signals: ['exclusion','isolation'],                                       precedents: ['harris-v-forklift'],                    color: '#10B981' },
+  { id: 'pay_discrimination',  name: 'Pay Discrimination',    description: 'Unequal compensation or benefits based on protected characteristics',         tag_signals: ['pay_discrimination'],                                         precedents: ['lilly-ledbetter'],                      color: '#3B82F6' },
+  { id: 'hostile_environment', name: 'Hostile Environment',   description: 'Pervasive conduct creating an abusive or intimidating workplace',            tag_signals: ['hostile_environment'],                                         precedents: ['harris-v-forklift','meritor'],          color: '#6366F1' },
+  { id: 'hr_failure',          name: 'HR Failure to Act',     description: 'HR ignored complaints, failed to investigate, or enabled misconduct',        tag_signals: ['help_request','hr_failure','ignored_complaint'],               precedents: ['faragher-ellerth','vance'],             color: '#A855F7' },
+];
+
+function assignEventsToThreads(events) {
+  const assignments = {};
+  for (const evt of events) {
+    const tags = evt.tags || [];
+    for (const thread of THREAD_DEFINITIONS) {
+      let matches = thread.tag_signals.some(sig => tags.includes(sig));
+      if (!matches && thread.id === 'pay_discrimination') {
+        const docTypes = (evt.documents || []).map(d => d.evidence_type);
+        if (docTypes.includes('PAY_RECORD')) matches = true;
+      }
+      if (!matches && thread.id === 'hr_failure') {
+        const docTypes = (evt.documents || []).map(d => d.evidence_type);
+        if (['REQUEST_FOR_HELP','RESPONSE'].some(t => docTypes.includes(t))) matches = true;
+      }
+      if (matches) {
+        if (!assignments[thread.id]) assignments[thread.id] = { thread, events: [], documents: new Set() };
+        assignments[thread.id].events.push(evt);
+        (evt.documents || []).forEach(d => assignments[thread.id].documents.add(d.id));
+      }
+    }
+  }
+  for (const id in assignments) assignments[id].documents = Array.from(assignments[id].documents);
+  return assignments;
+}
+
+function calculateThreadStrength(assignment) {
+  if (assignment.events.length === 0) return 0;
+  let score = 20;
+  score += Math.min(assignment.events.length * 10, 40);
+  score += Math.min(assignment.documents.length * 5, 30);
+  const hasPair = assignment.events.some(e => e.tags?.includes('protected_activity')) &&
+                  assignment.events.some(e => e.tags?.includes('adverse_action'));
+  if (hasPair) score += 10;
+  return Math.min(score, 100);
+}
+
+function getThreadGaps(assignment, thread) {
+  const gaps = [];
+  if (assignment.events.length === 0) { gaps.push('No events tagged yet'); return gaps; }
+  if (assignment.documents.length === 0) gaps.push('No supporting documents linked');
+  if (thread.id === 'retaliation') {
+    const hasPA  = assignment.events.some(e => e.tags?.includes('protected_activity'));
+    const hasAdv = assignment.events.some(e => e.tags?.includes('adverse_action'));
+    if (!hasPA)  gaps.push('Missing: protected activity event');
+    if (!hasAdv) gaps.push('Missing: adverse action event');
+  }
+  if (assignment.events.length < 2) gaps.push('More corroborating events strengthen this thread');
+  return gaps;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, onSelectDocument, onSelectActor }) {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState(null);
@@ -17,6 +79,8 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [causalityLinks, setCausalityLinks] = useState([]);
   const [suggestedIncidents, setSuggestedIncidents] = useState([]);
+  const [activeTab, setActiveTab] = useState('overview');
+  const [threads, setThreads] = useState({});
 
   function toggleSection(section) {
     setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -76,6 +140,18 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     try {
       const suggestResult = await window.api.incidents.suggest();
       if (suggestResult.success) setSuggestedIncidents(suggestResult.suggestions || []);
+    } catch (e) {}
+
+    // Load events and assign to claim threads
+    try {
+      const currentCase = await window.api.cases.current();
+      const caseId = currentCase?.caseId;
+      if (caseId) {
+        const eventsResult = await window.api.events.list(caseId);
+        if (eventsResult.success) {
+          setThreads(assignEventsToThreads(eventsResult.events || []));
+        }
+      }
     } catch (e) {}
 
     // Compute stats
@@ -374,6 +450,13 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
         <p style={styles.subtitle}>Fresh eyes view of your case</p>
       </div>
 
+      {/* Tab bar */}
+      <div style={styles.tabBar}>
+        <button style={activeTab === 'overview' ? {...styles.tab, ...styles.tabActive} : styles.tab} onClick={() => setActiveTab('overview')}>Overview</button>
+        <button style={activeTab === 'threads'  ? {...styles.tab, ...styles.tabActive} : styles.tab} onClick={() => setActiveTab('threads')}>Threads ({THREAD_DEFINITIONS.length})</button>
+      </div>
+
+      {activeTab === 'overview' && (
       <div style={styles.content}>
         {/* Summary Card */}
         <div style={styles.summaryCard}>
@@ -823,6 +906,60 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
           </div>
         </div>
       </div>
+      )} {/* end activeTab === 'overview' */}
+
+      {/* Threads Tab */}
+      {activeTab === 'threads' && (
+        <div style={styles.threadsContent}>
+          {THREAD_DEFINITIONS.map(thread => {
+            const assignment = threads[thread.id] || { events: [], documents: [] };
+            const strength = calculateThreadStrength(assignment);
+            const gaps = getThreadGaps(assignment, thread);
+            return (
+              <div key={thread.id} style={styles.threadCard}>
+                <div style={styles.threadCardHeader}>
+                  <div style={{ ...styles.threadDot, backgroundColor: thread.color }} />
+                  <div style={styles.threadHeaderText}>
+                    <div style={styles.threadName}>{thread.name}</div>
+                    <div style={styles.threadDesc}>{thread.description}</div>
+                  </div>
+                  <div style={{ ...styles.threadStrengthPill, borderColor: thread.color, color: thread.color }}>
+                    {strength}%
+                  </div>
+                </div>
+
+                <div style={styles.strengthBarBg}>
+                  <div style={{ ...styles.strengthBarFill, width: `${strength}%`, backgroundColor: thread.color }} />
+                </div>
+
+                <div style={styles.threadStats}>
+                  <span style={styles.threadStat}><strong>{assignment.events.length}</strong> event{assignment.events.length !== 1 ? 's' : ''}</span>
+                  <span style={styles.threadStatDivider}>·</span>
+                  <span style={styles.threadStat}><strong>{assignment.documents.length}</strong> doc{assignment.documents.length !== 1 ? 's' : ''}</span>
+                  {thread.precedents.length > 0 && (
+                    <>
+                      <span style={styles.threadStatDivider}>·</span>
+                      <span style={styles.threadPrecedent}>⚖️ {thread.precedents[0]}</span>
+                    </>
+                  )}
+                </div>
+
+                {gaps.length > 0 && (
+                  <div style={styles.threadGaps}>
+                    {gaps.slice(0, 2).map((gap, i) => (
+                      <div key={i} style={styles.threadGap}>⚠ {gap}</div>
+                    ))}
+                  </div>
+                )}
+
+                {assignment.events.length === 0 && (
+                  <div style={styles.threadEmpty}>No events tagged for this thread yet</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Alert Detail Modal */}
       {selectedAlert && (
@@ -1616,6 +1753,126 @@ const styles = {
     color: colors.textMuted,
     fontStyle: 'italic',
     lineHeight: typography.lineHeight.relaxed
+  },
+
+  // Tab bar
+  tabBar: {
+    display: 'flex',
+    gap: '2px',
+    padding: `0 ${spacing.lg}`,
+    borderBottom: `1px solid ${colors.border}`,
+    marginBottom: spacing.lg
+  },
+  tab: {
+    padding: `${spacing.sm} ${spacing.md}`,
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.medium,
+    color: colors.textSecondary,
+    background: 'none',
+    border: 'none',
+    borderBottom: '2px solid transparent',
+    cursor: 'pointer',
+    marginBottom: '-1px'
+  },
+  tabActive: {
+    color: colors.primary,
+    borderBottomColor: colors.primary
+  },
+
+  // Threads tab
+  threadsContent: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
+    gap: spacing.md,
+    padding: `0 ${spacing.lg} ${spacing.lg}`
+  },
+  threadCard: {
+    background: colors.surface,
+    border: `1px solid ${colors.border}`,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: spacing.sm
+  },
+  threadCardHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: spacing.sm
+  },
+  threadDot: {
+    width: '10px',
+    height: '10px',
+    borderRadius: '50%',
+    flexShrink: 0,
+    marginTop: '4px'
+  },
+  threadHeaderText: {
+    flex: 1,
+    minWidth: 0
+  },
+  threadName: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.textPrimary
+  },
+  threadDesc: {
+    fontSize: typography.fontSize.xs,
+    color: colors.textMuted,
+    marginTop: '2px'
+  },
+  threadStrengthPill: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: typography.fontWeight.bold,
+    border: '1px solid',
+    borderRadius: radius.sm,
+    padding: '2px 8px',
+    flexShrink: 0
+  },
+  strengthBarBg: {
+    height: '4px',
+    background: colors.border,
+    borderRadius: '2px',
+    overflow: 'hidden'
+  },
+  strengthBarFill: {
+    height: '100%',
+    borderRadius: '2px',
+    transition: 'width 0.3s ease'
+  },
+  threadStats: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.xs,
+    fontSize: typography.fontSize.xs,
+    color: colors.textSecondary
+  },
+  threadStat: {
+    color: colors.textSecondary
+  },
+  threadStatDivider: {
+    color: colors.textMuted
+  },
+  threadPrecedent: {
+    color: colors.textMuted,
+    fontStyle: 'italic'
+  },
+  threadGaps: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px'
+  },
+  threadGap: {
+    fontSize: typography.fontSize.xs,
+    color: colors.warning,
+    padding: '3px 8px',
+    background: `${colors.warning}15`,
+    borderRadius: radius.sm
+  },
+  threadEmpty: {
+    fontSize: typography.fontSize.xs,
+    color: colors.textMuted,
+    fontStyle: 'italic'
   }
 };
 
