@@ -27,12 +27,21 @@ const CLASSIFICATION_COLORS = {
 };
 
 const RELATIONSHIP_LABELS = {
-  supervisor: 'Supervisor/Manager',
+  direct_supervisor: 'Direct Supervisor',
+  skip_level: 'Skip-Level',
+  senior_leadership: 'Senior Leadership',
   hr: 'HR',
-  executive: 'Executive',
+  hr_investigator: 'HR Investigator',
   peer: 'Peer/Colleague',
-  direct_report: 'Direct Report',
-  other: 'Other'
+  subordinate: 'Subordinate',
+  union_rep: 'Union Rep',
+  legal: 'Legal Counsel',
+  witness: 'Witness',
+  other: 'Other',
+  // Legacy values for backwards compat
+  supervisor: 'Supervisor',
+  executive: 'Executive',
+  direct_report: 'Direct Report'
 };
 
 export default function People({ onSelectActor }) {
@@ -147,7 +156,14 @@ export default function People({ onSelectActor }) {
 
   const filtered = actors.filter(a => {
     if (filterClassification && a.classification !== filterClassification) return false;
-    if (searchQuery && !a.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      let aliases = [];
+      try { aliases = JSON.parse(a.aliases || '[]'); } catch {}
+      const nameMatch = a.name.toLowerCase().includes(q);
+      const aliasMatch = aliases.some(alias => alias.toLowerCase().includes(q));
+      if (!nameMatch && !aliasMatch) return false;
+    }
     return true;
   });
 
@@ -246,6 +262,7 @@ export default function People({ onSelectActor }) {
                 <div style={styles.cardName}>
                   {actor.name}
                   {isSelf && <span style={styles.selfTag}>You</span>}
+                  {!!actor.in_reporting_chain && <span style={styles.chainTag}>Chain</span>}
                 </div>
                 {actor.email && (
                   <div style={styles.cardEmail}>{actor.email}</div>
@@ -253,6 +270,13 @@ export default function People({ onSelectActor }) {
                 {actor.role && (
                   <div style={styles.cardRole}>{actor.role}</div>
                 )}
+                {(() => {
+                  let aliases = [];
+                  try { aliases = JSON.parse(actor.aliases || '[]'); } catch {}
+                  return aliases.length > 0 ? (
+                    <div style={styles.cardAliases}>aka {aliases.join(', ')}</div>
+                  ) : null;
+                })()}
                 <div style={styles.cardMeta}>
                   <span style={{
                     ...styles.classificationTag,
@@ -541,6 +565,14 @@ function getStyles() {
       padding: `1px ${spacing.xs}`,
       borderRadius: radius.sm
     },
+    chainTag: {
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.semibold,
+      color: '#7C3AED',
+      background: '#F3E8FF',
+      padding: `1px ${spacing.xs}`,
+      borderRadius: radius.sm
+    },
     cardEmail: {
       fontSize: typography.fontSize.xs,
       color: colors.textMuted,
@@ -553,6 +585,15 @@ function getStyles() {
       fontSize: typography.fontSize.sm,
       color: colors.textSecondary,
       marginTop: '2px',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    },
+    cardAliases: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      fontStyle: 'italic',
+      marginTop: '1px',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap'

@@ -84,7 +84,13 @@ contextBridge.exposeInMainWorld('api', {
     rescan: () => ipcRenderer.invoke('actors:rescan'),
     getForDocument: (docId) => ipcRenderer.invoke('actors:getForDocument', docId),
     addToDocument: (actorId, docId, role) => ipcRenderer.invoke('actors:addToDocument', actorId, docId, role),
-    removeFromDocument: (actorId, docId) => ipcRenderer.invoke('actors:removeFromDocument', actorId, docId)
+    removeFromDocument: (actorId, docId) => ipcRenderer.invoke('actors:removeFromDocument', actorId, docId),
+    // Actor registry methods
+    getRelationshipTypes: () => ipcRenderer.invoke('actors:getRelationshipTypes'),
+    resolveFromText: (text, confirmedIds) => ipcRenderer.invoke('actors:resolveFromText', text, confirmedIds),
+    findInText: (text) => ipcRenderer.invoke('actors:findInText', text),
+    getChain: () => ipcRenderer.invoke('actors:getChain'),
+    getSummary: () => ipcRenderer.invoke('actors:getSummary')
   },
 
   // Pay record operations

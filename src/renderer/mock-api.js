@@ -1,4 +1,14 @@
 // Mock Electron preload API for browser preview
+
+// Stateful actor store — updates persist during the browser session
+const _mockActors = [
+  { id: 'act-1', name: 'Jane Manager', classification: 'bad_actor', secondary_classifications: '["enabler"]', role: 'Direct Supervisor', relationship_to_self: 'supervisor', appearance_count: 5, in_reporting_chain: 1, aliases: '["Jane M", "J. Manager"]' },
+  { id: 'act-2', name: 'Tom HR', classification: 'enabler', secondary_classifications: null, role: 'HR Director', relationship_to_self: 'hr', appearance_count: 3, in_reporting_chain: 0, aliases: '[]' },
+  { id: 'act-3', name: 'Sarah Coworker', classification: 'witness_supportive', secondary_classifications: '["corroborator"]', role: 'Colleague', relationship_to_self: 'peer', appearance_count: 1, in_reporting_chain: 0, aliases: '["Sarah C"]' },
+  { id: 'act-4', name: 'Mike VP', classification: 'bad_actor', secondary_classifications: null, role: 'VP Operations', relationship_to_self: 'senior_leadership', appearance_count: 2, in_reporting_chain: 1, aliases: '["Mike", "Michael VP"]' },
+  { id: 'act-self', name: 'You (Self)', classification: 'self', secondary_classifications: null, role: 'Senior Analyst', relationship_to_self: 'self', appearance_count: 6, is_self: 1, gender: 'female', disability_status: 'no', race: 'unknown', age_range: '40-49', in_reporting_chain: 0, aliases: '[]' }
+];
+
 window.api = {
   vault: {
     exists: () => Promise.resolve(true),
@@ -109,24 +119,59 @@ window.api = {
     delete: () => Promise.resolve({ success: true })
   },
   actors: {
-    list: () => Promise.resolve({ success: true, actors: [
-      { id: 'act-1', name: 'Jane Manager', classification: 'bad_actor', secondary_classifications: '["enabler"]', role: 'Direct Supervisor', relationship_to_self: 'supervisor', appearance_count: 5 },
-      { id: 'act-2', name: 'Tom HR', classification: 'enabler', secondary_classifications: null, role: 'HR Director', relationship_to_self: 'hr', appearance_count: 3 },
-      { id: 'act-3', name: 'Sarah Coworker', classification: 'witness_supportive', secondary_classifications: '["corroborator"]', role: 'Colleague', relationship_to_self: 'coworker', appearance_count: 1 },
-      { id: 'act-4', name: 'Mike VP', classification: 'bad_actor', secondary_classifications: null, role: 'VP Operations', relationship_to_self: 'upper management', appearance_count: 2 },
-      { id: 'act-self', name: 'You (Self)', classification: 'self', secondary_classifications: null, role: 'Senior Analyst', relationship_to_self: 'self', appearance_count: 6, is_self: 1, gender: 'female', disability_status: 'no', race: 'unknown', age_range: '40-49' }
-    ]}),
-    create: (data) => Promise.resolve({ success: true, actor: { id: 'act-new', ...data } }),
-    update: () => Promise.resolve({ success: true }),
-    delete: () => Promise.resolve({ success: true }),
+    list: () => Promise.resolve({ success: true, actors: _mockActors.map(a => ({ ...a })) }),
+    create: (data) => {
+      const actor = { id: 'act-' + Date.now(), ...data, appearance_count: 0, in_reporting_chain: 0, aliases: '[]' };
+      _mockActors.push(actor);
+      return Promise.resolve({ success: true, actor });
+    },
+    update: (id, updates) => {
+      const actor = _mockActors.find(a => a.id === id);
+      if (!actor) return Promise.resolve({ success: false, error: 'Actor not found' });
+      // Apply field mapping (matches real IPC handler)
+      const fieldMap = {
+        name: 'name', email: 'email', role: 'role', title: 'title',
+        department: 'department', classification: 'classification',
+        wouldTheyHelp: 'would_they_help', relationship: 'relationship_to_self',
+        reportsTo: 'reports_to', gender: 'gender', disabilityStatus: 'disability_status',
+        startDate: 'start_date', endDate: 'end_date'
+      };
+      for (const [key, dbField] of Object.entries(fieldMap)) {
+        if (updates[key] !== undefined) actor[dbField] = updates[key];
+      }
+      if (updates.aliases !== undefined) {
+        actor.aliases = JSON.stringify(Array.isArray(updates.aliases) ? updates.aliases : []);
+      }
+      if (updates.inReportingChain !== undefined) {
+        actor.in_reporting_chain = updates.inReportingChain ? 1 : 0;
+      }
+      if (updates.secondaryClassifications !== undefined) {
+        actor.secondary_classifications = JSON.stringify(updates.secondaryClassifications);
+      }
+      console.log('[mock] actors.update', id, updates, '->', actor);
+      return Promise.resolve({ success: true });
+    },
+    delete: (id) => {
+      const idx = _mockActors.findIndex(a => a.id === id);
+      if (idx >= 0) _mockActors.splice(idx, 1);
+      return Promise.resolve({ success: true });
+    },
     merge: () => Promise.resolve({ success: true }),
     getAppearances: () => Promise.resolve({ success: true, appearances: [] }),
-    setSelf: () => Promise.resolve({ success: true }),
+    setSelf: (id) => {
+      _mockActors.forEach(a => { a.is_self = a.id === id ? 1 : 0; });
+      return Promise.resolve({ success: true });
+    },
     checkDuplicates: () => Promise.resolve({ success: true, duplicates: [] }),
     rescan: () => Promise.resolve({ success: true }),
     getForDocument: () => Promise.resolve({ success: true, actors: [] }),
     addToDocument: () => Promise.resolve({ success: true }),
-    removeFromDocument: () => Promise.resolve({ success: true })
+    removeFromDocument: () => Promise.resolve({ success: true }),
+    getRelationshipTypes: () => Promise.resolve({ success: true, types: { direct_supervisor: 'Direct Supervisor (your boss)', skip_level: "Skip-Level (boss's boss)", senior_leadership: 'Senior Leadership', hr: 'HR / People Ops', hr_investigator: 'HR Investigator', peer: 'Peer / Colleague', subordinate: 'Subordinate (reports to you)', union_rep: 'Union Representative', legal: 'Legal / Employment Counsel', witness: 'Witness', other: 'Other' } }),
+    resolveFromText: () => Promise.resolve({ success: true, role: 'supervisor', inChain: true, actor: null, pending: [] }),
+    findInText: () => Promise.resolve({ success: true, matches: [] }),
+    getChain: () => Promise.resolve({ success: true, actors: _mockActors.filter(a => !!a.in_reporting_chain).map(a => ({ id: a.id, name: a.name, relationship: a.relationship_to_self })) }),
+    getSummary: () => Promise.resolve({ success: true, summary: _mockActors.map(a => '  ' + a.name + ' (' + (a.role || 'no title') + ') -- ' + a.relationship_to_self + (a.in_reporting_chain ? ' [IN REPORTING CHAIN]' : '')).join('\n') })
   },
   precedents: {
     analyze: () => Promise.resolve({ success: true, analysis: {

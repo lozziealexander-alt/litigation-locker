@@ -14,13 +14,29 @@ const CLASSIFICATIONS = [
 
 const RELATIONSHIPS = [
   { value: '', label: 'Select...' },
-  { value: 'supervisor', label: 'My Supervisor/Manager' },
-  { value: 'hr', label: 'HR' },
-  { value: 'executive', label: 'Executive' },
-  { value: 'peer', label: 'Peer/Colleague' },
-  { value: 'direct_report', label: 'My Direct Report' },
-  { value: 'other', label: 'Other' }
+  { value: 'direct_supervisor', label: 'Direct Supervisor (your boss)', inChain: true },
+  { value: 'skip_level', label: 'Skip-Level (boss\'s boss)', inChain: true },
+  { value: 'senior_leadership', label: 'Senior Leadership', inChain: true },
+  { value: 'hr', label: 'HR / People Ops', inChain: false },
+  { value: 'hr_investigator', label: 'HR Investigator', inChain: false },
+  { value: 'peer', label: 'Peer / Colleague', inChain: false },
+  { value: 'subordinate', label: 'Subordinate (reports to you)', inChain: false },
+  { value: 'union_rep', label: 'Union Representative', inChain: false },
+  { value: 'legal', label: 'Legal / Employment Counsel', inChain: false },
+  { value: 'witness', label: 'Witness', inChain: false },
+  { value: 'other', label: 'Other', inChain: false }
 ];
+
+// Map legacy relationship values to new taxonomy
+const LEGACY_RELATIONSHIP_MAP = {
+  supervisor: 'direct_supervisor',
+  executive: 'senior_leadership',
+  direct_report: 'subordinate',
+};
+
+function normalizeRelationship(value) {
+  return LEGACY_RELATIONSHIP_MAP[value] || value || '';
+}
 
 const GENDERS = [
   { value: '', label: 'Not set' },
@@ -45,7 +61,10 @@ const WOULD_HELP_OPTIONS = [
 ];
 
 export default function ActorDetail({ actor, onClose, onActorUpdated }) {
-  const [editedActor, setEditedActor] = useState({ ...actor });
+  const [editedActor, setEditedActor] = useState({
+    ...actor,
+    relationship_to_self: normalizeRelationship(actor.relationship_to_self)
+  });
   const [allActors, setAllActors] = useState([]);
   const [appearances, setAppearances] = useState([]);
   const [payRecords, setPayRecords] = useState([]);
@@ -53,6 +72,13 @@ export default function ActorDetail({ actor, onClose, onActorUpdated }) {
   const [showPayForm, setShowPayForm] = useState(false);
   const [payForm, setPayForm] = useState({ period: '', baseSalary: '', recordDate: '' });
   const [dirty, setDirty] = useState(false);
+
+  // Actor registry fields
+  const [aliases, setAliases] = useState(() => {
+    try { return JSON.parse(actor.aliases || '[]'); } catch { return []; }
+  });
+  const [newAlias, setNewAlias] = useState('');
+  const [inReportingChain, setInReportingChain] = useState(!!actor.in_reporting_chain);
 
   const styles = getStyles();
 
@@ -80,6 +106,27 @@ export default function ActorDetail({ actor, onClose, onActorUpdated }) {
   function handleChange(field, value) {
     setEditedActor(prev => ({ ...prev, [field]: value }));
     setDirty(true);
+
+    // Auto-derive reporting chain from relationship
+    if (field === 'relationship_to_self') {
+      const rel = RELATIONSHIPS.find(r => r.value === value);
+      if (rel) {
+        setInReportingChain(!!rel.inChain);
+      }
+    }
+  }
+
+  function handleAddAlias() {
+    const trimmed = newAlias.trim();
+    if (!trimmed || aliases.includes(trimmed)) return;
+    setAliases(prev => [...prev, trimmed]);
+    setNewAlias('');
+    setDirty(true);
+  }
+
+  function handleRemoveAlias(alias) {
+    setAliases(prev => prev.filter(a => a !== alias));
+    setDirty(true);
   }
 
   async function handleSave() {
@@ -95,7 +142,9 @@ export default function ActorDetail({ actor, onClose, onActorUpdated }) {
       gender: editedActor.gender,
       disabilityStatus: editedActor.disability_status,
       startDate: editedActor.start_date,
-      endDate: editedActor.end_date
+      endDate: editedActor.end_date,
+      aliases: aliases,
+      inReportingChain: inReportingChain
     };
 
     try {
@@ -232,7 +281,7 @@ export default function ActorDetail({ actor, onClose, onActorUpdated }) {
                   placeholder="e.g., Manager"
                 />
               </Field>
-              <Field label="Relationship">
+              <Field label="Relationship to You">
                 <select
                   value={editedActor.relationship_to_self || ''}
                   onChange={e => handleChange('relationship_to_self', e.target.value)}
@@ -244,6 +293,23 @@ export default function ActorDetail({ actor, onClose, onActorUpdated }) {
                 </select>
               </Field>
             </FieldRow>
+
+            {/* Reporting chain toggle */}
+            <div style={styles.chainRow}>
+              <label style={styles.checkboxLabel}>
+                <input
+                  type="checkbox"
+                  checked={inReportingChain}
+                  onChange={e => { setInReportingChain(e.target.checked); setDirty(true); }}
+                  style={styles.checkbox}
+                />
+                In your reporting chain
+              </label>
+              {inReportingChain && (
+                <span style={styles.chainBadge}>Chain</span>
+              )}
+            </div>
+
             <FieldRow>
               <Field label="Gender">
                 <select
@@ -268,6 +334,39 @@ export default function ActorDetail({ actor, onClose, onActorUpdated }) {
                 </select>
               </Field>
             </FieldRow>
+          </Section>
+
+          {/* Aliases (name variations for auto-detection) */}
+          <Section title="Aliases">
+            <div style={styles.aliasHelp}>
+              Other names this person might appear as in documents (e.g., nicknames, maiden names, initials).
+            </div>
+            {aliases.length > 0 && (
+              <div style={styles.aliasTags}>
+                {aliases.map(alias => (
+                  <span key={alias} style={styles.aliasTag}>
+                    {alias}
+                    <button
+                      style={styles.aliasRemoveBtn}
+                      onClick={() => handleRemoveAlias(alias)}
+                    >
+                      {'\u00d7'}
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div style={styles.aliasAddRow}>
+              <input
+                type="text"
+                placeholder="Add alias..."
+                value={newAlias}
+                onChange={e => setNewAlias(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleAddAlias()}
+                style={styles.aliasInput}
+              />
+              <button style={styles.aliasAddBtn} onClick={handleAddAlias}>+</button>
+            </div>
           </Section>
 
           {/* Employment */}
@@ -816,6 +915,94 @@ function getStyles() {
       color: colors.textMuted,
       fontStyle: 'italic',
       padding: spacing.sm
+    },
+
+    // Reporting chain
+    chainRow: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: spacing.sm,
+      marginBottom: spacing.sm,
+      marginTop: spacing.xs
+    },
+    checkboxLabel: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: spacing.xs,
+      fontSize: typography.fontSize.sm,
+      color: colors.textSecondary,
+      cursor: 'pointer'
+    },
+    checkbox: {
+      cursor: 'pointer'
+    },
+    chainBadge: {
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.semibold,
+      color: '#7C3AED',
+      background: '#F3E8FF',
+      padding: `1px ${spacing.sm}`,
+      borderRadius: radius.full
+    },
+
+    // Aliases
+    aliasHelp: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      marginBottom: spacing.sm,
+      lineHeight: 1.4
+    },
+    aliasTags: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: spacing.xs,
+      marginBottom: spacing.sm
+    },
+    aliasTag: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '4px',
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.medium,
+      color: '#1E40AF',
+      background: '#EFF6FF',
+      padding: `2px ${spacing.sm}`,
+      borderRadius: radius.full,
+      border: '1px solid #BFDBFE'
+    },
+    aliasRemoveBtn: {
+      background: 'none',
+      border: 'none',
+      color: '#6B7280',
+      cursor: 'pointer',
+      fontSize: '14px',
+      padding: 0,
+      lineHeight: 1
+    },
+    aliasAddRow: {
+      display: 'flex',
+      gap: spacing.xs
+    },
+    aliasInput: {
+      flex: 1,
+      padding: spacing.sm,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.md,
+      fontSize: typography.fontSize.sm,
+      color: colors.textPrimary,
+      background: colors.surface,
+      outline: 'none',
+      boxSizing: 'border-box'
+    },
+    aliasAddBtn: {
+      padding: `${spacing.sm} ${spacing.md}`,
+      background: colors.surfaceAlt,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.md,
+      fontSize: typography.fontSize.base,
+      color: colors.textSecondary,
+      cursor: 'pointer',
+      fontWeight: typography.fontWeight.semibold
     },
 
     // Delete

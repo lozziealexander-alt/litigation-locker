@@ -23,6 +23,7 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState('anchors');
   const [timelineKey, setTimelineKey] = useState(0);
   const [peopleKey, setPeopleKey] = useState(0);
+  const [dashboardKey, setDashboardKey] = useState(0);
   const [highlightDocIds, setHighlightDocIds] = useState(null);
 
   // Recompute styles each render so they pick up current theme colors
@@ -273,6 +274,7 @@ export default function App() {
         )}
         {currentPage === 'dashboard' && (
           <Dashboard
+            key={dashboardKey}
             onNavigateToTimeline={(docIds) => {
               setHighlightDocIds(docIds || null);
               setCurrentPage('timeline');
@@ -289,7 +291,10 @@ export default function App() {
         <DocumentPanel
           document={selectedDocument}
           onClose={() => setSelectedDocument(null)}
-          onDocumentUpdated={() => setTimelineKey(k => k + 1)}
+          onDocumentUpdated={() => {
+            setTimelineKey(k => k + 1);
+            setDashboardKey(k => k + 1);
+          }}
         />
       )}
 
@@ -302,6 +307,7 @@ export default function App() {
             setSelectedActor(null);
             setTimelineKey(k => k + 1);
             setPeopleKey(k => k + 1);
+            setDashboardKey(k => k + 1);
           }}
         />
       )}

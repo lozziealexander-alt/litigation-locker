@@ -82,6 +82,7 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
       actorCount: acts.length,
       badActorCount: acts.filter(a => a.classification === 'bad_actor').length,
       witnessCount: acts.filter(a => a.classification?.startsWith('witness')).length,
+      chainCount: acts.filter(a => !!a.in_reporting_chain).length,
       earliestDate: allDates.length > 0 ? new Date(Math.min(...allDates)) : null,
       latestDate: allDates.length > 0 ? new Date(Math.max(...allDates)) : null,
       timelineSpanDays: allDates.length > 1
@@ -127,6 +128,9 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     // Actors
     if (stats.badActorCount > 0) {
       parts.push(`${stats.badActorCount} person${stats.badActorCount !== 1 ? 's have' : ' has'} been identified as bad actor${stats.badActorCount !== 1 ? 's' : ''}.`);
+    }
+    if (stats.chainCount > 0) {
+      parts.push(`${stats.chainCount} person${stats.chainCount !== 1 ? 's are' : ' is'} in your reporting chain.`);
     }
     if (stats.witnessCount > 0) {
       parts.push(`${stats.witnessCount} potential witness${stats.witnessCount !== 1 ? 'es' : ''} identified.`);
@@ -293,6 +297,17 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
       });
     }
 
+    // Reporting chain actors
+    const chainActors = actors.filter(a => !!a.in_reporting_chain);
+    if (chainActors.length > 0) {
+      insights.push({
+        icon: '\u{1F3E2}',
+        count: chainActors.length,
+        label: `in your reporting chain`,
+        legal: 'Actors in the reporting chain establish employer knowledge and vicarious liability — Faragher/Ellerth framework'
+      });
+    }
+
     return insights;
   }
 
@@ -329,8 +344,15 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
   const alerts = getAlerts();
   const gaps = getGaps();
   const topActors = actors
-    .filter(a => a.classification === 'bad_actor' || a.classification === 'enabler')
-    .slice(0, 5);
+    .filter(a => a.classification === 'bad_actor' || a.classification === 'enabler' || !!a.in_reporting_chain)
+    .sort((a, b) => {
+      // Sort: bad_actors first, then enablers, then chain actors
+      const classPriority = { bad_actor: 0, enabler: 1 };
+      const pa = classPriority[a.classification] ?? (a.in_reporting_chain ? 2 : 3);
+      const pb = classPriority[b.classification] ?? (b.in_reporting_chain ? 2 : 3);
+      return pa - pb;
+    })
+    .slice(0, 8);
 
   return (
     <div style={styles.container}>
@@ -414,7 +436,10 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
             icon={'\uD83D\uDC65'}
             value={stats?.actorCount || 0}
             label="People"
-            sublabel={stats?.badActorCount > 0 ? `${stats.badActorCount} bad actor${stats.badActorCount !== 1 ? 's' : ''}` : null}
+            sublabel={[
+              stats?.badActorCount > 0 ? `${stats.badActorCount} bad actor${stats.badActorCount !== 1 ? 's' : ''}` : null,
+              stats?.chainCount > 0 ? `${stats.chainCount} in chain` : null
+            ].filter(Boolean).join(' · ') || null}
             onClick={() => onNavigateToPeople?.()}
           />
           <StatCard
@@ -704,39 +729,48 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
               >
                 <span style={styles.chevron}>{collapsedSections.players ? '\u25B6' : '\u25BC'}</span>
                 Key Players
+                {topActors.length > 0 && <span style={styles.badge}>{topActors.length}</span>}
               </h3>
               {!collapsedSections.players && (
                 topActors.length === 0 ? (
-                  <p style={styles.emptyText}>No bad actors or enablers identified yet.</p>
+                  <p style={styles.emptyText}>No bad actors, enablers, or reporting chain actors identified yet.</p>
                 ) : (
                   <div style={styles.actorList}>
-                    {topActors.map(actor => (
-                      <div
-                        key={actor.id}
-                        style={{...styles.actorItem, ...styles.clickableItem}}
-                        onClick={() => onSelectActor?.(actor)}
-                        title="Click to view details"
-                      >
-                        <div style={{
-                          ...styles.actorBadge,
-                          background: actor.classification === 'bad_actor' ? '#DC262610' : '#F9731610',
-                          color: actor.classification === 'bad_actor' ? '#DC2626' : '#F97316'
-                        }}>
-                          {actor.name.split(' ').map(p => p[0]).join('').slice(0, 2)}
-                        </div>
-                        <div style={styles.actorInfo}>
-                          <div style={styles.actorName}>{actor.name}</div>
-                          <div style={styles.actorRole}>
-                            {actor.role || actor.relationship_to_self || actor.classification?.replace('_', ' ')}
+                    {topActors.map(actor => {
+                      const isBadActor = actor.classification === 'bad_actor';
+                      const isEnabler = actor.classification === 'enabler';
+                      const isChain = !!actor.in_reporting_chain;
+                      return (
+                        <div
+                          key={actor.id}
+                          style={{...styles.actorItem, ...styles.clickableItem}}
+                          onClick={() => onSelectActor?.(actor)}
+                          title="Click to view details"
+                        >
+                          <div style={{
+                            ...styles.actorBadge,
+                            background: isBadActor ? '#DC262610' : isEnabler ? '#F9731610' : isChain ? '#3B82F610' : '#6B728010',
+                            color: isBadActor ? '#DC2626' : isEnabler ? '#F97316' : isChain ? '#3B82F6' : '#6B7280'
+                          }}>
+                            {actor.name.split(' ').map(p => p[0]).join('').slice(0, 2)}
                           </div>
-                        </div>
-                        {actor.appearance_count > 0 && (
-                          <div style={styles.actorCount}>
-                            {actor.appearance_count} doc{actor.appearance_count !== 1 ? 's' : ''}
+                          <div style={styles.actorInfo}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={styles.actorName}>{actor.name}</span>
+                              {isChain && <span style={styles.dashboardChainTag}>Chain</span>}
+                            </div>
+                            <div style={styles.actorRole}>
+                              {actor.role || actor.relationship_to_self?.replace(/_/g, ' ') || actor.classification?.replace('_', ' ')}
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    ))}
+                          {actor.appearance_count > 0 && (
+                            <div style={styles.actorCount}>
+                              {actor.appearance_count} doc{actor.appearance_count !== 1 ? 's' : ''}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )
               )}
@@ -1367,6 +1401,17 @@ const styles = {
     background: colors.surface,
     padding: `2px ${spacing.sm}`,
     borderRadius: radius.full
+  },
+  dashboardChainTag: {
+    fontSize: '10px',
+    fontWeight: 600,
+    color: '#3B82F6',
+    background: '#3B82F610',
+    border: '1px solid #3B82F630',
+    padding: '1px 6px',
+    borderRadius: '9999px',
+    lineHeight: '1.4',
+    whiteSpace: 'nowrap'
   },
 
   // Collapsible + Clickable

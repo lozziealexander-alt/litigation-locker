@@ -182,6 +182,23 @@ function openCase(caseId) {
     caseDb.exec("ALTER TABLE pay_records ADD COLUMN period TEXT");
   }
 
+  // Add actor registry columns (aliases, in_reporting_chain)
+  const actorColsForRegistry = caseDb.prepare("PRAGMA table_info(actors)").all();
+  const actorColNamesForRegistry = actorColsForRegistry.map(c => c.name);
+  if (!actorColNamesForRegistry.includes('aliases')) {
+    caseDb.exec("ALTER TABLE actors ADD COLUMN aliases TEXT DEFAULT '[]'");
+  }
+  if (!actorColNamesForRegistry.includes('in_reporting_chain')) {
+    caseDb.exec('ALTER TABLE actors ADD COLUMN in_reporting_chain INTEGER DEFAULT 0');
+  }
+
+  // Backfill: set in_reporting_chain = 1 for actors with chain-type relationships
+  caseDb.exec(`
+    UPDATE actors SET in_reporting_chain = 1
+    WHERE relationship_to_self IN ('direct_supervisor', 'skip_level', 'senior_leadership', 'supervisor', 'executive')
+    AND in_reporting_chain = 0
+  `);
+
   // Add auto_detected column to actor_appearances (document-actor linking)
   const aaColumns = caseDb.prepare("PRAGMA table_info(actor_appearances)").all();
   const aaColumnNames = aaColumns.map(c => c.name);

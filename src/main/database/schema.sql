@@ -101,6 +101,10 @@ CREATE TABLE IF NOT EXISTS actors (
   start_date TEXT,
   end_date TEXT,
 
+  -- Actor registry fields
+  aliases TEXT DEFAULT '[]',           -- JSON array of alternate name forms
+  in_reporting_chain INTEGER DEFAULT 0, -- 1 if actor is in user's reporting chain
+
   -- Computed
   is_self BOOLEAN DEFAULT 0,
 

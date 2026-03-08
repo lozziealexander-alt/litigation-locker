@@ -11,6 +11,7 @@ const { classifyEvidence } = require('./ingest/evidence-classifier');
 const { detectIncidents, computeSeverity } = require('./analysis/incident-detector');
 const { detectActors, findPotentialDuplicates } = require('./analysis/actor-detector');
 const { categorize, buildChain, categorizeAndBuildChain } = require('./analysis/categorizer');
+const { ActorRegistry, resolveHarasserForEntry, RELATIONSHIP_TYPES, IN_CHAIN_RELATIONSHIPS } = require('./analysis/actor-registry');
 const {
   generateAnchorsFromContext,
   generateAnchorsFromIncidents,
@@ -27,6 +28,7 @@ const { DocumentAssessor, DOCUMENT_INPUT_TYPES } = require('./analysis/assessor'
 // Track currently open case
 let currentCaseDb = null;
 let currentCaseId = null;
+let actorRegistry = null;
 
 /**
  * Compute Jaccard similarity between two text strings (word-level).
@@ -127,6 +129,16 @@ function registerIpcHandlers() {
       closeCurrentCase();
       currentCaseDb = db.openCase(caseId);
       currentCaseId = caseId;
+
+      // Initialize actor registry from the case database
+      try {
+        actorRegistry = ActorRegistry.fromDb(currentCaseDb);
+        console.log('[IPC] Actor registry loaded:', actorRegistry.actors.size, 'actors');
+      } catch (e) {
+        console.error('[IPC] Actor registry init error:', e.message);
+        actorRegistry = null;
+      }
+
       console.log('[IPC] cases:open success, caseId:', caseId, 'db:', !!currentCaseDb);
       return { success: true };
     } catch (error) {
@@ -260,6 +272,7 @@ function registerIpcHandlers() {
 
       // Detect actors from ingested documents
       const allDetectedActors = [];
+      const autoLinkedActors = [];
       for (const doc of documents) {
         const allText = [doc.extracted_text, doc.ocr_text].filter(Boolean).join('\n');
         if (allText) {
@@ -267,11 +280,24 @@ function registerIpcHandlers() {
           if (detected.length > 0) {
             allDetectedActors.push(...detected);
           }
+
+          // Auto-link known actors from registry to this document
+          if (actorRegistry && actorRegistry.actors.size > 0) {
+            const linked = actorRegistry.autoLinkActorsToDocument(doc.id, allText);
+            if (linked.length > 0) {
+              autoLinkedActors.push(...linked);
+            }
+          }
         }
       }
 
-      console.log('[IPC] inserted', inserted.length, 'documents,', allDetectedIncidents.length, 'potential incidents,', allDetectedActors.length, 'potential actors detected,', nearDuplicates.length, 'near-duplicates flagged');
-      return { success: true, documents: inserted, errors, detectedIncidents: allDetectedIncidents, detectedActors: allDetectedActors, nearDuplicates };
+      // Refresh registry after new actors may have been added
+      if (actorRegistry) {
+        try { actorRegistry.loadAll(); } catch (e) { /* ignore */ }
+      }
+
+      console.log('[IPC] inserted', inserted.length, 'documents,', allDetectedIncidents.length, 'potential incidents,', allDetectedActors.length, 'potential actors detected,', autoLinkedActors.length, 'known actors auto-linked,', nearDuplicates.length, 'near-duplicates flagged');
+      return { success: true, documents: inserted, errors, detectedIncidents: allDetectedIncidents, detectedActors: allDetectedActors, autoLinkedActors, nearDuplicates };
     } catch (error) {
       console.error('[IPC] documents:ingest EXCEPTION:', error.message, error.stack);
       return { success: false, error: error.message };
@@ -1141,6 +1167,12 @@ function registerIpcHandlers() {
 
       const id = uuidv4();
 
+      // Determine in_reporting_chain from relationship if not explicitly set
+      const relationship = actorData.relationship || null;
+      const inChain = actorData.inReportingChain !== undefined
+        ? (actorData.inReportingChain ? 1 : 0)
+        : (relationship && IN_CHAIN_RELATIONSHIPS.has(relationship) ? 1 : 0);
+
       const stmt = currentCaseDb.prepare(`
         INSERT INTO actors (
           id, name, email, role, title, department,
@@ -1148,8 +1180,9 @@ function registerIpcHandlers() {
           relationship_to_self, reports_to, is_self,
           has_written_statement, statement_is_dated, statement_is_specific,
           still_employed, reports_to_bad_actor, risk_factors,
-          gender, disability_status, start_date, end_date
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          gender, disability_status, start_date, end_date,
+          aliases, in_reporting_chain
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
@@ -1162,7 +1195,7 @@ function registerIpcHandlers() {
         actorData.classification || 'unknown',
         actorData.secondaryClassifications ? JSON.stringify(actorData.secondaryClassifications) : null,
         actorData.wouldTheyHelp || 'unknown',
-        actorData.relationship || null,
+        relationship,
         actorData.reportsTo || null,
         actorData.isSelf ? 1 : 0,
         actorData.hasWrittenStatement ? 1 : 0,
@@ -1174,7 +1207,9 @@ function registerIpcHandlers() {
         actorData.gender || null,
         actorData.disabilityStatus || null,
         actorData.startDate || null,
-        actorData.endDate || null
+        actorData.endDate || null,
+        JSON.stringify(actorData.aliases || []),
+        inChain
       );
 
       // Link to source document if provided
@@ -1184,6 +1219,11 @@ function registerIpcHandlers() {
           VALUES (?, ?, ?, 1)
         `);
         linkStmt.run(id, actorData.sourceDocumentId, actorData.roleInDocument || null);
+      }
+
+      // Refresh actor registry
+      if (actorRegistry) {
+        try { actorRegistry.loadAll(); } catch (e) { /* ignore */ }
       }
 
       return { success: true, actor: { id, ...actorData } };
@@ -1237,6 +1277,18 @@ function registerIpcHandlers() {
         values.push(Array.isArray(updates.secondaryClassifications) ? JSON.stringify(updates.secondaryClassifications) : updates.secondaryClassifications);
       }
 
+      // Handle aliases (JSON array)
+      if (updates.aliases !== undefined) {
+        fields.push('aliases = ?');
+        values.push(JSON.stringify(Array.isArray(updates.aliases) ? updates.aliases : []));
+      }
+
+      // Handle in_reporting_chain
+      if (updates.inReportingChain !== undefined) {
+        fields.push('in_reporting_chain = ?');
+        values.push(updates.inReportingChain ? 1 : 0);
+      }
+
       if (fields.length === 0) {
         return { success: true };
       }
@@ -1244,8 +1296,13 @@ function registerIpcHandlers() {
       fields.push("updated_at = datetime('now')");
       values.push(actorId);
 
-      const stmt = currentCaseDb.prepare(`UPDATE actors SET ${fields.join(', ')} WHERE id = ?`);
+      const stmt = currentCaseDb.prepare('UPDATE actors SET ' + fields.join(', ') + ' WHERE id = ?');
       stmt.run(...values);
+
+      // Refresh actor registry
+      if (actorRegistry) {
+        try { actorRegistry.loadAll(); } catch (e) { /* ignore */ }
+      }
 
       return { success: true };
     } catch (error) {
@@ -1478,6 +1535,101 @@ function registerIpcHandlers() {
       ).run(actorId, documentId);
 
       return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== ACTOR REGISTRY ====================
+
+  /** Get relationship type taxonomy */
+  ipcMain.handle('actors:getRelationshipTypes', async () => {
+    return { success: true, types: RELATIONSHIP_TYPES };
+  });
+
+  /** Resolve harasser role from text using known actors */
+  ipcMain.handle('actors:resolveFromText', async (event, text, confirmedActorIds) => {
+    try {
+      if (!actorRegistry) {
+        return { success: true, role: 'unknown', inChain: false, actor: null, pending: [] };
+      }
+      const result = resolveHarasserForEntry(text, actorRegistry, confirmedActorIds || null);
+      return {
+        success: true,
+        role: result.role,
+        inChain: result.inChain,
+        actor: result.actor ? { id: result.actor.id, name: result.actor.name, relationship: result.actor.relationship } : null,
+        pending: result.pending.map(m => ({
+          actorId: m.actor.id,
+          actorName: m.actor.name,
+          confidence: m.confidence,
+          matchedOn: m.matchedOn,
+          relationship: m.actor.relationship,
+          classification: m.actor.classification,
+        })),
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  /** Find all known actors mentioned in text */
+  ipcMain.handle('actors:findInText', async (event, text) => {
+    try {
+      if (!actorRegistry) {
+        return { success: true, matches: [] };
+      }
+      const matches = actorRegistry.findActorsInText(text);
+      return {
+        success: true,
+        matches: matches.map(m => ({
+          actorId: m.actor.id,
+          actorName: m.actor.name,
+          confidence: m.confidence,
+          matchedOn: m.matchedOn,
+          needsConfirmation: m.needsConfirmation,
+          relationship: m.actor.relationship,
+          relationshipLabel: m.actor.relationshipLabel,
+          harasserRole: m.actor.harasserRole,
+          inReportingChain: m.actor.inReportingChain,
+          classification: m.actor.classification,
+        })),
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  /** Get actors in the reporting chain */
+  ipcMain.handle('actors:getChain', async () => {
+    try {
+      if (!actorRegistry) {
+        return { success: true, actors: [] };
+      }
+      const chain = actorRegistry.actorsInChain();
+      return {
+        success: true,
+        actors: chain.map(a => ({
+          id: a.id,
+          name: a.name,
+          relationship: a.relationship,
+          relationshipLabel: a.relationshipLabel,
+          title: a.title,
+          classification: a.classification,
+        })),
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  /** Get summary of all actors for assessment prompts */
+  ipcMain.handle('actors:getSummary', async () => {
+    try {
+      if (!actorRegistry) {
+        return { success: true, summary: 'No actors defined.' };
+      }
+      return { success: true, summary: actorRegistry.summaryForAssessment() };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -2994,6 +3146,7 @@ function closeCurrentCase() {
     currentCaseDb.close();
     currentCaseDb = null;
     currentCaseId = null;
+    actorRegistry = null;
   }
 }
 
