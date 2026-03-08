@@ -329,15 +329,19 @@ class ActorRegistry {
         ).get(match.actor.id, documentId);
 
         if (!existing) {
-          this.db.prepare(
-            'INSERT OR IGNORE INTO actor_appearances (actor_id, document_id, role_in_document, auto_detected, confidence) VALUES (?, ?, ?, 1, ?)'
-          ).run(match.actor.id, documentId, match.actor.classification, match.confidence);
-          linked.push({
-            actorId: match.actor.id,
-            actorName: match.actor.name,
-            confidence: match.confidence,
-            matchedOn: match.matchedOn,
-          });
+          try {
+            this.db.prepare(
+              'INSERT OR IGNORE INTO actor_appearances (actor_id, document_id, role_in_document, auto_detected, confidence) VALUES (?, ?, ?, 1, ?)'
+            ).run(match.actor.id, documentId, match.actor.classification, match.confidence);
+            linked.push({
+              actorId: match.actor.id,
+              actorName: match.actor.name,
+              confidence: match.confidence,
+              matchedOn: match.matchedOn,
+            });
+          } catch (e) {
+            // FK violation: actor or document not in DB (stale registry) — skip silently
+          }
         }
       }
     }

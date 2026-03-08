@@ -72,6 +72,9 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
   const [showDuplicateReview, setShowDuplicateReview] = useState(false);
   const [linkSuggestions, setLinkSuggestions] = useState(null);
   const [showLinkModal, setShowLinkModal] = useState(false);
+  const [showEventPicker, setShowEventPicker] = useState(false);
+  const [allEvents, setAllEvents] = useState([]);
+  const [eventPickerSearch, setEventPickerSearch] = useState('');
   // Events spine
   const [events, setEvents] = useState([]);
   const [showEventSpine, setShowEventSpine] = useState(true);
@@ -1641,46 +1644,112 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
       {/* Near-duplicate review overlay */}
       {/* Document-Event Link Suggestion Modal */}
       {showLinkModal && linkSuggestions && (
-        <div style={styles.linkOverlay} onClick={() => { setShowLinkModal(false); setLinkSuggestions(null); }}>
+        <div style={styles.linkOverlay} onClick={() => { setShowLinkModal(false); setLinkSuggestions(null); setShowEventPicker(false); setEventPickerSearch(''); }}>
           <div style={styles.linkModal} onClick={e => e.stopPropagation()}>
-            <h3 style={styles.linkModalTitle}>Link Document to Events?</h3>
-            <p style={styles.linkModalHint}>
-              This document might support {linkSuggestions.suggestions.length} existing event{linkSuggestions.suggestions.length !== 1 ? 's' : ''}:
-            </p>
-            {linkSuggestions.suggestions.map(s => (
-              <div key={s.event.id} style={styles.suggestionCard}>
-                <div style={styles.suggestionScore}>{s.score}%</div>
-                <div style={styles.suggestionInfo}>
-                  <strong style={styles.suggestionTitle}>{s.event.title}</strong>
-                  <div style={styles.suggestionDate}>
-                    {s.event.date ? new Date(s.event.date).toLocaleDateString() : 'No date'}
+            {!showEventPicker ? (
+              <>
+                <h3 style={styles.linkModalTitle}>Link Document to Events?</h3>
+                <p style={styles.linkModalHint}>
+                  This document might support {linkSuggestions.suggestions.length} existing event{linkSuggestions.suggestions.length !== 1 ? 's' : ''}:
+                </p>
+                {linkSuggestions.suggestions.map(s => (
+                  <div key={s.event.id} style={styles.suggestionCard}>
+                    <div style={styles.suggestionScore}>{s.score}%</div>
+                    <div style={styles.suggestionInfo}>
+                      <strong style={styles.suggestionTitle}>{s.event.title}</strong>
+                      <div style={styles.suggestionDate}>
+                        {s.event.date ? new Date(s.event.date).toLocaleDateString() : 'No date'}
+                      </div>
+                      <div style={styles.suggestionReason}>{s.reason}</div>
+                    </div>
+                    <button
+                      style={styles.linkBtn}
+                      onClick={async () => {
+                        await window.api.events.linkDocumentV2(
+                          caseIdRef.current,
+                          s.event.id,
+                          linkSuggestions.documentId,
+                          'supports'
+                        );
+                        const remaining = linkSuggestions.suggestions.filter(x => x.event.id !== s.event.id);
+                        if (remaining.length === 0) {
+                          setShowLinkModal(false);
+                          setLinkSuggestions(null);
+                          loadTimeline();
+                        } else {
+                          setLinkSuggestions({ ...linkSuggestions, suggestions: remaining });
+                          loadTimeline();
+                        }
+                      }}
+                    >
+                      Link
+                    </button>
                   </div>
-                  <div style={styles.suggestionReason}>{s.reason}</div>
+                ))}
+                <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                  <button
+                    style={styles.skipBtn}
+                    onClick={() => { setShowLinkModal(false); setLinkSuggestions(null); }}
+                  >
+                    Skip for now
+                  </button>
+                  <button
+                    style={styles.linkOtherBtn}
+                    onClick={async () => {
+                      const result = await window.api.events.list(caseIdRef.current);
+                      if (result.success) setAllEvents(result.events || []);
+                      setShowEventPicker(true);
+                      setEventPickerSearch('');
+                    }}
+                  >
+                    Link to a different event...
+                  </button>
                 </div>
-                <button
-                  style={styles.linkBtn}
-                  onClick={async () => {
-                    await window.api.events.linkDocumentV2(
-                      caseIdRef.current,
-                      s.event.id,
-                      linkSuggestions.documentId,
-                      'supports'
-                    );
-                    setShowLinkModal(false);
-                    setLinkSuggestions(null);
-                    loadTimeline();
-                  }}
-                >
-                  Link
+              </>
+            ) : (
+              <>
+                <h3 style={styles.linkModalTitle}>Choose an Event</h3>
+                <input
+                  style={styles.eventPickerSearch}
+                  placeholder="Search events..."
+                  value={eventPickerSearch}
+                  onChange={e => setEventPickerSearch(e.target.value)}
+                  autoFocus
+                />
+                <div style={styles.eventPickerList}>
+                  {allEvents
+                    .filter(e => !eventPickerSearch || e.title?.toLowerCase().includes(eventPickerSearch.toLowerCase()))
+                    .map(e => (
+                      <div key={e.id} style={styles.eventPickerRow}>
+                        <div style={styles.eventPickerInfo}>
+                          <div style={styles.eventPickerTitle}>{e.title}</div>
+                          {e.date && <div style={styles.eventPickerDate}>{new Date(e.date).toLocaleDateString()}</div>}
+                        </div>
+                        <button
+                          style={styles.linkBtn}
+                          onClick={async () => {
+                            await window.api.events.linkDocumentV2(
+                              caseIdRef.current,
+                              e.id,
+                              linkSuggestions.documentId,
+                              'supports'
+                            );
+                            setShowEventPicker(false);
+                            setEventPickerSearch('');
+                            loadTimeline();
+                          }}
+                        >
+                          Link
+                        </button>
+                      </div>
+                    ))
+                  }
+                </div>
+                <button style={styles.skipBtn} onClick={() => { setShowEventPicker(false); setEventPickerSearch(''); }}>
+                  ← Back
                 </button>
-              </div>
-            ))}
-            <button
-              style={styles.skipBtn}
-              onClick={() => { setShowLinkModal(false); setLinkSuggestions(null); }}
-            >
-              Skip for now
-            </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -2931,14 +3000,67 @@ function getStyles() {
     },
     skipBtn: {
       marginTop: '12px',
-      width: '100%',
-      padding: '8px',
+      padding: '8px 16px',
       background: 'transparent',
       color: colors.textSecondary,
       border: `1px solid ${colors.border}`,
       borderRadius: radius.sm,
       cursor: 'pointer',
       fontSize: typography.fontSize.sm
+    },
+    linkOtherBtn: {
+      marginTop: '12px',
+      padding: '8px 16px',
+      background: 'transparent',
+      color: colors.primary,
+      border: `1px solid ${colors.primary}`,
+      borderRadius: radius.sm,
+      cursor: 'pointer',
+      fontSize: typography.fontSize.sm
+    },
+    eventPickerSearch: {
+      width: '100%',
+      padding: '8px 10px',
+      marginBottom: '8px',
+      background: colors.surfaceAlt,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.sm,
+      color: colors.textPrimary,
+      fontSize: typography.fontSize.sm,
+      outline: 'none',
+      boxSizing: 'border-box'
+    },
+    eventPickerList: {
+      maxHeight: '300px',
+      overflowY: 'auto',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '4px',
+      marginBottom: '8px'
+    },
+    eventPickerRow: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '6px 8px',
+      background: colors.surfaceAlt,
+      borderRadius: radius.sm
+    },
+    eventPickerInfo: {
+      flex: 1,
+      minWidth: 0
+    },
+    eventPickerTitle: {
+      fontSize: typography.fontSize.sm,
+      color: colors.textPrimary,
+      fontWeight: typography.fontWeight.medium,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    },
+    eventPickerDate: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted
     }
   };
 }
