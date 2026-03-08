@@ -2805,6 +2805,82 @@ function registerIpcHandlers() {
     }
   });
 
+  // ==================== DOCUMENT-EVENT LINK SUGGESTIONS ====================
+
+  ipcMain.handle('events:suggestLinks', async (event, caseId, documentId) => {
+    try {
+      const caseDb = currentCaseDb;
+
+      // Get document details
+      const doc = caseDb.prepare('SELECT * FROM documents WHERE id = ?').get(documentId);
+      if (!doc) return { success: false, error: 'Document not found' };
+
+      // Get actors linked to this document via actor_appearances
+      const docActors = caseDb.prepare(`
+        SELECT a.id, a.name FROM actors a
+        JOIN actor_appearances aa ON aa.actor_id = a.id
+        WHERE aa.document_id = ?
+      `).all(documentId);
+
+      const actorIds = docActors.map(a => a.id);
+
+      const suggestions = [];
+
+      if (doc.document_date) {
+        // Find events within ±7 days of document date
+        const events = caseDb.prepare(`
+          SELECT e.*, GROUP_CONCAT(et.tag) as tags_concat
+          FROM events e
+          LEFT JOIN event_tags et ON et.event_id = e.id
+          WHERE e.date IS NOT NULL
+            AND julianday(e.date) BETWEEN julianday(?) - 7 AND julianday(?) + 7
+          GROUP BY e.id
+        `).all(doc.document_date, doc.document_date);
+
+        for (const evt of events) {
+          let score = 0;
+
+          // Date proximity scoring
+          const daysDiff = Math.abs(
+            Math.round((new Date(evt.date) - new Date(doc.document_date)) / (1000 * 60 * 60 * 24))
+          );
+          if (daysDiff === 0) score += 50;
+          else if (daysDiff <= 3) score += 30;
+          else if (daysDiff <= 7) score += 20;
+
+          // Actor overlap scoring (+15 per shared actor)
+          const evtActorIds = caseDb.prepare(
+            'SELECT actor_id FROM event_actors WHERE event_id = ?'
+          ).all(evt.id).map(a => a.actor_id);
+
+          const overlapCount = actorIds.filter(id => evtActorIds.includes(id)).length;
+          score += overlapCount * 15;
+
+          // Evidence type alignment scoring
+          const tags = evt.tags_concat ? evt.tags_concat.split(',') : [];
+          if (doc.evidence_type === 'PROTECTED_ACTIVITY' && tags.includes('protected_activity')) score += 20;
+          if (doc.evidence_type === 'ADVERSE_ACTION'    && tags.includes('adverse_action'))    score += 20;
+          if (doc.evidence_type === 'RESPONSE'          && tags.includes('help_request'))      score += 15;
+
+          if (score >= 40) {
+            suggestions.push({
+              event: evt,
+              score: Math.min(score, 100),
+              reason: `${daysDiff} day${daysDiff !== 1 ? 's' : ''} apart, ${overlapCount} shared actor${overlapCount !== 1 ? 's' : ''}`
+            });
+          }
+        }
+      }
+
+      suggestions.sort((a, b) => b.score - a.score);
+
+      return { success: true, suggestions: suggestions.slice(0, 5) };
+    } catch (error) {
+      console.error('[IPC] events:suggestLinks error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
   // ==================== EVENT TAGS ====================
 
   ipcMain.handle('eventTags:set', async (event, eventId, tags) => {

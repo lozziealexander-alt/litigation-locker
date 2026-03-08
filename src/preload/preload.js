@@ -138,6 +138,7 @@ contextBridge.exposeInMainWorld('api', {
     unlinkIncident: (caseId, eventId, incidentId) => ipcRenderer.invoke('events:unlinkIncident', caseId, eventId, incidentId),
     linkActor: (caseId, eventId, actorId, role) => ipcRenderer.invoke('events:linkActor', caseId, eventId, actorId, role),
     unlinkActor: (caseId, eventId, actorId) => ipcRenderer.invoke('events:unlinkActor', caseId, eventId, actorId),
+    suggestLinks: (caseId, documentId) => ipcRenderer.invoke('events:suggestLinks', caseId, documentId),
     linkDocumentV2: (caseId, eventId, docId, relevanceV2) => ipcRenderer.invoke('events:linkDocumentV2', caseId, eventId, docId, relevanceV2),
     setDocumentWeight: (caseId, eventId, docId, weight) => ipcRenderer.invoke('events:setDocumentWeight', caseId, eventId, docId, weight)
   },
