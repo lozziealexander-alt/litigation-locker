@@ -8,6 +8,7 @@ const ANCHOR_COLORS = {
   'REPORTED': '#8B5CF6',
   'HELP': '#F97316',
   'ADVERSE_ACTION': '#DC2626',
+  'HARASSMENT': '#E11D48',
   'MILESTONE': '#6B7280',
   'END': '#1F2937'
 };
@@ -17,17 +18,19 @@ const ANCHOR_ICONS = {
   'REPORTED': '\u{1F4E2}',
   'HELP': '\u{1F198}',
   'ADVERSE_ACTION': '\u26A0\uFE0F',
+  'HARASSMENT': '\u{1F6A8}',
   'MILESTONE': '\u{1F4CC}',
   'END': '\u{1F3C1}'
 };
 
-const ANCHOR_TYPES = ['START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'MILESTONE', 'END'];
+const ANCHOR_TYPES = ['START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'HARASSMENT', 'MILESTONE', 'END'];
 
 const ANCHOR_TYPE_GLOSSARY = {
   START: 'The beginning of your employment or a significant role change',
   REPORTED: 'When you formally or informally reported misconduct, discrimination, or concerns',
   HELP: 'When you asked for support, escalated issues, or sought assistance',
   ADVERSE_ACTION: 'Negative actions taken against you in retaliation or discrimination',
+  HARASSMENT: 'An incident of harassment, bullying, or hostile conduct',
   MILESTONE: 'Important dates or events in your case timeline',
   END: 'Termination, resignation, or end of employment'
 };
@@ -230,7 +233,9 @@ export default function Anchors({ caseId }) {
   }
 
   async function handleUpdateAnchor(anchorId, updates) {
+    console.log('[Anchors] Saving anchor', anchorId, 'updates:', JSON.stringify(updates));
     const result = await window.api.anchors.update(caseId, anchorId, updates);
+    console.log('[Anchors] Save result:', JSON.stringify(result));
     if (result && !result.success && result.error) {
       setDateError(result.error);
       setTimeout(() => setDateError(''), 3000);
@@ -506,7 +511,7 @@ export default function Anchors({ caseId }) {
                   <label style={styles.label}>Type</label>
                   <select value={newAnchor.type} onChange={e => setNewAnchor({ ...newAnchor, type: e.target.value })} style={styles.select}>
                     {ANCHOR_TYPES.map(t => (
-                      <option key={t} value={t} title={ANCHOR_TYPE_GLOSSARY[t]}>{t.replace('_', ' ')}</option>
+                      <option key={t} value={t} title={ANCHOR_TYPE_GLOSSARY[t]} style={{ background: '#fff', color: '#1a1a1a' }}>{t.replace('_', ' ')}</option>
                     ))}
                   </select>
                 </div>
@@ -799,7 +804,7 @@ function AnchorSpokes({
   onPrev, onNext, anchorIndex, anchorCount
 }) {
   const [editing, setEditing] = useState(false);
-  const [editData, setEditData] = useState({
+  const [editData, setEditData] = useState(() => ({
     title: anchor.title || '',
     type: anchor.anchor_type || 'MILESTONE',
     date: anchor.anchor_date || '',
@@ -808,7 +813,21 @@ function AnchorSpokes({
     where: anchor.where_location || '',
     impact: anchor.impact_summary || '',
     actionDirection: anchor.action_direction || 'toward_me'
-  });
+  }));
+
+  // Sync editData when anchor prop changes (e.g. after save + reload)
+  React.useEffect(() => {
+    setEditData({
+      title: anchor.title || '',
+      type: anchor.anchor_type || 'MILESTONE',
+      date: anchor.anchor_date || '',
+      dateConfidence: anchor.date_confidence || 'exact',
+      whatHappened: anchor.what_happened || '',
+      where: anchor.where_location || '',
+      impact: anchor.impact_summary || '',
+      actionDirection: anchor.action_direction || 'toward_me'
+    });
+  }, [anchor.id, anchor.anchor_type, anchor.title, anchor.anchor_date, anchor.what_happened]);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
   const [showAddIncident, setShowAddIncident] = useState(false);
   const [showAddPrecedent, setShowAddPrecedent] = useState(false);
@@ -921,7 +940,7 @@ function AnchorSpokes({
                   onChange={e => setEditData({ ...editData, type: e.target.value })}
                   style={styles.select}>
                   {ANCHOR_TYPES.map(t => (
-                    <option key={t} value={t} title={ANCHOR_TYPE_GLOSSARY[t]}>{t.replace('_', ' ')}</option>
+                    <option key={t} value={t} title={ANCHOR_TYPE_GLOSSARY[t]} style={{ background: '#fff', color: '#1a1a1a' }}>{t.replace('_', ' ')}</option>
                   ))}
                 </select>
               ) : (
@@ -1651,7 +1670,8 @@ const styles = {
   },
   select: {
     padding: `${spacing.sm}`, border: '1px solid #E8E4DF',
-    borderRadius: '6px', fontSize: '13px', background: '#FFFFFF', outline: 'none'
+    borderRadius: '6px', fontSize: '13px', background: '#FFFFFF', outline: 'none',
+    WebkitAppearance: 'menulist', appearance: 'menulist', cursor: 'pointer'
   },
   dateInput: {
     padding: `${spacing.sm}`, border: '1px solid #E8E4DF',

@@ -195,7 +195,7 @@ function openCase(caseId) {
     caseDb.exec(`
       CREATE TABLE IF NOT EXISTS anchors (
         id TEXT PRIMARY KEY,
-        anchor_type TEXT NOT NULL CHECK(anchor_type IN ('START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'MILESTONE', 'END')),
+        anchor_type TEXT NOT NULL CHECK(anchor_type IN ('START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'HARASSMENT', 'MILESTONE', 'END')),
         title TEXT NOT NULL,
         description TEXT,
         anchor_date DATE,
@@ -259,6 +259,60 @@ function openCase(caseId) {
   }
   if (!anchorColNames.includes('event_count')) {
     caseDb.exec("ALTER TABLE anchors ADD COLUMN event_count INTEGER DEFAULT 1");
+  }
+
+  // Migrate anchors CHECK constraint to include HARASSMENT
+  // SQLite can't ALTER CHECK constraints, so we recreate the table
+  const checkSql = caseDb.prepare(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='anchors'"
+  ).get();
+  if (checkSql && checkSql.sql && !checkSql.sql.includes('HARASSMENT')) {
+    console.log('[DB] Migrating anchors table to allow HARASSMENT type');
+    // Clean up any leftover temp table from a previous failed migration
+    caseDb.exec('DROP TABLE IF EXISTS anchors_new');
+    // Read existing columns to handle any extra columns (e.g. action_direction)
+    const existingCols = caseDb.prepare("PRAGMA table_info(anchors)").all().map(c => c.name);
+    const baseCols = [
+      'id', 'anchor_type', 'title', 'description', 'anchor_date', 'date_confidence',
+      'what_happened', 'where_location', 'impact_summary', 'severity',
+      'is_auto_generated', 'user_edited', 'source_context', 'sort_order', 'is_expanded',
+      'contains_multiple_events', 'event_count', 'created_at', 'updated_at'
+    ];
+    // Find any extra columns added by previous migrations
+    const extraCols = existingCols.filter(c => !baseCols.includes(c));
+    const extraColDefs = extraCols.map(c => `${c} TEXT DEFAULT NULL`).join(',\n        ');
+    const allCols = [...baseCols, ...extraCols].join(', ');
+
+    caseDb.exec(`
+      CREATE TABLE anchors_new (
+        id TEXT PRIMARY KEY,
+        anchor_type TEXT NOT NULL CHECK(anchor_type IN ('START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'HARASSMENT', 'MILESTONE', 'END')),
+        title TEXT NOT NULL,
+        description TEXT,
+        anchor_date DATE,
+        date_confidence TEXT DEFAULT 'exact',
+        what_happened TEXT,
+        where_location TEXT,
+        impact_summary TEXT,
+        severity TEXT CHECK(severity IN ('minor', 'moderate', 'severe', 'egregious')),
+        is_auto_generated BOOLEAN DEFAULT 1,
+        user_edited BOOLEAN DEFAULT 0,
+        source_context TEXT,
+        sort_order INTEGER,
+        is_expanded BOOLEAN DEFAULT 0,
+        contains_multiple_events BOOLEAN DEFAULT 0,
+        event_count INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        ${extraColDefs ? ', ' + extraColDefs : ''}
+      );
+      INSERT INTO anchors_new (${allCols}) SELECT ${allCols} FROM anchors;
+      DROP TABLE anchors;
+      ALTER TABLE anchors_new RENAME TO anchors;
+      CREATE INDEX IF NOT EXISTS idx_anchors_date ON anchors(anchor_date);
+      CREATE INDEX IF NOT EXISTS idx_anchors_type ON anchors(anchor_type);
+    `);
+    console.log('[DB] Anchors table migrated successfully (extra cols: ' + extraCols.join(', ') + ')');
   }
 
   // Add end_date and last_scanned_at to case_context if missing
@@ -329,6 +383,25 @@ function closeMasterDb() {
   }
 }
 
+/**
+ * Get a setting from app_settings
+ */
+function getSetting(key) {
+  if (!masterDb) return null;
+  const row = masterDb.prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+
+/**
+ * Set a setting in app_settings
+ */
+function setSetting(key, value) {
+  if (!masterDb) throw new Error('Master DB not initialized');
+  masterDb.prepare(
+    'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)'
+  ).run(key, value);
+}
+
 module.exports = {
   initMasterDb,
   createCase,
@@ -337,5 +410,7 @@ module.exports = {
   vaultExists,
   getSalt,
   storeSalt,
-  closeMasterDb
+  closeMasterDb,
+  getSetting,
+  setSetting
 };

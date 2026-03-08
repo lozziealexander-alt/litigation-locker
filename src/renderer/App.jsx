@@ -4,6 +4,9 @@ import Timeline from './pages/Timeline';
 import People from './pages/People';
 import Dashboard from './pages/Dashboard';
 import Anchors from './pages/Anchors';
+import ContextDocs from './pages/ContextDocs';
+import Assessor from './pages/Assessor';
+import Settings from './pages/Settings';
 import DocumentPanel from './components/DocumentPanel';
 import ActorDetail from './components/ActorDetail';
 import { useTheme } from './styles/ThemeContext';
@@ -175,6 +178,36 @@ export default function App() {
             <span style={styles.caseIcon}>{'\uD83D\uDCCA'}</span>
             <span style={styles.caseName}>Dashboard</span>
           </button>
+          <button
+            style={{
+              ...styles.caseButton,
+              ...(currentPage === 'context' ? styles.navButtonActive : {})
+            }}
+            onClick={() => setCurrentPage('context')}
+          >
+            <span style={styles.caseIcon}>{'\uD83D\uDCC1'}</span>
+            <span style={styles.caseName}>Context Docs</span>
+          </button>
+          <button
+            style={{
+              ...styles.caseButton,
+              ...(currentPage === 'assess' ? styles.navButtonActive : {})
+            }}
+            onClick={() => setCurrentPage('assess')}
+          >
+            <span style={styles.caseIcon}>{'\u2696'}</span>
+            <span style={styles.caseName}>Assessor</span>
+          </button>
+          <button
+            style={{
+              ...styles.caseButton,
+              ...(currentPage === 'settings' ? styles.navButtonActive : {})
+            }}
+            onClick={() => setCurrentPage('settings')}
+          >
+            <span style={styles.caseIcon}>{'\u2699'}</span>
+            <span style={styles.caseName}>Settings</span>
+          </button>
 
           <div style={{ ...styles.sidebarLabel, marginTop: spacing.lg }}>CASES</div>
           {cases.map(c => (
@@ -228,6 +261,15 @@ export default function App() {
             key={peopleKey}
             onSelectActor={setSelectedActor}
           />
+        )}
+        {currentPage === 'context' && (
+          <ContextDocs />
+        )}
+        {currentPage === 'assess' && (
+          <Assessor />
+        )}
+        {currentPage === 'settings' && (
+          <Settings />
         )}
         {currentPage === 'dashboard' && (
           <Dashboard

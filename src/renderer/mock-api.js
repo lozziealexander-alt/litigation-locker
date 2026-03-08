@@ -23,7 +23,7 @@ window.api = {
   documents: {
     ingest: () => Promise.resolve({ success: true, documents: [] }),
     list: () => Promise.resolve({ success: true, documents: [
-      { id: 'doc-1', filename: 'Discrimination_Complaint.eml', evidence_type: 'PROTECTED_ACTIVITY', document_date: '2024-01-10', document_date_confidence: 'exact', file_type: 'message/rfc822', file_size: 15360, is_recap: 1 },
+      { id: 'doc-1', filename: 'Discrimination_Complaint.eml', evidence_type: 'PROTECTED_ACTIVITY', document_date: '2024-01-10', document_date_confidence: 'exact', file_type: 'message/rfc822', file_size: 15360, is_recap: 1, document_subtype: 'recap_self_doc' },
       { id: 'doc-3', filename: 'Performance_Review_Q1.pdf', evidence_type: 'ADVERSE_ACTION', document_date: '2024-01-24', document_date_confidence: 'exact', file_type: 'application/pdf', file_size: 102400, is_recap: 0 },
       { id: 'doc-5', filename: 'Written_Warning.pdf', evidence_type: 'ADVERSE_ACTION', document_date: '2024-02-15', document_date_confidence: 'exact', file_type: 'application/pdf', file_size: 245760, is_recap: 0 },
       { id: 'doc-6', filename: 'EEOC_Charge_Filed.pdf', evidence_type: 'PROTECTED_ACTIVITY', document_date: '2024-03-01', document_date_confidence: 'exact', file_type: 'application/pdf', file_size: 327680, is_recap: 0 },
@@ -64,6 +64,7 @@ window.api = {
     setGroup: () => Promise.resolve({ success: true }),
     removeGroup: () => Promise.resolve({ success: true }),
     updateRecapStatus: () => Promise.resolve({ success: true }),
+    updateDocumentSubtype: () => Promise.resolve({ success: true }),
     delete: () => Promise.resolve({ success: true })
   },
   timeline: {
@@ -267,7 +268,66 @@ window.api = {
       }
     }})
   },
+  settings: {
+    get: (key) => Promise.resolve({ success: true, value: key === 'anthropic_api_key' ? 'sk-mock-key' : null }),
+    set: (key, value) => Promise.resolve({ success: true })
+  },
+  contextDocs: {
+    list: () => Promise.resolve({ success: true, documents: [
+      { doc_id: 'ctx-1', filename: 'Employee_Handbook_2023.pdf', doc_type: 'handbook', display_name: 'Acme Corp Employee Handbook 2023', date_uploaded: '2024-01-05T10:00:00Z', date_effective: '2023-01-01', is_active: true, notes: '', signals: { pip_requires_prior_warning: true, pip_requires_documentation: true, pip_employee_has_right_to_respond: true, has_anti_harassment_policy: true, harassment_reporting_procedure: true, non_retaliation_clause: true, at_will_employment: true, for_cause_termination_required: false, arbitration_required: false, class_action_waiver: false, fmla_rights_documented: true, pip_requires_specific_metrics: false }, signalSummary: ['pip_requires_prior_warning', 'pip_requires_documentation', 'pip_employee_has_right_to_respond', 'has_anti_harassment_policy', 'harassment_reporting_procedure', 'non_retaliation_clause', 'at_will_employment', 'fmla_rights_documented'] },
+      { doc_id: 'ctx-2', filename: 'Arbitration_Agreement.pdf', doc_type: 'arbitration_agreement', display_name: 'Arbitration Agreement', date_uploaded: '2024-01-06T14:30:00Z', date_effective: '2023-06-15', is_active: true, notes: 'Signed at hire', signals: { arbitration_required: true, class_action_waiver: true, at_will_employment: false, pip_requires_prior_warning: false, pip_requires_documentation: false, pip_employee_has_right_to_respond: false, has_anti_harassment_policy: false, harassment_reporting_procedure: false, non_retaliation_clause: false, for_cause_termination_required: false, fmla_rights_documented: false, pip_requires_specific_metrics: false }, signalSummary: ['arbitration_required', 'class_action_waiver'] }
+    ]}),
+    ingest: (data) => Promise.resolve({ success: true, docId: 'ctx-new', displayName: data.displayName || 'New Document', signals: { at_will_employment: true }, signalSummary: ['at_will_employment'] }),
+    ingestFile: () => Promise.resolve({ success: true, docId: 'ctx-file', displayName: 'Uploaded File', signals: {}, signalSummary: [] }),
+    delete: () => Promise.resolve({ success: true }),
+    toggleActive: () => Promise.resolve({ success: true }),
+    get: (docId) => Promise.resolve({ success: true, document: { doc_id: docId, filename: 'Employee_Handbook_2023.pdf', doc_type: 'handbook', display_name: 'Acme Corp Employee Handbook 2023', full_text: 'EMPLOYEE HANDBOOK\n\nSection 1: Employment At-Will\nEmployment with Acme Corp is at-will. Either party may terminate the employment relationship at any time.\n\nSection 5: Progressive Discipline\nAcme Corp uses a progressive discipline process. Prior to any Performance Improvement Plan (PIP), the employee must receive a verbal warning followed by a written warning.\n\nSection 7: Anti-Harassment Policy\nAcme Corp prohibits harassment and discrimination based on race, color, religion, sex, national origin, age, disability, or any other protected class.\n\nSection 8: Reporting Procedures\nEmployees should report harassment or discrimination to their supervisor, HR, or the anonymous hotline.\n\nSection 9: Non-Retaliation\nRetaliation against any employee who reports harassment or discrimination is strictly prohibited and against policy.\n\nSection 12: FMLA\nEligible employees have the right to take up to 12 weeks of unpaid leave under FMLA.', date_uploaded: '2024-01-05T10:00:00Z', date_effective: '2023-01-01', is_active: true, notes: '', signals: { pip_requires_prior_warning: true, pip_requires_documentation: true, pip_employee_has_right_to_respond: true, has_anti_harassment_policy: true, harassment_reporting_procedure: true, non_retaliation_clause: true, at_will_employment: true, fmla_rights_documented: true }, signalSummary: ['pip_requires_prior_warning', 'pip_requires_documentation', 'pip_employee_has_right_to_respond', 'has_anti_harassment_policy', 'harassment_reporting_procedure', 'non_retaliation_clause', 'at_will_employment', 'fmla_rights_documented'] } }),
+    search: (query) => Promise.resolve({ success: true, results: [{ doc: { doc_id: 'ctx-1', display_name: 'Employee Handbook' }, excerpts: ['...progressive discipline process. Prior to any PIP...'] }] }),
+    signalsSummary: () => Promise.resolve({ success: true, summary: { pip_requires_prior_warning: 'Employee Handbook', non_retaliation_clause: 'Employee Handbook', arbitration_required: 'Arbitration Agreement' } }),
+    types: () => Promise.resolve({ success: true, types: { employment_agreement: 'Employment Agreement / Offer Letter', handbook: 'Employee Handbook', harassment_policy: 'Harassment / Anti-Discrimination Policy', pip_policy: 'PIP / Performance Improvement Policy', progressive_discipline: 'Progressive Discipline Policy', fmla_policy: 'FMLA / Leave Policy', retaliation_policy: 'Non-Retaliation Policy', arbitration_agreement: 'Arbitration / Dispute Resolution Agreement', nda: 'NDA / Confidentiality Agreement', job_description: 'Job Description / Role Definition', severance_agreement: 'Severance Agreement', company_email: 'Company Email / HR Communication', other_policy: 'Other Policy Document', other: 'Other' } })
+  },
+  assessor: {
+    assess: (data) => Promise.resolve({ success: true, result: {
+      inputType: data.inputType || 'pip_document',
+      riskLevel: 'HIGH',
+      flags: [
+        { id: 'vague_performance_claims', severity: 'high', title: 'Vague Performance Claims', detail: 'Document uses subjective language ("attitude", "not a team player") without specific, measurable performance deficiencies.', category: 'pattern' },
+        { id: 'timing_suspicious', severity: 'high', title: 'Suspicious Timing', detail: 'Document was issued 36 days after a protected activity (discrimination complaint filed 2024-01-10). This falls within the window courts consider probative of retaliatory intent.', category: 'timing' },
+        { id: 'contradicts_prior_positive', severity: 'moderate', title: 'Contradicts Prior Positive Feedback', detail: 'Employee had previously received positive performance reviews. The sudden shift to negative assessment without intervening events is suspicious.', category: 'pattern' },
+        { id: 'policy_violation_no_prior_warning', severity: 'high', title: 'Policy Violation: No Prior Warning', detail: 'Company handbook requires verbal warning before written warning. No verbal warning was documented prior to this PIP.', category: 'policy' },
+        { id: 'no_specific_examples', severity: 'moderate', title: 'No Specific Examples', detail: 'Document uses general terms ("frequently fails to meet deadlines") without citing specific dates, projects, or measurable shortfalls.', category: 'pattern' }
+      ],
+      claimsVsEvidence: [
+        { claim: 'Employee frequently misses deadlines', verdict: 'UNSUPPORTED', reasoning: 'No specific deadlines or projects cited. Prior Q1 performance review rated employee as "meets expectations" on timeliness.' },
+        { claim: 'Employee has attitude problems with team', verdict: 'SUSPICIOUS', reasoning: 'Subjective characterization. No specific incidents documented. Vault contains witness statement from coworker describing professional behavior.' },
+        { claim: 'Employee needs to improve communication', verdict: 'VAGUE', reasoning: 'No measurable communication metrics defined. No prior documented concerns about communication.' }
+      ],
+      summary: 'This PIP document presents significant legal risk for the employer. Multiple red flags suggest it may be retaliatory rather than a genuine performance management tool.',
+      legalExposure: 'Strong indicators of retaliation under Burlington Northern v. White. Temporal proximity (36 days) between protected activity and adverse action supports inference of retaliatory motive. Employer\'s own handbook policies appear violated.'
+    }}),
+    expandFlag: (data) => Promise.resolve({ success: true, result: {
+      flagId: data.flagId,
+      deepDive: 'Detailed analysis of this flag with supporting evidence and legal context...',
+      relevantLaw: 'Under Burlington Northern v. White (2006), any action that would deter a reasonable employee from engaging in protected activity constitutes actionable retaliation.',
+      recommendations: ['Document the absence of prior verbal warning', 'Compare timeline against handbook policy requirements', 'Gather comparator evidence showing other employees were not subjected to similar PIPs']
+    }}),
+    deepAnalysis: (data) => Promise.resolve({ success: true, result: {
+      memo: '# LEGAL ASSESSMENT MEMORANDUM\n\n## Document Type: PIP / Performance Improvement Plan\n## Risk Level: HIGH\n\n### Executive Summary\nThis PIP document exhibits multiple characteristics consistent with retaliatory adverse employment action rather than legitimate performance management.\n\n### Key Findings\n1. **Temporal Proximity**: Issued 36 days after protected activity\n2. **Policy Non-Compliance**: Violates employer\'s own progressive discipline policy\n3. **Vague Standards**: Fails to provide measurable, objective performance criteria\n4. **Contradictory Record**: Conflicts with prior positive performance evaluations\n\n### Legal Framework\nUnder the McDonnell Douglas burden-shifting framework, employee can establish prima facie case of retaliation. Employer must then articulate legitimate non-retaliatory reason. The deficiencies in this PIP undermine any such justification.\n\n### Recommendations\n- Preserve all communications surrounding the PIP issuance\n- Document the absence of prior corrective steps required by handbook\n- Identify comparator employees to establish selective enforcement'
+    }}),
+    inputTypes: () => Promise.resolve({ success: true, types: {
+      pip_document: 'PIP / Performance Improvement Plan',
+      written_warning: 'Written Warning / Disciplinary Notice',
+      termination_letter: 'Termination Letter / Separation Notice',
+      performance_review: 'Performance Review / Evaluation',
+      hr_email: 'HR Email / Communication',
+      employer_response: 'Employer Response to Complaint',
+      other: 'Other Employer Document'
+    }})
+  },
   dialog: {
     openFiles: () => Promise.resolve({ canceled: true, filePaths: [] })
-  }
+  },
+
+  // Electron webUtils mock for drag-and-drop file paths
+  getPathForFile: (file) => file.name || 'unknown-file'
 };

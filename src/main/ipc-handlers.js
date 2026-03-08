@@ -21,6 +21,8 @@ const {
   extractActorsFromNarrative,
   ANCHOR_PATTERNS
 } = require('./analysis/anchor-generator');
+const contextStore = require('./analysis/context-store');
+const { DocumentAssessor, DOCUMENT_INPUT_TYPES } = require('./analysis/assessor');
 
 // Track currently open case
 let currentCaseDb = null;
@@ -44,6 +46,7 @@ function textSimilarity(textA, textB) {
 }
 
 function registerIpcHandlers() {
+  console.log('[IPC] Registering handlers...');
 
   // ==================== VAULT ====================
 
@@ -425,10 +428,15 @@ function registerIpcHandlers() {
         return { success: false, error: 'No case is open' };
       }
 
-      // Clean up related records
+      // Clean up all related records referencing this document
       try { currentCaseDb.prepare('DELETE FROM document_date_entries WHERE document_id = ?').run(docId); } catch (e) {}
       try { currentCaseDb.prepare('DELETE FROM actor_appearances WHERE document_id = ?').run(docId); } catch (e) {}
       try { currentCaseDb.prepare('DELETE FROM anchor_evidence WHERE document_id = ?').run(docId); } catch (e) {}
+      try { currentCaseDb.prepare('DELETE FROM anchor_documents WHERE document_id = ?').run(docId); } catch (e) {}
+      try { currentCaseDb.prepare('DELETE FROM incident_documents WHERE document_id = ?').run(docId); } catch (e) {}
+      try { currentCaseDb.prepare('DELETE FROM claim_evidence WHERE document_id = ?').run(docId); } catch (e) {}
+      try { currentCaseDb.prepare('DELETE FROM pay_records WHERE document_id = ?').run(docId); } catch (e) {}
+      try { currentCaseDb.prepare('DELETE FROM timeline_connections WHERE (source_id = ? AND source_type = "document") OR (target_id = ? AND target_type = "document")').run(docId, docId); } catch (e) {}
 
       // Delete from documents table
       currentCaseDb.prepare('DELETE FROM documents WHERE id = ?').run(docId);
@@ -499,13 +507,12 @@ function registerIpcHandlers() {
     }
   });
 
-  // Update recap status on a document
+  // Update recap status on a document (legacy, kept for compat)
   ipcMain.handle('documents:updateRecapStatus', async (event, docId, isRecap, responseReceived) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
       }
-      // Ensure columns exist
       try { currentCaseDb.prepare('SELECT is_recap FROM documents LIMIT 1').get(); }
       catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN is_recap BOOLEAN DEFAULT 0'); } catch (e2) {} }
       try { currentCaseDb.prepare('SELECT response_received FROM documents LIMIT 1').get(); }
@@ -514,6 +521,28 @@ function registerIpcHandlers() {
       currentCaseDb.prepare(`
         UPDATE documents SET is_recap = ?, response_received = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
       `).run(isRecap ? 1 : 0, responseReceived != null ? (responseReceived ? 1 : 0) : null, docId);
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Update document subtype classification (replaces recap toggle)
+  ipcMain.handle('documents:updateDocumentSubtype', async (event, docId, subtype) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+      try { currentCaseDb.prepare('SELECT document_subtype FROM documents LIMIT 1').get(); }
+      catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN document_subtype TEXT DEFAULT NULL'); } catch (e2) {} }
+      try { currentCaseDb.prepare('SELECT is_recap FROM documents LIMIT 1').get(); }
+      catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN is_recap BOOLEAN DEFAULT 0'); } catch (e2) {} }
+
+      const isRecap = subtype ? 1 : 0;
+      currentCaseDb.prepare(`
+        UPDATE documents SET document_subtype = ?, is_recap = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).run(subtype || null, isRecap, docId);
 
       return { success: true };
     } catch (error) {
@@ -1980,6 +2009,7 @@ function registerIpcHandlers() {
         const precedentMapping = {
           'REPORTED': ['faragher', 'joshua_filing'],
           'ADVERSE_ACTION': ['burlington_northern', 'harris', 'muldrow_some_harm'],
+          'HARASSMENT': ['harris', 'vance', 'morgan', 'faragher', 'monaghan_retaliation'],
           'HELP': ['faragher'],
           'END': ['burlington_northern']
         };
@@ -2110,6 +2140,29 @@ function registerIpcHandlers() {
 
       const stmt = caseDb.prepare(`UPDATE anchors SET ${fields.join(', ')} WHERE id = ?`);
       stmt.run(...values);
+
+      // Auto-link precedents when anchor type changes
+      if (updates.type) {
+        const typeMapping = {
+          'REPORTED': ['faragher', 'joshua_filing'],
+          'ADVERSE_ACTION': ['burlington_northern', 'harris', 'muldrow_some_harm'],
+          'HARASSMENT': ['harris', 'vance', 'morgan', 'faragher', 'monaghan_retaliation'],
+          'HELP': ['faragher'],
+          'END': ['burlington_northern']
+        };
+        const precedents = typeMapping[updates.type];
+        if (precedents) {
+          for (const precId of precedents) {
+            try {
+              caseDb.prepare(`
+                INSERT OR IGNORE INTO anchor_precedents (anchor_id, precedent_id, relevance_note, linked_at)
+                VALUES (?, ?, ?, datetime('now'))
+              `).run(anchorId, precId, 'Auto-linked on type change');
+            } catch (e) {}
+          }
+        }
+      }
+
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -2656,6 +2709,284 @@ function registerIpcHandlers() {
       return { success: false, error: error.message };
     }
   });
+
+  // ==================== CONTEXT DOCUMENTS ====================
+
+  ipcMain.handle('contextDocs:list', async () => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+      const docs = contextStore.listContextDocuments(currentCaseDb);
+      return { success: true, documents: docs };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('contextDocs:ingest', async (event, { text, filename, docType, displayName, dateEffective, notes }) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+      const result = contextStore.ingestContextDocument(currentCaseDb, {
+        text, filename, docType, displayName, dateEffective, notes
+      });
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('contextDocs:ingestFile', async (event, { filePath, docType, displayName, dateEffective, notes }) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+      const path = require('path');
+      const filename = path.basename(filePath);
+      const ext = path.extname(filePath).toLowerCase();
+
+      const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif', '.tiff', '.tif', '.svg'];
+      const pdfExts = ['.pdf'];
+      let fileContent;
+
+      if (imageExts.includes(ext)) {
+        // Run OCR on image files (policy docs are often photos of printed text)
+        const { runOcr } = require('./ingest/ocr-engine');
+        const rawBuffer = fs.readFileSync(filePath);
+        const ocrText = await runOcr(rawBuffer, `image/${ext.slice(1)}`);
+        if (ocrText && ocrText.length > 10) {
+          fileContent = ocrText;
+          console.log(`[contextDocs] OCR extracted ${ocrText.length} chars from ${filename}`);
+        } else {
+          fileContent = `[Image file: ${filename}]\nType: ${ext.slice(1).toUpperCase()}\nUploaded as supporting evidence.\n(OCR could not extract readable text from this image.)`;
+          console.log(`[contextDocs] OCR got minimal text from ${filename}, stored as image reference`);
+        }
+      } else if (pdfExts.includes(ext)) {
+        // Extract text from PDFs using pdf-parse
+        const pdfParse = require('pdf-parse');
+        const rawBuffer = fs.readFileSync(filePath);
+        try {
+          const pdfData = await pdfParse(rawBuffer);
+          fileContent = (pdfData.text || '').trim();
+          console.log(`[contextDocs] PDF extracted ${fileContent.length} chars from ${filename}`);
+          // If PDF has very little text it might be a scanned doc — try OCR
+          if (fileContent.length < 50) {
+            console.log(`[contextDocs] PDF text too short, likely scanned — skipping OCR for PDFs`);
+            if (fileContent.length === 0) {
+              fileContent = `[Scanned PDF: ${filename}]\nThis PDF appears to be a scanned document with no extractable text.\nPage count: ${pdfData.numpages || 'unknown'}`;
+            }
+          }
+        } catch (pdfErr) {
+          console.error(`[contextDocs] PDF parse failed for ${filename}:`, pdfErr.message);
+          fileContent = `[PDF file: ${filename}]\nCould not extract text from this PDF.`;
+        }
+      } else {
+        fileContent = fs.readFileSync(filePath, 'utf-8');
+      }
+
+      const result = contextStore.ingestContextDocument(currentCaseDb, {
+        text: fileContent,
+        filename,
+        docType,
+        displayName: displayName || path.parse(filePath).name,
+        dateEffective,
+        notes
+      });
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('contextDocs:delete', async (event, docId) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+      contextStore.deleteContextDocument(currentCaseDb, docId);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('contextDocs:toggleActive', async (event, docId, isActive) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+      contextStore.toggleContextDocumentActive(currentCaseDb, docId, isActive);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('contextDocs:get', async (event, docId) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+      const doc = contextStore.getContextDocument(currentCaseDb, docId);
+      return doc ? { success: true, document: doc } : { success: false, error: 'Not found' };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('contextDocs:search', async (event, query) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+      const results = contextStore.searchContextDocuments(currentCaseDb, query);
+      return { success: true, results };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('contextDocs:signalsSummary', async () => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+      const summary = contextStore.activeSignalsSummary(currentCaseDb);
+      return { success: true, summary };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('contextDocs:types', async () => {
+    return { success: true, types: contextStore.DOCUMENT_TYPES };
+  });
+
+  // ==================== SETTINGS ====================
+
+  ipcMain.handle('settings:get', async (event, key) => {
+    try {
+      const value = db.getSetting(key);
+      return { success: true, value };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('settings:set', async (event, key, value) => {
+    try {
+      db.setSetting(key, value);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== ASSESSOR ====================
+  console.log('[IPC] Registering assessor handlers...');
+
+  ipcMain.handle('assessor:assess', async (event, { inputText, docType }) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+
+      const apiKey = db.getSetting('anthropic_api_key');
+      console.log('[Assessor] assess called, docType=' + docType + ', hasKey=' + !!apiKey + ', textLen=' + (inputText?.length || 0));
+
+      // Gather vault incidents
+      let vaultIncidents = [];
+      try {
+        const incidents = currentCaseDb.prepare('SELECT * FROM incidents').all();
+        vaultIncidents = incidents.map(inc => ({
+          incident_type: inc.incident_type,
+          incident_severity: inc.computed_severity || inc.base_severity,
+          harasser_role: null,
+          harasser_in_reporting_chain: false,
+          reports: [],
+          employer_liability: {
+            level: 'unknown',
+            signals: inc.involves_retaliation ? ['potential_retaliation_post_report'] : [],
+          },
+        }));
+      } catch (e) { /* no incidents table yet */ }
+
+      const assessor = new DocumentAssessor(apiKey || null);
+
+      // Wrap the entire assess call in a 45s timeout to prevent hangs
+      const result = await Promise.race([
+        assessor.assess({
+          inputText,
+          docType,
+          vaultIncidents,
+          caseDb: currentCaseDb,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Assessment timed out after 45 seconds. Try again or check your API key in Settings.')), 45000)
+        ),
+      ]);
+
+      console.log('[Assessor] assess completed, flags=' + (result.auto_flags?.length || 0));
+      return { success: true, result };
+    } catch (error) {
+      console.error('[Assessor] assess error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('assessor:expandFlag', async (event, { flag, inputText }) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+      const apiKey = db.getSetting('anthropic_api_key');
+      if (!apiKey) return { success: false, error: 'API key not configured. Set it in Settings.' };
+
+      let vaultIncidents = [];
+      try {
+        const incidents = currentCaseDb.prepare('SELECT * FROM incidents').all();
+        vaultIncidents = incidents.map(inc => ({
+          incident_type: inc.incident_type,
+          incident_severity: inc.computed_severity || inc.base_severity,
+          employer_liability: {
+            level: 'unknown',
+            signals: inc.involves_retaliation ? ['potential_retaliation_post_report'] : [],
+          },
+        }));
+      } catch (e) {}
+
+      const assessor = new DocumentAssessor(apiKey);
+      const analysis = await assessor.expandFlag(flag, {
+        inputText,
+        vaultIncidents,
+        caseDb: currentCaseDb,
+      });
+
+      return { success: true, analysis };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('assessor:deepAnalysis', async (event, { result, inputText }) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case open' };
+      const apiKey = db.getSetting('anthropic_api_key');
+      if (!apiKey) return { success: false, error: 'API key not configured. Set it in Settings.' };
+
+      let vaultIncidents = [];
+      try {
+        const incidents = currentCaseDb.prepare('SELECT * FROM incidents').all();
+        vaultIncidents = incidents.map(inc => ({
+          incident_type: inc.incident_type,
+          incident_severity: inc.computed_severity || inc.base_severity,
+          employer_liability: {
+            level: 'unknown',
+            signals: inc.involves_retaliation ? ['potential_retaliation_post_report'] : [],
+          },
+        }));
+      } catch (e) {}
+
+      const assessor = new DocumentAssessor(apiKey);
+      const memo = await assessor.requestDeepAnalysis(result, {
+        inputText,
+        vaultIncidents,
+        caseDb: currentCaseDb,
+      });
+
+      return { success: true, memo };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('assessor:inputTypes', async () => {
+    return { success: true, types: DOCUMENT_INPUT_TYPES };
+  });
+
+  console.log('[IPC] All handlers registered successfully');
 }
 
 function closeCurrentCase() {

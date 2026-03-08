@@ -151,6 +151,44 @@ const ANCHOR_PATTERNS = {
     color: '#DC2626'
   },
 
+  HARASSMENT: {
+    patterns: [
+      /(?:harassed|harassment|hostile\s+(?:conduct|behavior|environment))/gi,
+      /(?:bullied|bullying|bully)/gi,
+      /(?:sexually\s+harassed|sexual\s+harassment|unwanted\s+(?:sexual|physical)\s+(?:contact|advance|comment|attention))/gi,
+      /(?:groped|touched|cornered|grabbed)\s+(?:me|my)/gi,
+      /(?:inappropriate|offensive|degrading|humiliating)\s+(?:comment|remark|joke|language|behavior|conduct|gesture|email|text|message)/gi,
+      /(?:called\s+me|referred\s+to\s+me\s+as)\s+(?:a\s+)?(?:bitch|crazy|emotional|hysterical|difficult|aggressive|angry|hostile|intimidating)/gi,
+      /(?:yelled|screamed|shouted|cursed|swore|cussed)\s+(?:at\s+)?me/gi,
+      /(?:mocked|ridiculed|belittled|demeaned|degraded|humiliated)\s+(?:me|my)/gi,
+      /(?:threatened|intimidated|menaced|coerced|pressured)\s+(?:me|to)/gi,
+      /(?:stalked|followed|surveilled|monitored|tracked)\s+(?:me|my)/gi,
+      /(?:racial|racist|sexist|homophobic|ableist|ethnic)\s+(?:slur|epithet|joke|comment|remark)/gi,
+      /(?:unwelcome|unwanted|unsolicited)\s+(?:comment|advance|contact|attention|touching)/gi,
+      /(?:quid\s+pro\s+quo|sleep\s+with|sexual\s+favor)/gi,
+      /(?:severe\s+(?:or|and)\s+pervasive|pervasive\s+(?:or|and)\s+severe)/gi,
+      /(?:created|fostered|maintained|allowed|permitted)\s+(?:a\s+)?hostile/gi,
+      /(?:made\s+me\s+(?:feel|cry|uncomfortable|unsafe|afraid|scared|anxious|sick))/gi,
+      /(?:targeted|singled\s+out)\s+(?:me|because)/gi,
+      /(?:repeated|pattern\s+of|ongoing|continuous|persistent)\s+(?:harassment|misconduct|abuse|mistreatment)/gi
+    ],
+    titleExtractor: (segment) => {
+      if (/sexual\s+harass|unwanted\s+(?:sexual|physical)|groped|touched|quid/i.test(segment)) return 'Sexual Harassment';
+      if (/racial|racist|ethnic|slur|epithet/i.test(segment)) return 'Racial Harassment';
+      if (/bully|bullied/i.test(segment)) return 'Bullying';
+      if (/yelled|screamed|shouted|cursed/i.test(segment)) return 'Verbal Abuse';
+      if (/threatened|intimidat/i.test(segment)) return 'Threats/Intimidation';
+      if (/stalked|followed|surveill/i.test(segment)) return 'Stalking/Surveillance';
+      if (/hostile.*environment|severe.*pervasive|pervasive.*severe/i.test(segment)) return 'Hostile Work Environment';
+      if (/humiliat|degrad|demeaned|belittled/i.test(segment)) return 'Humiliation/Degradation';
+      if (/targeted|singled/i.test(segment)) return 'Targeted Harassment';
+      if (/pattern|repeated|ongoing|continuous|persistent/i.test(segment)) return 'Pattern of Harassment';
+      return 'Harassment Incident';
+    },
+    defaultTitle: 'Harassment Incident',
+    color: '#BE185D'
+  },
+
   MILESTONE: {
     patterns: [
       /(?:promoted|promotion)/gi,
@@ -178,7 +216,7 @@ const ANCHOR_PATTERNS = {
 
 // Priority order for matching — ADVERSE_ACTION before REPORTED so
 // "told to stop documenting" matches adverse, not reporting
-const TYPE_PRIORITY = ['START', 'END', 'ADVERSE_ACTION', 'REPORTED', 'HELP', 'MILESTONE'];
+const TYPE_PRIORITY = ['START', 'END', 'ADVERSE_ACTION', 'HARASSMENT', 'REPORTED', 'HELP', 'MILESTONE'];
 
 /**
  * Segment narrative into meaningful chunks that each represent
@@ -469,6 +507,8 @@ function generateAnchorsFromIncidents(incidents) {
       anchorType = 'REPORTED';
     } else if (incident.incident_type === 'ADVERSE_ACTION') {
       anchorType = 'ADVERSE_ACTION';
+    } else if (incident.incident_type === 'harassment' || incident.incident_type === 'sexual_harassment') {
+      anchorType = 'HARASSMENT';
     } else if (incident.subtype === 'termination') {
       anchorType = 'END';
     }

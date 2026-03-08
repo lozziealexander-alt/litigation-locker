@@ -268,11 +268,11 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
     setLoading(false);
   }
 
-  // ---- Filter dated/undated by hidden types and recap toggle ----
+  // ---- Filter dated/undated by hidden types and recap/subtype toggle ----
   const filteredDated = useMemo(() => {
     return dated.filter(doc => {
       if (hiddenTypes.size > 0 && hiddenTypes.has(doc.evidence_type)) return false;
-      if (hideRecaps && doc.is_recap) return false;
+      if (hideRecaps && (doc.is_recap || doc.document_subtype)) return false;
       return true;
     });
   }, [dated, hiddenTypes, hideRecaps]);
@@ -280,7 +280,7 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
   const filteredUndated = useMemo(() => {
     return undated.filter(doc => {
       if (hiddenTypes.size > 0 && hiddenTypes.has(doc.evidence_type)) return false;
-      if (hideRecaps && doc.is_recap) return false;
+      if (hideRecaps && (doc.is_recap || doc.document_subtype)) return false;
       return true;
     });
   }, [undated, hiddenTypes, hideRecaps]);
@@ -561,7 +561,7 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
 
   const totalDocs = dated.length + undated.length;
   const filteredTotal = filteredDated.length + filteredUndated.length;
-  const hasRecaps = dated.some(d => d.is_recap) || undated.some(d => d.is_recap);
+  const hasRecaps = dated.some(d => d.is_recap || d.document_subtype) || undated.some(d => d.is_recap || d.document_subtype);
   const canZoomIn = ZOOM_LEVELS.indexOf(zoomLevel) < ZOOM_LEVELS.length - 1;
   const canZoomOut = ZOOM_LEVELS.indexOf(zoomLevel) > 0;
 
@@ -736,7 +736,7 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
                       return next;
                     });
                   }}
-                  title={isHidden ? `Show ${formatEvidenceType(type)}` : `Hide ${formatEvidenceType(type)}`}
+                  title={`${formatEvidenceType(type)}: ${getEvidenceDescription(type)}${isHidden ? ' (hidden)' : ''}`}
                 >
                   <span style={{
                     ...styles.legendDot,
@@ -760,7 +760,7 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
                   borderColor: colors.primary
                 }}
                 onClick={() => setHideRecaps(prev => !prev)}
-                title={hideRecaps ? 'Show recap/self-doc emails' : 'Hide recap/self-doc emails'}
+                title={hideRecaps ? 'Show recaps, feedback & forwarded emails' : 'Hide recaps, feedback & forwarded emails'}
               >
                 <span style={{
                   ...styles.legendDot,
@@ -771,7 +771,7 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
                 <span style={{
                   ...styles.legendLabel,
                   ...(hideRecaps ? { textDecoration: 'line-through', opacity: 0.5 } : {})
-                }}>Recap / Self-Doc</span>
+                }}>Subtypes</span>
               </button>
             )}
           </div>
@@ -969,6 +969,7 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
                           } : {})
                         }}
                         onClick={() => onSelectDocument && onSelectDocument(doc)}
+                        title={`${formatEvidenceType(doc.evidence_type)}: ${getEvidenceDescription(doc.evidence_type)}`}
                       >
                         {externalHighlightSet?.has(doc.id) && (
                           <span style={{
@@ -1039,7 +1040,7 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
                             ...styles.eventType,
                             color: getEvidenceColor(doc.evidence_type),
                             opacity: doc.evidence_confidence != null ? Math.max(0.5, doc.evidence_confidence) : 1
-                          }}>
+                          }} title={getEvidenceDescription(doc.evidence_type)}>
                             <span style={styles.eventIcon}>{getEvidenceIcon(doc.evidence_type)}</span>
                             {formatEvidenceType(doc.evidence_type)}
                             {doc.evidence_confidence != null && doc.evidence_confidence < 0.6 && (
@@ -1320,6 +1321,19 @@ function getPrecedentColor(percent) {
   return '#FEE2E2';
 }
 
+const EVIDENCE_TYPE_GLOSSARY = {
+  ADVERSE_ACTION: 'Negative employment action taken against you (demotion, warning, termination)',
+  PROTECTED_ACTIVITY: 'Your formal complaints, EEOC filings, or whistleblower reports',
+  REQUEST_FOR_HELP: 'Emails or messages where you asked for help or escalated concerns',
+  INCIDENT: 'Records of discriminatory incidents, harassment, or hostile behavior',
+  RESPONSE: 'Company responses to your complaints or reports',
+  CLAIM_AGAINST_YOU: 'Performance complaints, PIPs, or allegations made about you',
+  CLAIM_YOU_MADE: 'Formal claims, charges, or legal filings you initiated',
+  PAY_RECORD: 'Pay stubs, bonus records, compensation documentation',
+  SUPPORTING: 'Witness statements, corroborating evidence, character references',
+  CONTEXT: 'Background documents, org charts, policies, general context'
+};
+
 function formatEvidenceType(type) {
   const labels = {
     'ADVERSE_ACTION': 'Adverse Action',
@@ -1334,6 +1348,10 @@ function formatEvidenceType(type) {
     'SUPPORTING': 'Supporting'
   };
   return labels[type] || type?.replace(/_/g, ' ') || 'Document';
+}
+
+function getEvidenceDescription(type) {
+  return EVIDENCE_TYPE_GLOSSARY[type] || '';
 }
 
 function getStyles() {

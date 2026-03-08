@@ -155,6 +155,14 @@ const INCIDENT_TYPE_MAP = {
   verbal_abuse: [
     /\b(yell(ed|ing)|scream(ed|ing)|berat(ed|ing)|insult(ed|ing)|humiliat(ed|ing)|degrading)\b/i,
   ],
+  harassment: [
+    /\b(harass(ed|ment|ing))\b/i,
+    /\b(bully(ing|ied)?|bullied)\b/i,
+    /\b(intimidat(ed|ing|ion))\b/i,
+    /\b(target(ed|ing))\b/i,
+    /\b(hostile|abusive|toxic)\b.{0,40}\b(behavior|conduct|environment|treatment)\b/i,
+    /\b(singled out|picked on|ganged up)\b/i,
+  ],
 };
 
 const SEVERITY_HIGH = [
@@ -167,6 +175,50 @@ const SEVERITY_HIGH = [
 const SEVERITY_LOW = [
   /\b(comment(ed)?|said|joked|stared|looked|wink(ed)?|whistled)\b/i,
   /\b(one time|once|single)\b/i,
+];
+
+// Harasser role detection
+const HARASSER_SUPERVISOR_PATTERNS = [
+  /\b(my (boss|manager|supervisor|lead|director))\b.{0,40}\b(did|said|sent|touched|grabbed|made|told|commented|whispered)\b/i,
+  /\b(he|she|they)\b.{0,20}\b(is|was|is my|was my)\b.{0,20}\b(boss|manager|supervisor|lead|director)\b/i,
+  /\b(my (boss|manager|supervisor))\b/i,
+  /\b(direct (supervisor|manager|report(s to)))\b/i,
+];
+
+const HARASSER_SENIOR_PATTERNS = [
+  /\b(his boss|her boss|their boss|skip.?level|skip level)\b/i,
+  /\b(boss'?s? boss|manager'?s? manager)\b/i,
+  /\b(VP|vice president|director|senior director|C-suite|CEO|COO|CFO|CTO|CLO|chief)\b.{0,40}\b(did|said|sent|made|told|commented)\b/i,
+  /\b(he|she|they)\b.{0,20}\b(is|was)\b.{0,20}\b(VP|vice president|director|senior director|C-suite|CEO|COO|CFO|CTO)\b/i,
+  /\b(senior (leader|leadership|management|executive))\b/i,
+  /\b(two levels? (above|up|over))\b/i,
+];
+
+const HARASSER_PEER_PATTERNS = [
+  /\b(my (coworker|colleague|peer|teammate|team member))\b/i,
+  /\b(he|she|they)\b.{0,20}\b(is|was)\b.{0,20}\b(coworker|colleague|peer|at (my|the same) level)\b/i,
+  /\b(same (level|team|department|role))\b/i,
+];
+
+// Delay context detection
+const DELAY_POWER_DYNAMIC_PATTERNS = [
+  /\b(didn'?t|did not|couldn'?t|could not)\b.{0,60}\b(report|tell|go to|say anything)\b.{0,80}\b(my (boss|manager|supervisor)|him|her|them)\b.{0,40}\b(was|is|being)\b/i,
+  /\b(he|she|they)\b.{0,20}\b(was|is)\b.{0,20}\b(my (boss|manager|supervisor))\b.{0,60}\b(couldn'?t|didn'?t|no one to|nowhere to)\b/i,
+  /\b(no (one|where) (to|safe) (report|go|turn))\b/i,
+  /\b(he|she|they)\b.{0,20}\b(is|was)\b.{0,20}\b(my (boss|manager|supervisor|direct report))\b/i,
+  /\b(reporting (path|chain|structure|line))\b.{0,60}\b(through|went through|would go through)\b.{0,60}\b(him|her|them)\b/i,
+  /\b(both|all).{0,30}\b(above me|my (supervisors?|managers?|bosses?))\b/i,
+  /\b(boss'?s? boss|his boss|her boss|skip.?level)\b.{0,60}\b(report|told|went)\b/i,
+  /\b(chain of command)\b/i,
+];
+
+const DELAY_FEAR_PATTERNS = [
+  /\b(afraid|scared|fear(ed)?|worried|concerned)\b.{0,80}\b(retaliat|fired|job|career|consequences|repercuss)\b/i,
+  /\b(didn'?t|did not)\b.{0,60}\b(report|say|tell)\b.{0,80}\b(afraid|scared|fear|worried|job|position|career)\b/i,
+  /\b(thought (I|it) would (be|get))\b.{0,80}\b(fired|blamed|ignored|dismissed|retaliat)\b/i,
+  /\b(didn'?t want to (lose|risk))\b.{0,60}\b(job|position|career|livelihood)\b/i,
+  /\b(power (imbalance|dynamic|difference))\b/i,
+  /\b(no one would believe me|didn'?t think (anyone|they) would (believe|listen|act))\b/i,
 ];
 
 // ---------------------------------------------------------------------------
@@ -200,6 +252,37 @@ function detectSeverity(text) {
   if (high > 0.2) return 'high';
   if (low > 0.3 && high < 0.1) return 'low';
   return 'medium';
+}
+
+function detectHarasserRole(text) {
+  const senior = scorePatterns(text, HARASSER_SENIOR_PATTERNS);
+  const supervisor = scorePatterns(text, HARASSER_SUPERVISOR_PATTERNS);
+  const peer = scorePatterns(text, HARASSER_PEER_PATTERNS);
+  if (senior > 0.15) return 'senior_leadership';
+  if (supervisor > 0.15) return 'supervisor';
+  if (peer > 0.15) return 'peer';
+  return 'unknown';
+}
+
+/**
+ * Only called when delayed_reporting flag is present on a REPORT_* entry.
+ * Determines WHY reporting was delayed — the most legally important distinction.
+ *
+ * power_dynamic_barrier → harasser was in the reporting chain
+ * fear_of_retaliation   → reasonable fear deterred earlier reporting
+ * no_explanation        → unexplained delay (only context that hurts)
+ */
+function detectDelayContext(text, knownHarasserRole) {
+  const power = DELAY_POWER_DYNAMIC_PATTERNS.some(p => p.test(text));
+  const fear = DELAY_FEAR_PATTERNS.some(p => p.test(text));
+  if (power) return 'power_dynamic_barrier';
+  if (fear) return 'fear_of_retaliation';
+  // Structural inference: if harasser was in the chain of command,
+  // the barrier existed even if not explicitly stated
+  if (knownHarasserRole === 'supervisor' || knownHarasserRole === 'senior_leadership') {
+    return 'power_dynamic_barrier';
+  }
+  return 'no_explanation';
 }
 
 function extractReportedTo(text) {
@@ -245,6 +328,9 @@ function buildFlags(text, category) {
     if (/\b(weeks?|months?|years?)\s+(later|after|had passed)\b/i.test(text)) {
       flags.push('delayed_reporting');
     }
+    if (/\b(this past (month|week)|last month|finally|only (recently|just now))\b/i.test(text)) {
+      if (!flags.includes('delayed_reporting')) flags.push('delayed_reporting');
+    }
     if (NO_ACTION_PATTERNS.some(p => p.test(text))) {
       flags.push('no_action_taken');
     }
@@ -263,7 +349,7 @@ function buildFlags(text, category) {
     if (/\b(alone|no witnesses?|no one (else )?(was |could )?(there|see|hear))\b/i.test(text)) {
       flags.push('no_witnesses');
     }
-    if (/\b(ongoing|repeated|multiple times|pattern|history)\b/i.test(text)) {
+    if (/\b(ongoing|repeated|multiple times|pattern|history|remarks)\b/i.test(text)) {
       flags.push('pattern_of_conduct');
     }
   }
@@ -280,10 +366,12 @@ function buildFlags(text, category) {
  *
  * @param {string} text - Raw text to classify
  * @param {boolean} isPrimaryIncident - If true, forced to INCIDENT category
+ * @param {string|null} knownHarasserRole - Pass harasser_role from INCIDENT when categorizing subsequent entries
  * @returns {Object} CategorizedEntry
  */
-function categorize(text, isPrimaryIncident = false) {
+function categorize(text, isPrimaryIncident = false, knownHarasserRole = null) {
   if (isPrimaryIncident) {
+    const harasserRole = detectHarasserRole(text);
     return {
       rawText: text,
       category: 'INCIDENT',
@@ -297,6 +385,8 @@ function categorize(text, isPrimaryIncident = false) {
       flags: buildFlags(text, 'INCIDENT'),
       notes: '',
       noticeSequence: null,
+      harasserRole,
+      delayContext: null,
     };
   }
 
@@ -354,7 +444,15 @@ function categorize(text, isPrimaryIncident = false) {
 
   const confidence = bestScore < 0.05 ? 0 : Math.min(bestScore * 2, 1.0);
   const severity = bestCategory === 'INCIDENT' ? detectSeverity(text) : null;
+  const harasserRole = bestCategory === 'INCIDENT' ? detectHarasserRole(text) : null;
   const isReport = bestCategory.startsWith('REPORT');
+  const flags = buildFlags(text, bestCategory);
+
+  // Delay context — only for REPORT_* with delayed_reporting flag
+  let delayContext = null;
+  if (isReport && flags.includes('delayed_reporting')) {
+    delayContext = detectDelayContext(text, knownHarasserRole);
+  }
 
   return {
     rawText: text,
@@ -366,11 +464,13 @@ function categorize(text, isPrimaryIncident = false) {
     dateHint: extractDateHint(text),
     isPrimaryIncident: false,
     confidence: Math.round(confidence * 100) / 100,
-    flags: buildFlags(text, bestCategory),
+    flags,
     notes: (bestCategory !== 'INCIDENT' && bestCategory !== 'UNKNOWN')
       ? 'Severity not assigned — this is a reporting/administrative record, not the underlying incident.'
       : '',
     noticeSequence: null,
+    harasserRole,
+    delayContext,
   };
 }
 
@@ -393,6 +493,7 @@ class NoticeRecord {
   constructor(recipient) {
     this.recipient = recipient;
     this.reportsToRecipient = [];
+    this.verbalGapCoveredByEmail = false;
   }
 
   get noticeCount() {
@@ -407,6 +508,11 @@ class NoticeRecord {
     return this.reportsToRecipient.every(r => r.flags.includes('verbal_report_only'));
   }
 
+  /** True only if all reports were verbal AND no recap email exists to cover the gap. */
+  get effectiveVerbalOnly() {
+    return this.allVerbal && !this.verbalGapCoveredByEmail;
+  }
+
   get liabilitySignals() {
     const signals = [];
     if (this.noticeCount >= 1 && !this.anyActionTaken) {
@@ -418,8 +524,10 @@ class NoticeRecord {
     if (this.noticeCount >= 3 && !this.anyActionTaken) {
       signals.push('pattern_of_deliberate_indifference');
     }
-    if (this.allVerbal) {
+    if (this.effectiveVerbalOnly) {
       signals.push('no_written_acknowledgement_of_notice');
+    } else if (this.allVerbal && this.verbalGapCoveredByEmail) {
+      signals.push('verbal_notice_covered_by_followup_email');
     }
     if (this.noticeCount >= 2) {
       signals.push('multiple_reports_to_same_recipient');
@@ -433,11 +541,14 @@ class NoticeRecord {
       timesNotified: this.noticeCount,
       actionTaken: this.anyActionTaken,
       allVerbalOnly: this.allVerbal,
+      verbalGapCoveredByEmail: this.verbalGapCoveredByEmail,
+      effectiveVerbalOnly: this.effectiveVerbalOnly,
       liabilitySignals: this.liabilitySignals,
       reports: this.reportsToRecipient.map(r => ({
         date: r.dateHint,
         flags: r.flags,
         noticeSequence: r.noticeSequence,
+        delayContext: r.delayContext,
       })),
     };
   }
@@ -451,11 +562,13 @@ class NoticeRecord {
  * One underlying incident and all related records.
  *
  * DESIGN PRINCIPLE — two separate tracks:
- *   chainSeverity         → anchored to INCIDENT only. Never inflated by
- *                           number of reports, emails, or meetings.
- *   employerLiability     → computed from NoticeRecords. Tracks how many
- *                           times employer was on notice, whether they acted,
- *                           whether conduct continued.
+ *   chainSeverity           → anchored to INCIDENT only. Never inflated by
+ *                             number of reports, emails, or meetings.
+ *   employerLiability       → computed from NoticeRecords. Tracks how many
+ *                             times employer was on notice, whether they acted,
+ *                             whether conduct continued.
+ *   delayContextSignals     → captures WHY reporting was delayed, because
+ *                             the reason matters legally.
  */
 class IncidentChain {
   constructor() {
@@ -475,12 +588,37 @@ class IncidentChain {
     return this.incident?.severity || null;
   }
 
+  get harasserRole() {
+    return this.incident?.harasserRole || null;
+  }
+
   get reportCount() {
     return this.reports.length;
   }
 
   get isDocumented() {
     return this.reports.length > 0 || this.followupEmails.length > 0;
+  }
+
+  /** Surfaces how delay is explained across all reports. */
+  get delayContextSignals() {
+    const signals = [];
+    const contexts = this.reports.map(r => r.delayContext).filter(Boolean);
+    if (contexts.includes('power_dynamic_barrier')) {
+      signals.push('delayed_reporting_power_dynamic_barrier');
+      if (this.harasserRole === 'supervisor' || this.harasserRole === 'senior_leadership') {
+        signals.push('harasser_was_in_reporting_chain');
+        signals.push('faragher_ellerth_defense_weakened');
+      }
+    }
+    if (contexts.includes('fear_of_retaliation')) {
+      signals.push('delayed_reporting_fear_of_retaliation');
+      signals.push('delay_legally_recognized_not_penalized');
+    }
+    if (contexts.includes('no_explanation') && !contexts.includes('power_dynamic_barrier')) {
+      signals.push('delayed_reporting_no_context_provided');
+    }
+    return signals;
   }
 
   get employerLiabilitySignals() {
@@ -531,12 +669,14 @@ class IncidentChain {
       incidentType: this.incident?.incidentType || null,
       incidentSeverity: this.chainSeverity,
       incidentDate: this.incident?.dateHint || null,
+      harasserRole: this.harasserRole,
       reports: this.reports.map(r => ({
         category: r.category,
         reportedTo: r.reportedTo,
         date: r.dateHint,
         noticeSequence: r.noticeSequence,
         flags: r.flags,
+        delayContext: r.delayContext,
       })),
       followupEmails: this.followupEmails.length,
       meetings: this.meetings.length,
@@ -544,6 +684,9 @@ class IncidentChain {
       responsesReceived: this.responsesReceived.length,
       retaliationEntries: this.retaliation.length,
       documentationStrength: scoreDocumentation(this),
+      delayContext: {
+        signals: this.delayContextSignals,
+      },
       employerLiability: {
         level: this.employerLiabilityLevel,
         signals: this.employerLiabilitySignals,
@@ -569,8 +712,11 @@ function scoreDocumentation(chain) {
   score += Math.min(chain.responsesReceived.length, 2);
   score += Math.min(chain.witnessStatements.length, 2);
 
+  // Verbal-only reports penalized, but offset if a follow-up email exists
   const verbalReports = chain.reports.filter(r => r.flags.includes('verbal_report_only')).length;
-  score -= verbalReports;
+  const verbalCovered = Object.values(chain.noticeRecords)
+    .filter(nr => nr.verbalGapCoveredByEmail).length;
+  score -= Math.max(0, verbalReports - verbalCovered);
 
   if (score >= 10) return 'strong';
   if (score >= 6) return 'moderate';
@@ -606,13 +752,17 @@ function normalizeRecipient(entry) {
 
 /**
  * Organize categorized entries into one IncidentChain.
- * Populates NoticeRecords, notice_sequence numbers, and
- * conductContinuedPostReport flag.
+ * Populates:
+ *   - NoticeRecords with per-recipient sequence numbers
+ *   - verbal_gap_covered_by_email on NoticeRecords where a FOLLOWUP_EMAIL exists
+ *   - delay_context on REPORT_* entries that have delayed_reporting flag
+ *   - conduct_continued_post_report chain flag
  *
  * @param {Array} entries - Array of categorized entry objects
+ * @param {string|null} knownHarasserRole - Override harasser role if known
  * @returns {IncidentChain}
  */
-function buildChain(entries) {
+function buildChain(entries, knownHarasserRole = null) {
   const chain = new IncidentChain();
 
   for (const entry of entries) {
@@ -638,7 +788,11 @@ function buildChain(entries) {
     }
   }
 
-  // Build NoticeRecords and assign per-recipient sequence numbers
+  // Resolve harasser role for delay context inference
+  const harasserRole = knownHarasserRole || chain.incident?.harasserRole || null;
+
+  // Build NoticeRecords, assign per-recipient sequence numbers,
+  // and resolve delay_context now that harasser_role is known
   const recipientCounters = {};
   for (const report of chain.reports) {
     const recipient = normalizeRecipient(report);
@@ -649,6 +803,35 @@ function buildChain(entries) {
       chain.noticeRecords[recipient] = new NoticeRecord(recipient);
     }
     chain.noticeRecords[recipient].reportsToRecipient.push(report);
+
+    // Resolve delay context if delayed_reporting flag is present
+    if (report.flags.includes('delayed_reporting') && !report.delayContext) {
+      report.delayContext = detectDelayContext(report.rawText, harasserRole);
+    }
+  }
+
+  // Second pass: inherit power_dynamic_barrier across reports to same recipient.
+  // The structural barrier doesn't need to be re-stated on every report.
+  for (const nr of Object.values(chain.noticeRecords)) {
+    const hasPowerBarrier = nr.reportsToRecipient.some(
+      r => r.delayContext === 'power_dynamic_barrier'
+    );
+    if (hasPowerBarrier) {
+      for (const r of nr.reportsToRecipient) {
+        if (r.flags.includes('delayed_reporting') && (r.delayContext === 'no_explanation' || !r.delayContext)) {
+          r.delayContext = 'power_dynamic_barrier';
+        }
+      }
+    }
+  }
+
+  // Check if any FOLLOWUP_EMAIL covers a verbal-only report's gap
+  if (chain.followupEmails.length > 0) {
+    for (const nr of Object.values(chain.noticeRecords)) {
+      if (nr.allVerbal) {
+        nr.verbalGapCoveredByEmail = true;
+      }
+    }
   }
 
   // Detect if conduct continued after any report was made

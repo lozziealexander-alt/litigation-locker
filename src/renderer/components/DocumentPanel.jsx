@@ -3,16 +3,23 @@ import { useTheme } from '../styles/ThemeContext';
 import { colors, shadows, spacing, typography, radius, getEvidenceColor } from '../styles/tokens';
 
 const EVIDENCE_TYPE_OPTIONS = [
-  { value: 'ADVERSE_ACTION', label: 'Adverse Action' },
-  { value: 'INCIDENT', label: 'Incident' },
-  { value: 'PROTECTED_ACTIVITY', label: 'Protected Activity' },
-  { value: 'REQUEST_FOR_HELP', label: 'Request for Help' },
-  { value: 'RESPONSE', label: 'Response' },
-  { value: 'CLAIM_AGAINST_YOU', label: 'Claim Against You' },
-  { value: 'CLAIM_YOU_MADE', label: 'Your Claim' },
-  { value: 'PAY_RECORD', label: 'Pay Record' },
-  { value: 'CONTEXT', label: 'Context' },
-  { value: 'SUPPORTING', label: 'Supporting' }
+  { value: 'ADVERSE_ACTION', label: 'Adverse Action', desc: 'Demotion, warning, termination' },
+  { value: 'INCIDENT', label: 'Incident', desc: 'Discrimination, harassment, hostile behavior' },
+  { value: 'PROTECTED_ACTIVITY', label: 'Protected Activity', desc: 'Complaints, EEOC filings, whistleblower reports' },
+  { value: 'REQUEST_FOR_HELP', label: 'Request for Help', desc: 'Asking for help or escalating concerns' },
+  { value: 'RESPONSE', label: 'Response', desc: 'Company responses to your complaints' },
+  { value: 'CLAIM_AGAINST_YOU', label: 'Claim Against You', desc: 'PIPs, performance complaints, allegations' },
+  { value: 'CLAIM_YOU_MADE', label: 'Your Claim', desc: 'Formal claims, charges, legal filings' },
+  { value: 'PAY_RECORD', label: 'Pay Record', desc: 'Pay stubs, bonus records, compensation' },
+  { value: 'CONTEXT', label: 'Context', desc: 'Org charts, policies, background docs' },
+  { value: 'SUPPORTING', label: 'Supporting', desc: 'Witness statements, corroborating evidence' }
+];
+
+const DOCUMENT_SUBTYPE_OPTIONS = [
+  { value: '', label: '— None —' },
+  { value: 'recap_self_doc', label: '📝 Recap / Self-Documentation' },
+  { value: 'feedback_email', label: '📧 Feedback Email' },
+  { value: 'forward_fyi', label: '📤 Forward / FYI' }
 ];
 
 export default function DocumentPanel({ document: doc, onClose, onDocumentUpdated }) {
@@ -328,27 +335,28 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
             >
               <option value="">-- Select type --</option>
               {EVIDENCE_TYPE_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                <option key={opt.value} value={opt.value}>{opt.label} — {opt.desc}</option>
               ))}
             </select>
           </div>
 
-          {/* Recap / Feedback toggle */}
+          {/* Document subtype classification */}
           <div style={styles.section}>
-            <label style={styles.recapToggle}>
-              <input
-                type="checkbox"
-                checked={!!displayDoc.is_recap}
-                onChange={async (e) => {
-                  const newVal = e.target.checked ? 1 : 0;
-                  await window.api.documents.updateRecapStatus(displayDoc.id, newVal, displayDoc.response_received ?? null);
-                  setFullDoc(prev => prev ? { ...prev, is_recap: newVal } : prev);
-                  onDocumentUpdated?.();
-                }}
-                style={{ marginRight: spacing.sm }}
-              />
-              <span style={styles.recapLabel}>{'\uD83D\uDCDD'} Recap / Feedback Email</span>
-            </label>
+            <label style={styles.recapLabel}>Document Subtype</label>
+            <select
+              style={styles.typeSelect}
+              value={displayDoc.document_subtype || ''}
+              onChange={async (e) => {
+                const newVal = e.target.value || null;
+                await window.api.documents.updateDocumentSubtype(displayDoc.id, newVal);
+                setFullDoc(prev => prev ? { ...prev, document_subtype: newVal, is_recap: newVal ? 1 : 0 } : prev);
+                onDocumentUpdated?.();
+              }}
+            >
+              {DOCUMENT_SUBTYPE_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
           </div>
 
           {/* Primary date with editing */}

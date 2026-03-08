@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS case_context (
 -- Anchors (major case milestones)
 CREATE TABLE IF NOT EXISTS anchors (
   id TEXT PRIMARY KEY,
-  anchor_type TEXT NOT NULL CHECK(anchor_type IN ('START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'MILESTONE', 'END')),
+  anchor_type TEXT NOT NULL CHECK(anchor_type IN ('START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'HARASSMENT', 'MILESTONE', 'END')),
   title TEXT NOT NULL,
   description TEXT,
   anchor_date DATE,
@@ -266,6 +266,9 @@ CREATE TABLE IF NOT EXISTS anchors (
   -- Multi-event tracking
   contains_multiple_events BOOLEAN DEFAULT 0,
   event_count INTEGER DEFAULT 1,
+
+  -- Direction
+  action_direction TEXT DEFAULT NULL,
 
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP

@@ -40,7 +40,11 @@ function createWindow() {
 app.whenReady().then(() => {
   console.log('[STARTUP] userData:', app.getPath('userData'));
   console.log('[STARTUP] app name:', app.getName());
-  registerIpcHandlers();
+  try {
+    registerIpcHandlers();
+  } catch (err) {
+    console.error('[STARTUP] FATAL: Failed to register IPC handlers:', err);
+  }
   createWindow();
 });
 

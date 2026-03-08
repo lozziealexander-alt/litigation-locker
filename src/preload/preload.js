@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('api', {
     removeGroup: (docId) => ipcRenderer.invoke('documents:removeGroup', docId),
     // Recap status
     updateRecapStatus: (docId, isRecap, responseReceived) => ipcRenderer.invoke('documents:updateRecapStatus', docId, isRecap, responseReceived),
+    updateDocumentSubtype: (docId, subtype) => ipcRenderer.invoke('documents:updateDocumentSubtype', docId, subtype),
     delete: (docId) => ipcRenderer.invoke('documents:delete', docId)
   },
 
@@ -148,6 +149,33 @@ contextBridge.exposeInMainWorld('api', {
     categorize: (text, isPrimary) => ipcRenderer.invoke('categorizer:categorize', text, isPrimary),
     buildChain: (entries) => ipcRenderer.invoke('categorizer:buildChain', entries),
     analyzeDocuments: () => ipcRenderer.invoke('categorizer:analyzeDocuments')
+  },
+
+  // Settings (secure backend storage)
+  settings: {
+    get: (key) => ipcRenderer.invoke('settings:get', key),
+    set: (key, value) => ipcRenderer.invoke('settings:set', key, value)
+  },
+
+  // Context Documents (policy library)
+  contextDocs: {
+    list: () => ipcRenderer.invoke('contextDocs:list'),
+    ingest: (data) => ipcRenderer.invoke('contextDocs:ingest', data),
+    ingestFile: (data) => ipcRenderer.invoke('contextDocs:ingestFile', data),
+    delete: (docId) => ipcRenderer.invoke('contextDocs:delete', docId),
+    toggleActive: (docId, isActive) => ipcRenderer.invoke('contextDocs:toggleActive', docId, isActive),
+    get: (docId) => ipcRenderer.invoke('contextDocs:get', docId),
+    search: (query) => ipcRenderer.invoke('contextDocs:search', query),
+    signalsSummary: () => ipcRenderer.invoke('contextDocs:signalsSummary'),
+    types: () => ipcRenderer.invoke('contextDocs:types')
+  },
+
+  // Assessor (document assessment engine)
+  assessor: {
+    assess: (data) => ipcRenderer.invoke('assessor:assess', data),
+    expandFlag: (data) => ipcRenderer.invoke('assessor:expandFlag', data),
+    deepAnalysis: (data) => ipcRenderer.invoke('assessor:deepAnalysis', data),
+    inputTypes: () => ipcRenderer.invoke('assessor:inputTypes')
   },
 
   // Debug
