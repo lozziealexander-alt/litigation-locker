@@ -41,7 +41,7 @@ function getEvidenceIcon(type) {
 const ZOOM_LEVELS = ['year', 'month', 'day', 'hour'];
 const ZOOM_LABELS = { year: 'Year', month: 'Month', day: 'Day', hour: 'Hour' };
 
-export default function Timeline({ onSelectDocument, highlightDocIds, onClearHighlights }) {
+export default function Timeline({ onSelectDocument, onSelectEvent, highlightDocIds, onClearHighlights, onDataChanged }) {
   const { mode } = useTheme();
   const [dated, setDated] = useState([]);
   const [undated, setUndated] = useState([]);
@@ -70,6 +70,13 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
   const [highlightedEventId, setHighlightedEventId] = useState(null);
   const [nearDuplicates, setNearDuplicates] = useState([]);
   const [showDuplicateReview, setShowDuplicateReview] = useState(false);
+  // Events spine
+  const [events, setEvents] = useState([]);
+  const [showEventSpine, setShowEventSpine] = useState(true);
+  const [expandedSpineEvent, setExpandedSpineEvent] = useState(null);
+  const [eventLinks, setEventLinks] = useState([]);
+  const [focusedItemIndex, setFocusedItemIndex] = useState(-1);
+  const focusedItemRef = useRef(null);
   const timelineRef = useRef(null);
   const timelineInnerRef = useRef(null);
   const containerRef = useRef(null);
@@ -187,6 +194,7 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
           }
 
           loadTimeline();
+          onDataChanged?.();
         } else {
           console.error('[Timeline] ingest failed:', result.error);
           alert('Import failed: ' + (result.error || 'Unknown error'));
@@ -219,13 +227,16 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
   async function loadTimeline() {
     setLoading(true);
     try {
-      const [timelineResult, connectionsResult, precedentResult, incidentsResult, jurisdictionResult, actorsResult] = await Promise.all([
+      const currentCase = await window.api.cases.current();
+      const caseId = currentCase?.caseId;
+      const [timelineResult, connectionsResult, precedentResult, incidentsResult, jurisdictionResult, actorsResult, eventsResult] = await Promise.all([
         window.api.timeline.get(),
         window.api.timeline.getConnections(),
         window.api.precedents.analyze(),
         window.api.incidents.list(),
         window.api.jurisdiction.get(),
-        window.api.actors.list()
+        window.api.actors.list(),
+        caseId ? window.api.events.list(caseId) : Promise.resolve({ success: false })
       ]);
 
       if (timelineResult.success) {
@@ -262,6 +273,19 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
       if (actorsResult.success) {
         setActors(actorsResult.actors || []);
       }
+      if (eventsResult.success) {
+        setEvents((eventsResult.events || []).sort((a, b) => {
+          if (a.date && b.date) return a.date.localeCompare(b.date);
+          if (a.date) return -1;
+          if (b.date) return 1;
+          return 0;
+        }));
+      }
+      // Load causality links
+      try {
+        const linksResult = await window.api.eventLinks.list();
+        if (linksResult.success) setEventLinks(linksResult.links || []);
+      } catch (e) { /* eventLinks table may not exist yet */ }
     } catch (err) {
       console.error('[Timeline] loadTimeline error:', err);
     }
@@ -284,6 +308,47 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
       return true;
     });
   }, [undated, hiddenTypes, hideRecaps]);
+
+  // Build flat list of navigable items (events + documents interleaved by date)
+  const navigableItems = useMemo(() => {
+    const allItems = [
+      ...events.filter(e => e.date).map(e => ({ type: 'event', id: e.id, date: e.date, data: e })),
+      ...filteredDated.map(d => ({ type: 'document', id: d.id, date: d.document_date, data: d }))
+    ].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    return allItems;
+  }, [events, filteredDated]);
+
+  // Arrow key navigation
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        setFocusedItemIndex(prev => {
+          const max = navigableItems.length - 1;
+          if (max < 0) return -1;
+          if (e.key === 'ArrowRight') return Math.min(prev + 1, max);
+          if (e.key === 'ArrowLeft') return Math.max(prev - 1, 0);
+          return prev;
+        });
+      }
+      if (e.key === 'Escape') {
+        setFocusedItemIndex(-1);
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [navigableItems.length]);
+
+  // Scroll focused item into view
+  useEffect(() => {
+    if (focusedItemIndex >= 0 && focusedItemIndex < navigableItems.length) {
+      const item = navigableItems[focusedItemIndex];
+      const el = document.querySelector(`[data-nav-id="${item.id}"]`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      setHighlightedEventId(item.id);
+    }
+  }, [focusedItemIndex]);
 
   // ---- Semantic zoom groupings ----
   const timeline = useMemo(() => {
@@ -492,13 +557,22 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
     try {
       setIsIngesting(true);
       setIngestProgress('Re-classifying all documents...');
-      const result = await window.api.documents.reclassify();
+      const docResult = await window.api.documents.reclassify();
+
+      // Also reclassify incidents
+      setIngestProgress('Re-classifying incidents...');
+      const incResult = await window.api.incidents.reclassify();
+
       setIsIngesting(false);
       setIngestProgress('');
-      if (result.success) {
+      if (docResult.success && incResult.success) {
         loadTimeline();
       } else {
-        alert('Re-classify failed: ' + (result.error || 'Unknown error'));
+        const errors = [];
+        if (!docResult.success) errors.push('Documents: ' + (docResult.error || 'Unknown'));
+        if (!incResult.success) errors.push('Incidents: ' + (incResult.error || 'Unknown'));
+        alert('Re-classify issues:\n' + errors.join('\n'));
+        loadTimeline(); // still reload what we can
       }
     } catch (err) {
       setIsIngesting(false);
@@ -510,9 +584,10 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
   // ---- Incident approval handlers ----
   async function handleApproveIncident(incidentData) {
     const result = await window.api.incidents.create(incidentData);
-    if (result.success) {
-      setIncidents(prev => [...prev, result.incident]);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to create incident');
     }
+    setIncidents(prev => [...prev, result.incident]);
   }
 
   function handleDismissIncident(incident) {
@@ -529,6 +604,53 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
   function handleDismissActor(actor) {
     console.log('[Timeline] Dismissed actor:', actor.name);
   }
+
+  // Map events by date for timeline integration
+  const eventsByDate = useMemo(() => {
+    const map = {};
+    for (const evt of events) {
+      if (evt.date) {
+        const dateKey = evt.date.split('T')[0];
+        if (!map[dateKey]) map[dateKey] = [];
+        map[dateKey].push(evt);
+      }
+    }
+    return map;
+  }, [events]);
+
+  // Map events by month key (YYYY-MM) for month view
+  const eventsByMonth = useMemo(() => {
+    const map = {};
+    for (const evt of events) {
+      if (evt.date) {
+        const d = new Date(evt.date);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        if (!map[key]) map[key] = [];
+        map[key].push(evt);
+      }
+    }
+    return map;
+  }, [events]);
+
+  // Map events by year for year view
+  const eventsByYear = useMemo(() => {
+    const map = {};
+    for (const evt of events) {
+      if (evt.date) {
+        const key = `${new Date(evt.date).getFullYear()}`;
+        if (!map[key]) map[key] = [];
+        map[key].push(evt);
+      }
+    }
+    return map;
+  }, [events]);
+
+  // Build Set of document IDs linked to events — these should NOT render as standalone cards
+  const eventLinkedDocIds = useMemo(() => {
+    const ids = new Set();
+    events.forEach(evt => (evt.documents || []).forEach(d => ids.add(d.id)));
+    return ids;
+  }, [events]);
 
   // Merge incidents into timeline groups for rendering
   const incidentsByDate = useMemo(() => {
@@ -848,6 +970,145 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
         </div>
       )}
 
+      {/* Events Spine + Arrow Navigation */}
+      {events.length > 0 && (
+        <div style={styles.eventSpineSection}>
+          <div style={styles.eventSpineHeader}>
+            <button style={styles.eventSpineToggle} onClick={() => setShowEventSpine(!showEventSpine)}>
+              {showEventSpine ? '\u25BC' : '\u25B6'} Events ({events.length})
+            </button>
+            {focusedItemIndex >= 0 && (
+              <div style={styles.arrowNav}>
+                <button style={styles.arrowBtn} onClick={() => setFocusedItemIndex(i => Math.max(i - 1, 0))}
+                  disabled={focusedItemIndex <= 0}>{'\u25C0'}</button>
+                <span style={styles.arrowLabel}>{focusedItemIndex + 1} / {navigableItems.length}</span>
+                <button style={styles.arrowBtn} onClick={() => setFocusedItemIndex(i => Math.min(i + 1, navigableItems.length - 1))}
+                  disabled={focusedItemIndex >= navigableItems.length - 1}>{'\u25B6'}</button>
+                <button style={styles.arrowDismiss} onClick={() => setFocusedItemIndex(-1)}>{'\u00D7'}</button>
+              </div>
+            )}
+            {focusedItemIndex < 0 && navigableItems.length > 0 && (
+              <button style={styles.startNavBtn} onClick={() => setFocusedItemIndex(0)}>
+                {'\u2194\uFE0F'} Navigate (or use arrow keys)
+              </button>
+            )}
+          </div>
+          {showEventSpine && (
+            <div style={styles.eventSpineList}>
+              {events.map((evt, i) => {
+                const isFocused = focusedItemIndex >= 0 && navigableItems[focusedItemIndex]?.id === evt.id;
+                const eventColor = {
+                  'start': '#3B82F6', 'reported': '#8B5CF6', 'help': '#F97316',
+                  'adverse_action': '#DC2626', 'harassment': '#E11D48',
+                  'end': '#1F2937'
+                }[evt.event_type] || '#6B7280';
+                return (
+                  <div key={evt.id} data-nav-id={evt.id} style={{
+                    ...styles.spineNode,
+                    borderLeftColor: eventColor,
+                    borderLeftWidth: '4px',
+                    background: expandedSpineEvent === evt.id ? eventColor + '18' : eventColor + '0C',
+                    ...(isFocused ? { background: eventColor + '20', boxShadow: `0 0 0 2px ${eventColor}` } : {})
+                  }} onClick={() => setExpandedSpineEvent(expandedSpineEvent === evt.id ? null : evt.id)}>
+                    <div style={styles.spineNodeHeader}>
+                      <span style={{
+                        ...styles.spineTypeBadge,
+                        background: eventColor, color: '#fff',
+                        padding: '2px 8px', borderRadius: radius.full, fontWeight: 700
+                      }}>
+                        {evt.event_type?.replace('_', ' ')}
+                      </span>
+                      <span style={{ ...styles.spineTitle, fontWeight: 700 }}>{evt.title}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                      {evt.date && (
+                        <span style={{ ...styles.spineDate, fontWeight: 600 }}>
+                          {new Date(evt.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </span>
+                      )}
+                      {evt.event_weight === 'major' && (
+                        <span style={{
+                          fontSize: '9px', fontWeight: 700, color: '#fff',
+                          background: '#DC2626', padding: '1px 6px', borderRadius: radius.full
+                        }}>MAJOR</span>
+                      )}
+                      {evt.event_weight === 'minor' && (
+                        <span style={{
+                          fontSize: '9px', fontWeight: 600, color: '#16A34A',
+                          background: '#16A34A18', padding: '1px 6px', borderRadius: radius.full
+                        }}>minor</span>
+                      )}
+                      <span style={{ marginLeft: 'auto', display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        {onSelectEvent && (
+                          <button
+                            style={{
+                              background: eventColor + '15', border: `1px solid ${eventColor}30`,
+                              cursor: 'pointer', fontSize: '10px', padding: '2px 8px',
+                              color: eventColor, borderRadius: radius.sm, fontWeight: 600
+                            }}
+                            onClick={e => { e.stopPropagation(); onSelectEvent(evt); }}
+                            title="Open event panel"
+                          >Open</button>
+                        )}
+                        <span style={{ fontSize: '10px', color: colors.textMuted }}>
+                          {expandedSpineEvent === evt.id ? '\u25B2' : '\u25BC'}
+                        </span>
+                      </span>
+                    </div>
+                    {expandedSpineEvent === evt.id && evt.description && (
+                      <div style={styles.spineExpanded}>
+                        <p style={{ fontSize: '12px', color: colors.textSecondary, margin: '4px 0 0 0', lineHeight: 1.5 }}>
+                          {evt.description.slice(0, 200)}{evt.description.length > 200 ? '...' : ''}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {/* Causality links between events */}
+              {eventLinks.length > 0 && (
+                <div style={{ marginTop: spacing.sm, borderTop: `1px solid ${colors.border}`, paddingTop: spacing.sm }}>
+                  <div style={{ fontSize: '10px', fontWeight: 700, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                    Causality Links ({eventLinks.length})
+                  </div>
+                  {eventLinks.map(link => {
+                    const sourceEvt = events.find(e => e.id === link.source_event_id);
+                    const targetEvt = events.find(e => e.id === link.target_event_id);
+                    if (!sourceEvt || !targetEvt) return null;
+                    const linkColor = link.link_type === 'caused' ? '#DC2626' : link.link_type === 'followed_by' ? '#F97316' : '#6B7280';
+                    return (
+                      <div key={link.id} style={{
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        padding: '3px 8px', marginBottom: '3px',
+                        borderRadius: radius.sm, fontSize: '11px',
+                        background: linkColor + '0A', borderLeft: `2px solid ${linkColor}`
+                      }}>
+                        <span style={{ fontWeight: 600, color: linkColor }}>
+                          {link.link_type === 'caused' ? '\u{1F525}' : '\u{1F517}'} {link.link_type}
+                        </span>
+                        <span style={{ color: colors.textSecondary, flex: 1 }}>
+                          {sourceEvt.title?.slice(0, 25)} {'\u2192'} {targetEvt.title?.slice(0, 25)}
+                        </span>
+                        {link.days_between != null && (
+                          <span style={{ fontSize: '10px', color: colors.textMuted }}>{link.days_between}d</span>
+                        )}
+                        <span style={{
+                          fontSize: '9px', fontWeight: 700, padding: '1px 4px',
+                          borderRadius: radius.full, color: '#fff',
+                          background: link.confidence >= 0.9 ? '#DC2626' : link.confidence >= 0.8 ? '#F97316' : '#EAB308'
+                        }}>
+                          {Math.round((link.confidence || 0) * 100)}%
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Empty state */}
       {timeline.length === 0 && filteredUndated.length === 0 && totalDocs === 0 && (
         <div style={styles.emptyState}>
@@ -945,16 +1206,125 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
 
                 {/* Events */}
                 <div style={styles.eventsColumn}>
+                  {/* Event markers for this date group */}
+                  {(() => {
+                    const groupEvents = zoomLevel === 'year' ? (eventsByYear[group.key] || [])
+                      : zoomLevel === 'month' ? (eventsByMonth[group.key] || [])
+                      : (eventsByDate[group.key] || []);
+                    return groupEvents.map(evt => {
+                      const evtColor = {
+                        'START': '#3B82F6', 'REPORTED': '#8B5CF6', 'HELP': '#F97316',
+                        'ADVERSE_ACTION': '#DC2626', 'HARASSMENT': '#E11D48',
+                        'END': '#1F2937'
+                      }[evt.event_type] || '#6B7280';
+                      const linkedDocs = evt.documents || [];
+                      const isExpanded = expandedSpineEvent === evt.id;
+                      return (
+                        <div key={`evt-${evt.id}`} data-nav-id={evt.id} style={{
+                          marginBottom: '10px',
+                          borderRadius: radius.md,
+                          overflow: 'hidden',
+                          boxShadow: `0 2px 8px ${evtColor}35`
+                        }}>
+                          {/* Event header */}
+                          <div style={{
+                            padding: '10px 14px',
+                            background: evtColor + '22',
+                            borderLeft: `5px solid ${evtColor}`,
+                            borderRadius: `0 ${radius.md} ${radius.md} 0`,
+                            cursor: 'pointer'
+                          }} onClick={() => setExpandedSpineEvent(isExpanded ? null : evt.id)}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              <span style={{
+                                fontSize: '10px', fontWeight: 800, color: '#fff',
+                                textTransform: 'uppercase', letterSpacing: '0.5px',
+                                background: evtColor, padding: '2px 8px', borderRadius: radius.full
+                              }}>{evt.event_type?.replace('_', ' ')}</span>
+                              <span style={{ fontWeight: 700, color: colors.textPrimary, fontSize: '13px' }}>{evt.title}</span>
+                              {evt.event_weight === 'major' && <span style={{
+                                color: '#fff', fontSize: '9px', background: '#DC2626',
+                                padding: '1px 6px', borderRadius: radius.full, fontWeight: 700
+                              }}>MAJOR</span>}
+                              {linkedDocs.length > 0 && (
+                                <span style={{
+                                  fontSize: '10px', color: evtColor, fontWeight: 600,
+                                  background: evtColor + '15', padding: '1px 6px', borderRadius: radius.full
+                                }}>
+                                  {linkedDocs.length} doc{linkedDocs.length !== 1 ? 's' : ''}
+                                </span>
+                              )}
+                              {onSelectEvent && (
+                                <button
+                                  style={{
+                                    background: evtColor + '18', border: `1px solid ${evtColor}40`,
+                                    cursor: 'pointer', fontSize: '11px', padding: '2px 8px',
+                                    color: evtColor, borderRadius: radius.sm, fontWeight: 600
+                                  }}
+                                  onClick={e => { e.stopPropagation(); onSelectEvent(evt); }}
+                                  title="Open event panel"
+                                >Open</button>
+                              )}
+                              <span style={{ fontSize: '11px', color: colors.textMuted, marginLeft: 'auto' }}>
+                                {isExpanded ? '\u25B2' : '\u25BC'}
+                              </span>
+                            </div>
+                            {isExpanded && evt.description && (
+                              <div style={{ color: colors.textSecondary, marginTop: '6px', fontSize: '12px', lineHeight: 1.4 }}>
+                                {evt.description}
+                              </div>
+                            )}
+                          </div>
+                          {/* Linked documents nested under event (only when expanded) */}
+                          {isExpanded && linkedDocs.length > 0 && (
+                            <div style={{ paddingLeft: '12px', borderLeft: `2px solid ${evtColor}40`, marginLeft: '1px' }}>
+                              {linkedDocs.map(linkedDoc => {
+                                const relColor = {
+                                  'supports': '#22C55E', 'supports_me': '#22C55E',
+                                  'against': '#EF4444', 'against_me': '#EF4444',
+                                  'timing': '#3B82F6', 'context': '#9CA3AF', 'source': '#8B5CF6'
+                                }[linkedDoc.relevance] || '#9CA3AF';
+                                return (
+                                  <div key={`evtdoc-${linkedDoc.id}`}
+                                    data-nav-id={linkedDoc.id}
+                                    style={{
+                                      padding: '4px 8px',
+                                      marginTop: '2px',
+                                      borderLeft: `3px solid ${relColor}`,
+                                      borderRadius: `0 ${radius.xs} ${radius.xs} 0`,
+                                      fontSize: '11px',
+                                      cursor: 'pointer',
+                                      background: colors.bgSecondary,
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '6px'
+                                    }}
+                                    onClick={(e) => { e.stopPropagation(); onSelectDocument && onSelectDocument(linkedDoc); }}
+                                  >
+                                    <span style={{ color: relColor, fontWeight: 600, fontSize: '9px', textTransform: 'uppercase' }}>
+                                      {(linkedDoc.relevance || 'linked').replace('_', ' ')}
+                                    </span>
+                                    <span style={{ color: colors.textPrimary, fontWeight: 500, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {linkedDoc.filename}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
                   {zoomLevel === 'year' ? (
-                    // Year view: compact summary cards grouped by type
+                    // Year view: compact summary cards grouped by type (skip docs linked to events)
                     <YearSummary
-                      documents={group.documents}
+                      documents={group.documents.filter(doc => !eventLinkedDocIds.has(doc.id))}
                       onSelectDocument={onSelectDocument}
                       styles={styles}
                     />
                   ) : zoomLevel === 'month' ? (
-                    // Month view: condensed cards
-                    group.documents.map(doc => (
+                    // Month view: condensed cards (skip docs linked to events — they render under event markers)
+                    group.documents.filter(doc => !eventLinkedDocIds.has(doc.id)).map(doc => (
                       <div
                         key={doc.isDateEntry ? `entry-${doc.pinEntryId}` : doc.id}
                         style={{
@@ -990,8 +1360,8 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
                       </div>
                     ))
                   ) : (
-                    // Day/Hour view: full cards
-                    group.documents.map(doc => {
+                    // Day/Hour view: full cards (skip docs linked to events — they render under event markers)
+                    group.documents.filter(doc => !eventLinkedDocIds.has(doc.id)).map(doc => {
                       const eventConnections = getEventConnections(doc.id);
                       const retaliationConn = eventConnections.find(c => c.connectionType === 'retaliation_chain');
 
@@ -999,6 +1369,7 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
                         <div
                           key={doc.isDateEntry ? `entry-${doc.pinEntryId}` : doc.id}
                           data-event-id={doc.id}
+                          data-nav-id={doc.id}
                           style={{
                             ...styles.eventCard,
                             borderLeftColor: getEvidenceColor(doc.evidence_type),
@@ -1104,34 +1475,69 @@ export default function Timeline({ onSelectDocument, highlightDocIds, onClearHig
                   )}
 
                   {/* Incident cards for this date group */}
-                  {(zoomLevel === 'day' || zoomLevel === 'hour') && (incidentsByDate[group.key] || []).map(incident => (
-                    <div
-                      key={`incident-${incident.id}`}
-                      style={{
-                        ...styles.incidentCard,
-                        borderLeftColor: getSeverityColor(incident.computed_severity || incident.base_severity)
-                      }}
-                    >
-                      <div style={styles.incidentTypeLabel}>
-                        {incident.incident_type?.replace(/_/g, ' ')}
-                      </div>
-                      <div style={styles.incidentTitle}>
-                        {incident.title}
-                      </div>
-                      {incident.description && (
-                        <div style={styles.incidentDesc}>
-                          {incident.description.slice(0, 120)}{incident.description.length > 120 ? '...' : ''}
+                  {(zoomLevel === 'day' || zoomLevel === 'hour') && (incidentsByDate[group.key] || []).map(incident => {
+                    const incExpanded = expandedSpineEvent === `inc-${incident.id}`;
+                    const sevColor = getSeverityColor(incident.computed_severity || incident.base_severity);
+                    return (
+                      <div
+                        key={`incident-${incident.id}`}
+                        style={{
+                          ...styles.incidentCard,
+                          borderLeftColor: sevColor,
+                          cursor: 'pointer'
+                        }}
+                        onClick={() => setExpandedSpineEvent(incExpanded ? null : `inc-${incident.id}`)}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <div style={styles.incidentTypeLabel}>
+                            {incident.incident_type?.replace(/_/g, ' ')}
+                          </div>
+                          <div style={{ ...styles.severityBadge, background: sevColor + '20', color: sevColor }}>
+                            {incident.computed_severity || incident.base_severity}
+                          </div>
+                          {incident.documents?.length > 0 && (
+                            <span style={{ fontSize: '10px', color: colors.textMuted }}>
+                              {incident.documents.length} doc{incident.documents.length !== 1 ? 's' : ''}
+                            </span>
+                          )}
+                          <span style={{ fontSize: '10px', color: colors.textMuted, marginLeft: 'auto' }}>
+                            {incExpanded ? '\u25B2' : '\u25BC'}
+                          </span>
                         </div>
-                      )}
-                      <div style={{
-                        ...styles.severityBadge,
-                        background: getSeverityColor(incident.computed_severity || incident.base_severity) + '20',
-                        color: getSeverityColor(incident.computed_severity || incident.base_severity)
-                      }}>
-                        {incident.computed_severity || incident.base_severity}
+                        <div style={styles.incidentTitle}>
+                          {incident.title}
+                        </div>
+                        {incExpanded && incident.description && (
+                          <div style={styles.incidentDesc}>
+                            {incident.description}
+                          </div>
+                        )}
+                        {incExpanded && incident.documents?.length > 0 && (
+                          <div style={{ marginTop: '4px', paddingLeft: '4px', borderLeft: `2px solid ${sevColor}40` }}>
+                            {incident.documents.map(doc => (
+                              <div key={doc.id}
+                                style={{
+                                  padding: '3px 6px', fontSize: '11px', cursor: 'pointer',
+                                  display: 'flex', alignItems: 'center', gap: '4px',
+                                  borderRadius: radius.xs, marginBottom: '2px',
+                                  background: colors.bgSecondary
+                                }}
+                                onClick={(e) => { e.stopPropagation(); onSelectDocument && onSelectDocument(doc); }}
+                              >
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: getEvidenceColor(doc.evidence_type), flexShrink: 0 }} />
+                                <span style={{ fontWeight: 500, color: colors.textPrimary, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {doc.filename}
+                                </span>
+                                {doc.relationship && (
+                                  <span style={{ fontSize: '9px', color: colors.textMuted, fontStyle: 'italic' }}>{doc.relationship}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}
@@ -2257,6 +2663,130 @@ function getStyles() {
       fontSize: typography.fontSize.xs,
       cursor: 'pointer',
       whiteSpace: 'nowrap'
+    },
+
+    // Events spine
+    eventSpineSection: {
+      marginBottom: spacing.lg,
+      background: colors.surface,
+      borderRadius: radius.lg,
+      border: `1px solid ${colors.border}`,
+      overflow: 'hidden'
+    },
+    eventSpineHeader: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: `${spacing.sm} ${spacing.md}`,
+      borderBottom: `1px solid ${colors.border}`
+    },
+    eventSpineToggle: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: spacing.sm,
+      background: 'none',
+      border: 'none',
+      fontSize: typography.fontSize.sm,
+      fontWeight: typography.fontWeight.semibold,
+      color: colors.textPrimary,
+      cursor: 'pointer',
+      padding: `${spacing.xs} ${spacing.sm}`,
+      borderRadius: radius.sm
+    },
+    arrowNav: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: spacing.xs
+    },
+    arrowBtn: {
+      background: colors.bg,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.sm,
+      padding: `${spacing.xs} ${spacing.sm}`,
+      fontSize: typography.fontSize.sm,
+      cursor: 'pointer',
+      color: colors.textPrimary,
+      lineHeight: 1
+    },
+    arrowLabel: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      minWidth: '50px',
+      textAlign: 'center'
+    },
+    arrowDismiss: {
+      background: 'none',
+      border: 'none',
+      fontSize: typography.fontSize.sm,
+      color: colors.textMuted,
+      cursor: 'pointer',
+      padding: `${spacing.xs} ${spacing.sm}`
+    },
+    startNavBtn: {
+      background: colors.primary,
+      color: '#FFFFFF',
+      border: 'none',
+      borderRadius: radius.sm,
+      padding: `${spacing.xs} ${spacing.md}`,
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.semibold,
+      cursor: 'pointer'
+    },
+    eventSpineList: {
+      padding: spacing.sm
+    },
+    spineNode: {
+      borderLeft: `3px solid ${colors.border}`,
+      marginLeft: spacing.md,
+      padding: `${spacing.sm} ${spacing.md}`,
+      marginBottom: spacing.xs,
+      cursor: 'pointer',
+      borderRadius: `0 ${radius.sm} ${radius.sm} 0`,
+      transition: 'background 0.15s ease'
+    },
+    spineNodeHeader: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: spacing.sm,
+      flexWrap: 'wrap'
+    },
+    spineTypeBadge: {
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.semibold,
+      padding: `1px ${spacing.sm}`,
+      borderRadius: radius.sm,
+      textTransform: 'uppercase',
+      letterSpacing: '0.3px'
+    },
+    spineTitle: {
+      fontSize: typography.fontSize.sm,
+      fontWeight: typography.fontWeight.medium,
+      color: colors.textPrimary,
+      flex: 1,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    },
+    spineDate: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted
+    },
+    spineWeightBadge: {
+      fontSize: '10px',
+      letterSpacing: '1px'
+    },
+    spineUpdated: {
+      fontSize: '10px',
+      color: colors.textMuted,
+      marginTop: '2px'
+    },
+    spineExpanded: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textSecondary,
+      marginTop: spacing.xs,
+      paddingTop: spacing.xs,
+      borderTop: `1px solid ${colors.border}`,
+      lineHeight: 1.4
     }
   };
 }

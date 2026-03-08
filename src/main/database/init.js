@@ -206,102 +206,146 @@ function openCase(caseId) {
     caseDb.exec("ALTER TABLE actor_appearances ADD COLUMN auto_detected BOOLEAN DEFAULT 0");
   }
 
-  // Add anchors tables (Session 7: hub-spoke narrative)
+  // Add events tables (Session 7: hub-spoke narrative, Session 8: renamed anchors→events)
+  const hasEvents = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").get();
   const hasAnchors = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='anchors'").get();
-  if (!hasAnchors) {
+  if (!hasEvents && !hasAnchors) {
+    // Fresh DB — create spec-compliant events tables
     caseDb.exec(`
-      CREATE TABLE IF NOT EXISTS anchors (
+      CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY,
-        anchor_type TEXT NOT NULL CHECK(anchor_type IN ('START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'HARASSMENT', 'MILESTONE', 'END')),
+        case_id TEXT,
+        date TEXT,
         title TEXT NOT NULL,
         description TEXT,
-        anchor_date DATE,
-        date_confidence TEXT DEFAULT 'exact',
+        event_type TEXT,
         what_happened TEXT,
         where_location TEXT,
         impact_summary TEXT,
-        severity TEXT CHECK(severity IN ('minor', 'moderate', 'severe', 'egregious')),
-        is_auto_generated BOOLEAN DEFAULT 1,
-        user_edited BOOLEAN DEFAULT 0,
-        source_context TEXT,
-        sort_order INTEGER,
-        is_expanded BOOLEAN DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        severity TEXT,
+        event_weight TEXT DEFAULT 'significant',
+        why_no_report TEXT,
+        employer_notified BOOLEAN DEFAULT 0,
+        notice_date DATE,
+        notice_method TEXT,
+        employer_response TEXT,
+        response_date DATE,
+        response_adequate BOOLEAN,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       );
-      CREATE TABLE IF NOT EXISTS anchor_incidents (
-        anchor_id TEXT NOT NULL REFERENCES anchors(id),
-        incident_id TEXT NOT NULL REFERENCES incidents(id),
-        PRIMARY KEY (anchor_id, incident_id)
+      CREATE TABLE IF NOT EXISTS event_tags (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        tag TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS anchor_documents (
-        anchor_id TEXT NOT NULL REFERENCES anchors(id),
-        document_id TEXT NOT NULL REFERENCES documents(id),
-        relevance TEXT DEFAULT 'supports',
-        PRIMARY KEY (anchor_id, document_id)
+      CREATE INDEX IF NOT EXISTS idx_event_tags_event ON event_tags(event_id);
+      CREATE INDEX IF NOT EXISTS idx_event_tags_tag ON event_tags(tag);
+      CREATE TABLE IF NOT EXISTS event_links (
+        id TEXT PRIMARY KEY,
+        source_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        target_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        link_type TEXT NOT NULL,
+        confidence REAL DEFAULT 1.0,
+        days_between INTEGER
       );
-      CREATE TABLE IF NOT EXISTS anchor_actors (
-        anchor_id TEXT NOT NULL REFERENCES anchors(id),
-        actor_id TEXT NOT NULL REFERENCES actors(id),
-        role_in_anchor TEXT,
-        PRIMARY KEY (anchor_id, actor_id)
+      CREATE TABLE IF NOT EXISTS event_documents (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        relevance TEXT
       );
-      CREATE INDEX IF NOT EXISTS idx_anchors_date ON anchors(anchor_date);
-      CREATE INDEX IF NOT EXISTS idx_anchors_type ON anchors(anchor_type);
+      CREATE INDEX IF NOT EXISTS idx_event_documents_event ON event_documents(event_id);
+      CREATE INDEX IF NOT EXISTS idx_event_documents_doc ON event_documents(document_id);
+      CREATE TABLE IF NOT EXISTS event_actors (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+        role TEXT
+      );
+      CREATE TABLE IF NOT EXISTS event_precedents (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        precedent_id TEXT NOT NULL,
+        relevance_note TEXT,
+        linked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_event_precedents_event ON event_precedents(event_id);
+      CREATE TABLE IF NOT EXISTS incident_events (
+        id TEXT PRIMARY KEY,
+        incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        event_role TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_events_date ON events(date);
+      CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
     `);
   }
 
-  // Add anchor_precedents junction table
-  const hasAnchorPrecedents = caseDb.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='anchor_precedents'"
+  // ---- Session 8: Rename anchors → events (for existing databases) ----
+  if (hasAnchors && !hasEvents) {
+    console.log('[DB] Session 8: Renaming anchors -> events');
+    caseDb.exec('ALTER TABLE anchors RENAME TO events');
+    const hasAnchorInc = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='anchor_incidents'").get();
+    if (hasAnchorInc) caseDb.exec('ALTER TABLE anchor_incidents RENAME TO event_incidents');
+    const hasAnchorDoc = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='anchor_documents'").get();
+    if (hasAnchorDoc) caseDb.exec('ALTER TABLE anchor_documents RENAME TO event_documents');
+    const hasAnchorAct = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='anchor_actors'").get();
+    if (hasAnchorAct) caseDb.exec('ALTER TABLE anchor_actors RENAME TO event_actors');
+    const hasAnchorPrec = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='anchor_precedents'").get();
+    if (hasAnchorPrec) caseDb.exec('ALTER TABLE anchor_precedents RENAME TO event_precedents');
+    console.log('[DB] Table renames complete');
+  }
+
+  // Ensure event_precedents exists (may not if DB predates Session 7b)
+  const hasEventPrecedents = caseDb.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='event_precedents'"
   ).get();
-  if (!hasAnchorPrecedents) {
+  if (!hasEventPrecedents) {
     caseDb.exec(`
-      CREATE TABLE IF NOT EXISTS anchor_precedents (
-        anchor_id TEXT NOT NULL REFERENCES anchors(id),
+      CREATE TABLE IF NOT EXISTS event_precedents (
+        anchor_id TEXT NOT NULL REFERENCES events(id),
         precedent_id TEXT NOT NULL,
         relevance_note TEXT,
         linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (anchor_id, precedent_id)
       );
-      CREATE INDEX IF NOT EXISTS idx_anchor_precedents_anchor ON anchor_precedents(anchor_id);
+      CREATE INDEX IF NOT EXISTS idx_event_precedents_anchor ON event_precedents(anchor_id);
     `);
   }
 
-  // Add multi-event tracking columns to anchors
-  const anchorCols = caseDb.prepare("PRAGMA table_info(anchors)").all();
-  const anchorColNames = anchorCols.map(c => c.name);
-  if (!anchorColNames.includes('contains_multiple_events')) {
-    caseDb.exec("ALTER TABLE anchors ADD COLUMN contains_multiple_events BOOLEAN DEFAULT 0");
+  // Add multi-event tracking columns to events (if migrating from old schema)
+  const eventCols = caseDb.prepare("PRAGMA table_info(events)").all();
+  const eventColNames = eventCols.map(c => c.name);
+  if (!eventColNames.includes('contains_multiple_events')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN contains_multiple_events BOOLEAN DEFAULT 0");
   }
-  if (!anchorColNames.includes('event_count')) {
-    caseDb.exec("ALTER TABLE anchors ADD COLUMN event_count INTEGER DEFAULT 1");
+  if (!eventColNames.includes('event_count')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN event_count INTEGER DEFAULT 1");
   }
 
-  // Migrate anchors CHECK constraint to include HARASSMENT
-  // SQLite can't ALTER CHECK constraints, so we recreate the table
+  // Migrate events CHECK constraint to include HARASSMENT (pre-Session 12 DBs)
+  // Skip if Session 8b already ran (anchor_type renamed to event_type, no CHECK constraint)
+  const hasEventTagsEarly = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='event_tags'").get();
   const checkSql = caseDb.prepare(
-    "SELECT sql FROM sqlite_master WHERE type='table' AND name='anchors'"
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='events'"
   ).get();
-  if (checkSql && checkSql.sql && !checkSql.sql.includes('HARASSMENT')) {
-    console.log('[DB] Migrating anchors table to allow HARASSMENT type');
-    // Clean up any leftover temp table from a previous failed migration
-    caseDb.exec('DROP TABLE IF EXISTS anchors_new');
-    // Read existing columns to handle any extra columns (e.g. action_direction)
-    const existingCols = caseDb.prepare("PRAGMA table_info(anchors)").all().map(c => c.name);
+  if (!hasEventTagsEarly && checkSql && checkSql.sql && !checkSql.sql.includes('HARASSMENT')) {
+    console.log('[DB] Migrating events table to allow HARASSMENT type');
+    caseDb.exec('DROP TABLE IF EXISTS events_new');
+    const existingCols = caseDb.prepare("PRAGMA table_info(events)").all().map(c => c.name);
     const baseCols = [
       'id', 'anchor_type', 'title', 'description', 'anchor_date', 'date_confidence',
       'what_happened', 'where_location', 'impact_summary', 'severity',
       'is_auto_generated', 'user_edited', 'source_context', 'sort_order', 'is_expanded',
       'contains_multiple_events', 'event_count', 'created_at', 'updated_at'
     ];
-    // Find any extra columns added by previous migrations
     const extraCols = existingCols.filter(c => !baseCols.includes(c));
     const extraColDefs = extraCols.map(c => `${c} TEXT DEFAULT NULL`).join(',\n        ');
     const allCols = [...baseCols, ...extraCols].join(', ');
 
     caseDb.exec(`
-      CREATE TABLE anchors_new (
+      CREATE TABLE events_new (
         id TEXT PRIMARY KEY,
         anchor_type TEXT NOT NULL CHECK(anchor_type IN ('START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'HARASSMENT', 'MILESTONE', 'END')),
         title TEXT NOT NULL,
@@ -323,13 +367,119 @@ function openCase(caseId) {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         ${extraColDefs ? ', ' + extraColDefs : ''}
       );
-      INSERT INTO anchors_new (${allCols}) SELECT ${allCols} FROM anchors;
-      DROP TABLE anchors;
-      ALTER TABLE anchors_new RENAME TO anchors;
-      CREATE INDEX IF NOT EXISTS idx_anchors_date ON anchors(anchor_date);
-      CREATE INDEX IF NOT EXISTS idx_anchors_type ON anchors(anchor_type);
+      INSERT INTO events_new (${allCols}) SELECT ${allCols} FROM events;
+      DROP TABLE events;
+      ALTER TABLE events_new RENAME TO events;
+      CREATE INDEX IF NOT EXISTS idx_events_date ON events(anchor_date);
+      CREATE INDEX IF NOT EXISTS idx_events_type ON events(anchor_type);
     `);
-    console.log('[DB] Anchors table migrated successfully (extra cols: ' + extraCols.join(', ') + ')');
+    console.log('[DB] Events table migrated successfully');
+  }
+
+  // Session 8: Add new columns to events table
+  const evtCols8 = caseDb.prepare("PRAGMA table_info(events)").all();
+  const evtColNames8 = evtCols8.map(c => c.name);
+  if (!evtColNames8.includes('event_weight')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN event_weight TEXT DEFAULT 'significant'");
+  }
+  if (!evtColNames8.includes('why_no_report')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN why_no_report TEXT");
+  }
+  if (!evtColNames8.includes('employer_notified')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN employer_notified BOOLEAN DEFAULT 0");
+  }
+  if (!evtColNames8.includes('notice_date')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN notice_date DATE");
+  }
+  if (!evtColNames8.includes('notice_method')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN notice_method TEXT");
+  }
+  if (!evtColNames8.includes('employer_response')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN employer_response TEXT");
+  }
+  if (!evtColNames8.includes('response_date')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN response_date DATE");
+  }
+  if (!evtColNames8.includes('response_adequate')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN response_adequate BOOLEAN");
+  }
+  if (!evtColNames8.includes('employer_response_type')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN employer_response_type TEXT");
+  }
+
+  // Session 8: Add new columns to event_documents
+  const edCols = caseDb.prepare("PRAGMA table_info(event_documents)").all();
+  const edColNames = edCols.map(c => c.name);
+  if (!edColNames.includes('relevance_v2')) {
+    caseDb.exec("ALTER TABLE event_documents ADD COLUMN relevance_v2 TEXT DEFAULT 'context'");
+  }
+  if (!edColNames.includes('timing_relation')) {
+    caseDb.exec("ALTER TABLE event_documents ADD COLUMN timing_relation TEXT");
+  }
+  // Migrate existing relevance data
+  caseDb.exec("UPDATE event_documents SET relevance_v2 = 'supports_me' WHERE relevance = 'supports' AND (relevance_v2 IS NULL OR relevance_v2 = 'context')");
+
+  // Add weight column to event_documents for case strength scoring
+  if (!edColNames.includes('weight')) {
+    caseDb.exec("ALTER TABLE event_documents ADD COLUMN weight INTEGER DEFAULT 3");
+  }
+
+  // Session 8: Create document_regions table
+  const hasRegions = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='document_regions'").get();
+  if (!hasRegions) {
+    caseDb.exec(`
+      CREATE TABLE IF NOT EXISTS document_regions (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        region_label TEXT,
+        region_bounds_json TEXT,
+        extracted_text TEXT,
+        region_date DATETIME,
+        date_confidence TEXT CHECK(date_confidence IN ('exact', 'approximate', 'inferred')),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_regions_doc ON document_regions(document_id);
+      CREATE INDEX IF NOT EXISTS idx_regions_date ON document_regions(region_date);
+    `);
+  }
+
+  // Session 8: Create document_merges table
+  const hasMerges = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='document_merges'").get();
+  if (!hasMerges) {
+    caseDb.exec(`
+      CREATE TABLE IF NOT EXISTS document_merges (
+        id TEXT PRIMARY KEY,
+        merged_doc_id TEXT NOT NULL REFERENCES documents(id),
+        source_doc_id TEXT NOT NULL REFERENCES documents(id),
+        page_order INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_merges_merged ON document_merges(merged_doc_id);
+      CREATE INDEX IF NOT EXISTS idx_merges_source ON document_merges(source_doc_id);
+    `);
+  }
+
+  // Session 8: Create damages table
+  const hasDamages = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='damages'").get();
+  if (!hasDamages) {
+    caseDb.exec(`
+      CREATE TABLE IF NOT EXISTS damages (
+        id TEXT PRIMARY KEY,
+        damage_type TEXT NOT NULL CHECK(damage_type IN (
+          'lost_wages', 'lost_benefits', 'lost_bonus',
+          'emotional_distress', 'medical_expenses', 'therapy',
+          'job_search_costs', 'relocation', 'other'
+        )),
+        amount REAL,
+        start_date DATE,
+        end_date DATE,
+        is_ongoing BOOLEAN DEFAULT 0,
+        description TEXT,
+        document_id TEXT REFERENCES documents(id),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
   }
 
   // Add end_date and last_scanned_at to case_context if missing
@@ -342,6 +492,258 @@ function openCase(caseId) {
     caseDb.exec("ALTER TABLE case_context ADD COLUMN last_scanned_at DATETIME");
   }
 
+  // ==================== SESSION 8b: Events Foundation Migration ====================
+  // Rebuilds events + junction tables to spec schema: event_tags, event_links, incident_events
+  // Renames anchor_id → event_id, anchor_date → date, anchor_type → event_type
+  // Drops confusing columns, creates multi-tag + causality tables
+  const hasEventTags = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='event_tags'").get();
+  if (!hasEventTags) {
+    console.log('[DB] Session 8b: Migrating events to foundation spec...');
+    // Disable FK checks — DROP TABLE events fails otherwise because event_documents etc. reference it
+    caseDb.pragma('foreign_keys = OFF');
+    const crypto = require('crypto');
+    const genId = () => crypto.randomBytes(16).toString('hex');
+
+    // 2a: Rebuild events table — drop confusing columns, rename anchor_* → spec names
+    caseDb.exec('DROP TABLE IF EXISTS events_v2');
+    const evtColInfo = caseDb.prepare("PRAGMA table_info(events)").all().map(c => c.name);
+    caseDb.exec(`
+      CREATE TABLE events_v2 (
+        id TEXT PRIMARY KEY,
+        case_id TEXT,
+        date TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        event_type TEXT,
+        what_happened TEXT,
+        where_location TEXT,
+        impact_summary TEXT,
+        severity TEXT,
+        event_weight TEXT DEFAULT 'significant',
+        why_no_report TEXT,
+        employer_notified BOOLEAN DEFAULT 0,
+        notice_date DATE,
+        notice_method TEXT,
+        employer_response TEXT,
+        response_date DATE,
+        response_adequate BOOLEAN,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Copy data: anchor_date → date, anchor_type → event_type
+    const oldEvents = caseDb.prepare('SELECT * FROM events').all();
+    const insertEvt = caseDb.prepare(`
+      INSERT INTO events_v2 (id, case_id, date, title, description, event_type,
+        what_happened, where_location, impact_summary, severity, event_weight,
+        why_no_report, employer_notified, notice_date, notice_method,
+        employer_response, response_date, response_adequate, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const e of oldEvents) {
+      insertEvt.run(
+        e.id, null, e.anchor_date || e.date, e.title, e.description, e.anchor_type || e.event_type,
+        e.what_happened || null, e.where_location || null, e.impact_summary || null,
+        e.severity || null, e.event_weight || 'significant',
+        e.why_no_report || null, e.employer_notified || 0, e.notice_date || null,
+        e.notice_method || null, e.employer_response || null, e.response_date || null,
+        e.response_adequate || null, e.created_at, e.updated_at || e.created_at
+      );
+    }
+    caseDb.exec('DROP TABLE events');
+    caseDb.exec('ALTER TABLE events_v2 RENAME TO events');
+    caseDb.exec('CREATE INDEX IF NOT EXISTS idx_events_date ON events(date)');
+    caseDb.exec('CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)');
+    console.log(`[DB] Migrated ${oldEvents.length} events`);
+
+    // 2b: Rebuild event_documents — anchor_id → event_id, add id PK
+    caseDb.exec('DROP TABLE IF EXISTS event_documents_v2');
+    caseDb.exec(`
+      CREATE TABLE event_documents_v2 (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        relevance TEXT
+      )
+    `);
+    try {
+      const oldEdocs = caseDb.prepare('SELECT * FROM event_documents').all();
+      const insertEdoc = caseDb.prepare('INSERT INTO event_documents_v2 (id, event_id, document_id, relevance) VALUES (?, ?, ?, ?)');
+      for (const ed of oldEdocs) {
+        const evtId = ed.anchor_id || ed.event_id;
+        if (evtId) insertEdoc.run(genId(), evtId, ed.document_id, ed.relevance || 'supports');
+      }
+      console.log(`[DB] Migrated ${oldEdocs.length} event_documents`);
+    } catch (e) { console.log('[DB] No event_documents to migrate:', e.message); }
+    caseDb.exec('DROP TABLE IF EXISTS event_documents');
+    caseDb.exec('ALTER TABLE event_documents_v2 RENAME TO event_documents');
+    caseDb.exec('CREATE INDEX IF NOT EXISTS idx_event_documents_event ON event_documents(event_id)');
+    caseDb.exec('CREATE INDEX IF NOT EXISTS idx_event_documents_doc ON event_documents(document_id)');
+
+    // 2b: Rebuild event_actors — anchor_id → event_id, role_in_anchor → role
+    caseDb.exec('DROP TABLE IF EXISTS event_actors_v2');
+    caseDb.exec(`
+      CREATE TABLE event_actors_v2 (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+        role TEXT
+      )
+    `);
+    try {
+      const oldEactors = caseDb.prepare('SELECT * FROM event_actors').all();
+      const insertEactor = caseDb.prepare('INSERT INTO event_actors_v2 (id, event_id, actor_id, role) VALUES (?, ?, ?, ?)');
+      for (const ea of oldEactors) {
+        const evtId = ea.anchor_id || ea.event_id;
+        const role = ea.role_in_anchor || ea.role || null;
+        if (evtId) insertEactor.run(genId(), evtId, ea.actor_id, role);
+      }
+      console.log(`[DB] Migrated ${oldEactors.length} event_actors`);
+    } catch (e) { console.log('[DB] No event_actors to migrate:', e.message); }
+    caseDb.exec('DROP TABLE IF EXISTS event_actors');
+    caseDb.exec('ALTER TABLE event_actors_v2 RENAME TO event_actors');
+
+    // 2b: Rebuild event_precedents — anchor_id → event_id
+    caseDb.exec('DROP TABLE IF EXISTS event_precedents_v2');
+    caseDb.exec(`
+      CREATE TABLE event_precedents_v2 (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        precedent_id TEXT NOT NULL,
+        relevance_note TEXT,
+        linked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    try {
+      const oldEprec = caseDb.prepare('SELECT * FROM event_precedents').all();
+      const insertEprec = caseDb.prepare('INSERT INTO event_precedents_v2 (id, event_id, precedent_id, relevance_note, linked_at) VALUES (?, ?, ?, ?, ?)');
+      for (const ep of oldEprec) {
+        const evtId = ep.anchor_id || ep.event_id;
+        if (evtId) insertEprec.run(genId(), evtId, ep.precedent_id, ep.relevance_note || null, ep.linked_at);
+      }
+      console.log(`[DB] Migrated ${oldEprec.length} event_precedents`);
+    } catch (e) { console.log('[DB] No event_precedents to migrate:', e.message); }
+    caseDb.exec('DROP TABLE IF EXISTS event_precedents');
+    caseDb.exec('ALTER TABLE event_precedents_v2 RENAME TO event_precedents');
+    caseDb.exec('CREATE INDEX IF NOT EXISTS idx_event_precedents_event ON event_precedents(event_id)');
+
+    // 2c: Create new spec tables
+    caseDb.exec(`
+      CREATE TABLE event_tags (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        tag TEXT NOT NULL
+      );
+      CREATE INDEX idx_event_tags_event ON event_tags(event_id);
+      CREATE INDEX idx_event_tags_tag ON event_tags(tag);
+
+      CREATE TABLE event_links (
+        id TEXT PRIMARY KEY,
+        source_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        target_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        link_type TEXT NOT NULL,
+        confidence REAL DEFAULT 1.0,
+        days_between INTEGER
+      );
+
+      CREATE TABLE incident_events (
+        id TEXT PRIMARY KEY,
+        incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+        event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        event_role TEXT
+      )
+    `);
+
+    // 2d: Migrate anchor_type → event_tags
+    const typeToTags = {
+      'HARASSMENT': ['harassment'],
+      'ADVERSE_ACTION': ['adverse_action'],
+      'REPORTED': ['protected_activity'],
+      'HELP': ['help_request'],
+      'START': ['employment_start'],
+      'END': ['employment_end'],
+      'MILESTONE': []
+    };
+    const insertTag = caseDb.prepare('INSERT INTO event_tags (id, event_id, tag) VALUES (?, ?, ?)');
+    for (const evt of oldEvents) {
+      const evtType = evt.anchor_type || evt.event_type;
+      const tags = typeToTags[evtType] || [];
+      for (const tag of tags) {
+        insertTag.run(genId(), evt.id, tag);
+      }
+    }
+    console.log('[DB] Migrated anchor_type → event_tags');
+
+    // 2d: Migrate event_incidents → incident_events
+    try {
+      const oldEI = caseDb.prepare('SELECT * FROM event_incidents').all();
+      const insertIE = caseDb.prepare('INSERT INTO incident_events (id, incident_id, event_id, event_role) VALUES (?, ?, ?, ?)');
+      for (const ei of oldEI) {
+        const evtId = ei.anchor_id || ei.event_id;
+        if (evtId && ei.incident_id) insertIE.run(genId(), ei.incident_id, evtId, 'primary');
+      }
+      console.log(`[DB] Migrated ${oldEI.length} event_incidents → incident_events`);
+    } catch (e) { console.log('[DB] No event_incidents to migrate:', e.message); }
+
+    // Re-enable FK checks
+    caseDb.pragma('foreign_keys = ON');
+    console.log('[DB] Session 8b migration complete');
+  }
+
+  // ── Session 8b cleanup: normalize event_type to lowercase + fill missing tags ──
+  const uppercaseCount = caseDb.prepare(
+    "SELECT COUNT(*) as cnt FROM events WHERE event_type IS NOT NULL AND event_type <> LOWER(event_type)"
+  ).get().cnt;
+  if (uppercaseCount > 0) {
+    console.log(`[DB] Session 8b cleanup: normalizing ${uppercaseCount} uppercase event_type values...`);
+    const crypto = require('crypto');
+    const genId = () => crypto.randomBytes(16).toString('hex');
+
+    // Lowercase all event_type values
+    caseDb.prepare("UPDATE events SET event_type = LOWER(event_type) WHERE event_type IS NOT NULL").run();
+
+    // Fill missing event_tags for events that have event_type but no tags
+    const typeToTag = {
+      'harassment': 'harassment',
+      'adverse_action': 'adverse_action',
+      'reported': 'protected_activity',
+      'help': 'help_request',
+      'start': 'employment_start',
+      'end': 'employment_end'
+      // 'milestone' → no tag (plain event)
+    };
+
+    const eventsNeedingTags = caseDb.prepare(`
+      SELECT e.id, e.event_type FROM events e
+      WHERE e.event_type IS NOT NULL AND e.event_type <> ''
+        AND NOT EXISTS (SELECT 1 FROM event_tags et WHERE et.event_id = e.id)
+    `).all();
+
+    const insertTag = caseDb.prepare('INSERT INTO event_tags (id, event_id, tag) VALUES (?, ?, ?)');
+    let tagsFilled = 0;
+    for (const evt of eventsNeedingTags) {
+      const tag = typeToTag[evt.event_type];
+      if (tag) {
+        insertTag.run(genId(), evt.id, tag);
+        tagsFilled++;
+      }
+    }
+    console.log(`[DB] Session 8b cleanup: filled ${tagsFilled} missing tags, ${eventsNeedingTags.length - tagsFilled} milestone events (no tag needed)`);
+  }
+
+  // Session 8c: Convert 'milestone' event_type to 'reported' (milestone was removed as a concept)
+  {
+    const milestoneEvents = caseDb.prepare(
+      "SELECT id FROM events WHERE event_type = 'milestone'"
+    ).all();
+    if (milestoneEvents.length > 0) {
+      const updateStmt = caseDb.prepare("UPDATE events SET event_type = 'reported' WHERE event_type = 'milestone'");
+      updateStmt.run();
+      console.log(`[DB] Session 8c: converted ${milestoneEvents.length} milestone events to reported`);
+    }
+  }
+
   return caseDb;
 }
 
@@ -351,6 +753,11 @@ function openCase(caseId) {
 function listCases() {
   const stmt = masterDb.prepare('SELECT id, name, created_at, updated_at FROM cases ORDER BY updated_at DESC');
   return stmt.all();
+}
+
+function renameCase(caseId, newName) {
+  masterDb.prepare('UPDATE cases SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newName, caseId);
+  return { id: caseId, name: newName };
 }
 
 /**
@@ -422,6 +829,7 @@ function setSetting(key, value) {
 module.exports = {
   initMasterDb,
   createCase,
+  renameCase,
   openCase,
   listCases,
   vaultExists,

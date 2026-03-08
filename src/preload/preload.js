@@ -22,7 +22,8 @@ contextBridge.exposeInMainWorld('api', {
     list: () => ipcRenderer.invoke('cases:list'),
     create: (name) => ipcRenderer.invoke('cases:create', name),
     open: (caseId) => ipcRenderer.invoke('cases:open', caseId),
-    current: () => ipcRenderer.invoke('cases:current')
+    current: () => ipcRenderer.invoke('cases:current'),
+    rename: (caseId, newName) => ipcRenderer.invoke('cases:rename', caseId, newName)
   },
 
   // Document operations
@@ -46,7 +47,8 @@ contextBridge.exposeInMainWorld('api', {
     // Recap status
     updateRecapStatus: (docId, isRecap, responseReceived) => ipcRenderer.invoke('documents:updateRecapStatus', docId, isRecap, responseReceived),
     updateDocumentSubtype: (docId, subtype) => ipcRenderer.invoke('documents:updateDocumentSubtype', docId, subtype),
-    delete: (docId) => ipcRenderer.invoke('documents:delete', docId)
+    delete: (docId) => ipcRenderer.invoke('documents:delete', docId),
+    copy: (docId) => ipcRenderer.invoke('documents:copy', docId)
   },
 
   // Group operations (document linking)
@@ -68,7 +70,9 @@ contextBridge.exposeInMainWorld('api', {
     list: () => ipcRenderer.invoke('incidents:list'),
     create: (data) => ipcRenderer.invoke('incidents:create', data),
     update: (id, updates) => ipcRenderer.invoke('incidents:update', id, updates),
-    delete: (id) => ipcRenderer.invoke('incidents:delete', id)
+    delete: (id) => ipcRenderer.invoke('incidents:delete', id),
+    suggest: () => ipcRenderer.invoke('incidents:suggest'),
+    reclassify: () => ipcRenderer.invoke('incidents:reclassify')
   },
 
   // Actor operations
@@ -114,26 +118,58 @@ contextBridge.exposeInMainWorld('api', {
     getDocumentBadges: (docId) => ipcRenderer.invoke('precedents:getDocumentBadges', docId)
   },
 
-  // Anchors
-  anchors: {
-    list: (caseId) => ipcRenderer.invoke('anchors:list', caseId),
-    generate: (caseId) => ipcRenderer.invoke('anchors:generate', caseId),
-    create: (caseId, data) => ipcRenderer.invoke('anchors:create', caseId, data),
-    update: (caseId, id, updates) => ipcRenderer.invoke('anchors:update', caseId, id, updates),
-    delete: (caseId, id) => ipcRenderer.invoke('anchors:delete', caseId, id),
-    linkEvidence: (caseId, anchorId, docId) => ipcRenderer.invoke('anchors:linkEvidence', caseId, anchorId, docId),
-    unlinkEvidence: (caseId, anchorId, docId) => ipcRenderer.invoke('anchors:unlinkEvidence', caseId, anchorId, docId),
-    getRelatedEvidence: (caseId, anchorId) => ipcRenderer.invoke('anchors:getRelatedEvidence', caseId, anchorId),
-    clone: (caseId, anchorId) => ipcRenderer.invoke('anchors:clone', caseId, anchorId),
-    reorder: (caseId, orderedIds) => ipcRenderer.invoke('anchors:reorder', caseId, orderedIds),
-    linkPrecedent: (caseId, anchorId, precedentId, note) => ipcRenderer.invoke('anchors:linkPrecedent', caseId, anchorId, precedentId, note),
-    unlinkPrecedent: (caseId, anchorId, precedentId) => ipcRenderer.invoke('anchors:unlinkPrecedent', caseId, anchorId, precedentId),
-    getPrecedents: (caseId, anchorId) => ipcRenderer.invoke('anchors:getPrecedents', caseId, anchorId),
-    breakApart: (caseId, anchorId) => ipcRenderer.invoke('anchors:breakApart', caseId, anchorId),
-    linkIncident: (caseId, anchorId, incidentId) => ipcRenderer.invoke('anchors:linkIncident', caseId, anchorId, incidentId),
-    unlinkIncident: (caseId, anchorId, incidentId) => ipcRenderer.invoke('anchors:unlinkIncident', caseId, anchorId, incidentId),
-    linkActor: (caseId, anchorId, actorId, role) => ipcRenderer.invoke('anchors:linkActor', caseId, anchorId, actorId, role),
-    unlinkActor: (caseId, anchorId, actorId) => ipcRenderer.invoke('anchors:unlinkActor', caseId, anchorId, actorId)
+  // Events
+  events: {
+    list: (caseId) => ipcRenderer.invoke('events:list', caseId),
+    generate: (caseId) => ipcRenderer.invoke('events:generate', caseId),
+    create: (caseId, data) => ipcRenderer.invoke('events:create', caseId, data),
+    update: (caseId, id, updates) => ipcRenderer.invoke('events:update', caseId, id, updates),
+    delete: (caseId, id) => ipcRenderer.invoke('events:delete', caseId, id),
+    linkEvidence: (caseId, eventId, docId) => ipcRenderer.invoke('events:linkEvidence', caseId, eventId, docId),
+    unlinkEvidence: (caseId, eventId, docId) => ipcRenderer.invoke('events:unlinkEvidence', caseId, eventId, docId),
+    getRelatedEvidence: (caseId, eventId) => ipcRenderer.invoke('events:getRelatedEvidence', caseId, eventId),
+    clone: (caseId, eventId) => ipcRenderer.invoke('events:clone', caseId, eventId),
+    reorder: (caseId, orderedIds) => ipcRenderer.invoke('events:reorder', caseId, orderedIds),
+    linkPrecedent: (caseId, eventId, precedentId, note) => ipcRenderer.invoke('events:linkPrecedent', caseId, eventId, precedentId, note),
+    unlinkPrecedent: (caseId, eventId, precedentId) => ipcRenderer.invoke('events:unlinkPrecedent', caseId, eventId, precedentId),
+    getPrecedents: (caseId, eventId) => ipcRenderer.invoke('events:getPrecedents', caseId, eventId),
+    breakApart: (caseId, eventId) => ipcRenderer.invoke('events:breakApart', caseId, eventId),
+    linkIncident: (caseId, eventId, incidentId, eventRole) => ipcRenderer.invoke('events:linkIncident', caseId, eventId, incidentId, eventRole),
+    unlinkIncident: (caseId, eventId, incidentId) => ipcRenderer.invoke('events:unlinkIncident', caseId, eventId, incidentId),
+    linkActor: (caseId, eventId, actorId, role) => ipcRenderer.invoke('events:linkActor', caseId, eventId, actorId, role),
+    unlinkActor: (caseId, eventId, actorId) => ipcRenderer.invoke('events:unlinkActor', caseId, eventId, actorId),
+    linkDocumentV2: (caseId, eventId, docId, relevanceV2) => ipcRenderer.invoke('events:linkDocumentV2', caseId, eventId, docId, relevanceV2),
+    setDocumentWeight: (caseId, eventId, docId, weight) => ipcRenderer.invoke('events:setDocumentWeight', caseId, eventId, docId, weight)
+  },
+
+  // Event Tags
+  eventTags: {
+    set: (eventId, tags) => ipcRenderer.invoke('eventTags:set', eventId, tags),
+    listAll: () => ipcRenderer.invoke('eventTags:listAll'),
+    suggest: (eventId) => ipcRenderer.invoke('eventTags:suggest', eventId)
+  },
+
+  // Event Links (Causality)
+  eventLinks: {
+    list: () => ipcRenderer.invoke('eventLinks:list'),
+    create: (data) => ipcRenderer.invoke('eventLinks:create', data),
+    delete: (linkId) => ipcRenderer.invoke('eventLinks:delete', linkId),
+    suggest: () => ipcRenderer.invoke('eventLinks:suggest')
+  },
+
+  // Incident Events
+  incidentEvents: {
+    list: (incidentId) => ipcRenderer.invoke('incidentEvents:list', incidentId),
+    link: (incidentId, eventId, eventRole) => ipcRenderer.invoke('incidentEvents:link', incidentId, eventId, eventRole),
+    unlink: (incidentId, eventId) => ipcRenderer.invoke('incidentEvents:unlink', incidentId, eventId)
+  },
+
+  // Damages
+  damages: {
+    list: () => ipcRenderer.invoke('damages:list'),
+    create: (data) => ipcRenderer.invoke('damages:create', data),
+    update: (id, updates) => ipcRenderer.invoke('damages:update', id, updates),
+    delete: (id) => ipcRenderer.invoke('damages:delete', id)
   },
 
   // Case context

@@ -8,29 +8,22 @@ const { processFiles } = require('./ingest/file-processor');
 const { analyzeConnections, detectEscalationPattern } = require('./analysis/timeline-connections');
 const { analyzeAllPrecedents, getDocumentPrecedentBadges } = require('./analysis/precedent-matcher');
 const { classifyEvidence } = require('./ingest/evidence-classifier');
-const { detectIncidents, computeSeverity, suggestActorsForIncident } = require('./analysis/incident-detector');
+const { detectIncidents, computeSeverity } = require('./analysis/incident-detector');
 const { detectActors, findPotentialDuplicates } = require('./analysis/actor-detector');
-const { categorize, buildChain, categorizeAndBuildChain } = require('./analysis/categorizer');
-const { ActorRegistry, resolveHarasserForEntry, RELATIONSHIP_TYPES, IN_CHAIN_RELATIONSHIPS } = require('./analysis/actor-registry');
 const {
-  generateEventsFromContext,
-  generateEventsFromIncidents,
-  generateEventsFromDocuments,
-  mergeEvents,
-  splitEventSegment,
+  generateAnchorsFromContext,
+  generateAnchorsFromIncidents,
+  generateAnchorsFromDocuments,
+  mergeAnchors,
+  splitAnchorSegment,
   extractDate,
   extractActorsFromNarrative,
-  EVENT_PATTERNS
+  ANCHOR_PATTERNS
 } = require('./analysis/anchor-generator');
-const contextStore = require('./analysis/context-store');
-const { DocumentAssessor, DOCUMENT_INPUT_TYPES } = require('./analysis/assessor');
-const { suggestTags, getTagVocabulary } = require('./analysis/event-tagger');
-const { detectCausality, suggestIncidents } = require('./analysis/causality-engine');
 
 // Track currently open case
 let currentCaseDb = null;
 let currentCaseId = null;
-let actorRegistry = null;
 
 /**
  * Compute Jaccard similarity between two text strings (word-level).
@@ -50,14 +43,11 @@ function textSimilarity(textA, textB) {
 }
 
 function registerIpcHandlers() {
-  console.log('[IPC] Registering handlers...');
 
   // ==================== VAULT ====================
 
   ipcMain.handle('vault:exists', async () => {
-    const exists = db.vaultExists();
-    console.log('[IPC] vault:exists =>', exists);
-    return exists;
+    return db.vaultExists();
   });
 
   ipcMain.handle('vault:setup', async (event, passphrase) => {
@@ -76,15 +66,12 @@ function registerIpcHandlers() {
     try {
       const salt = db.getSalt();
       if (!salt) {
-        console.error('[IPC] vault:unlock — no salt found');
         return { success: false, error: 'Vault not set up' };
       }
       await keyManager.unlock(passphrase, salt);
-      const masterDb = db.initMasterDb(keyManager.getMasterKey());
-      console.log('[IPC] vault:unlock => success, masterDb:', !!masterDb);
+      db.initMasterDb(keyManager.getMasterKey());
       return { success: true };
     } catch (error) {
-      console.error('[IPC] vault:unlock ERROR:', error.message);
       return { success: false, error: 'Invalid passphrase' };
     }
   });
@@ -116,19 +103,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('cases:list', async () => {
     try {
-      const cases = db.listCases();
-      console.log('[IPC] cases:list =>', cases.length, 'cases', cases.map(c => c.name));
-      return { success: true, cases };
-    } catch (error) {
-      console.error('[IPC] cases:list ERROR:', error.message);
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('cases:rename', async (event, caseId, newName) => {
-    try {
-      const result = db.renameCase(caseId, newName);
-      return { success: true, case: result };
+      return { success: true, cases: db.listCases() };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -148,16 +123,6 @@ function registerIpcHandlers() {
       closeCurrentCase();
       currentCaseDb = db.openCase(caseId);
       currentCaseId = caseId;
-
-      // Initialize actor registry from the case database
-      try {
-        actorRegistry = ActorRegistry.fromDb(currentCaseDb);
-        console.log('[IPC] Actor registry loaded:', actorRegistry.actors.size, 'actors');
-      } catch (e) {
-        console.error('[IPC] Actor registry init error:', e.message);
-        actorRegistry = null;
-      }
-
       console.log('[IPC] cases:open success, caseId:', caseId, 'db:', !!currentCaseDb);
       return { success: true };
     } catch (error) {
@@ -271,9 +236,6 @@ function registerIpcHandlers() {
           doc.evidence_confidence, doc.evidence_secondary, doc.evidence_scores_json,
           doc.media_subtype || null, doc.is_recap || 0
         );
-        // Verify the insert actually persisted
-        const verify = currentCaseDb.prepare('SELECT count(*) as cnt FROM documents').get();
-        console.log('[IPC] VERIFY after insert:', doc.filename, '-> total docs now:', verify.cnt);
         inserted.push(docToSummary(doc));
       }
 
@@ -283,13 +245,6 @@ function registerIpcHandlers() {
         const allText = [doc.extracted_text, doc.ocr_text].filter(Boolean).join('\n');
         if (allText) {
           const detected = detectIncidents(allText, doc.document_date, doc.id);
-          // Suggest actor roles for each detected incident
-          if (detected.length > 0 && actorRegistry && actorRegistry.actors.size > 0) {
-            for (const incident of detected) {
-              const textForActors = incident.suggestedDescription || incident.matchedText || '';
-              incident.suggestedActors = suggestActorsForIncident(textForActors, actorRegistry);
-            }
-          }
           if (detected.length > 0) {
             allDetectedIncidents.push(...detected);
           }
@@ -298,7 +253,6 @@ function registerIpcHandlers() {
 
       // Detect actors from ingested documents
       const allDetectedActors = [];
-      const autoLinkedActors = [];
       for (const doc of documents) {
         const allText = [doc.extracted_text, doc.ocr_text].filter(Boolean).join('\n');
         if (allText) {
@@ -306,24 +260,11 @@ function registerIpcHandlers() {
           if (detected.length > 0) {
             allDetectedActors.push(...detected);
           }
-
-          // Auto-link known actors from registry to this document
-          if (actorRegistry && actorRegistry.actors.size > 0) {
-            const linked = actorRegistry.autoLinkActorsToDocument(doc.id, allText);
-            if (linked.length > 0) {
-              autoLinkedActors.push(...linked);
-            }
-          }
         }
       }
 
-      // Refresh registry after new actors may have been added
-      if (actorRegistry) {
-        try { actorRegistry.loadAll(); } catch (e) { /* ignore */ }
-      }
-
-      console.log('[IPC] inserted', inserted.length, 'documents,', allDetectedIncidents.length, 'potential incidents,', allDetectedActors.length, 'potential actors detected,', autoLinkedActors.length, 'known actors auto-linked,', nearDuplicates.length, 'near-duplicates flagged');
-      return { success: true, documents: inserted, errors, detectedIncidents: allDetectedIncidents, detectedActors: allDetectedActors, autoLinkedActors, nearDuplicates };
+      console.log('[IPC] inserted', inserted.length, 'documents,', allDetectedIncidents.length, 'potential incidents,', allDetectedActors.length, 'potential actors detected,', nearDuplicates.length, 'near-duplicates flagged');
+      return { success: true, documents: inserted, errors, detectedIncidents: allDetectedIncidents, detectedActors: allDetectedActors, nearDuplicates };
     } catch (error) {
       console.error('[IPC] documents:ingest EXCEPTION:', error.message, error.stack);
       return { success: false, error: error.message };
@@ -480,18 +421,11 @@ function registerIpcHandlers() {
         return { success: false, error: 'No case is open' };
       }
 
-      // Clean up all related records referencing this document
-      try { currentCaseDb.prepare('DELETE FROM document_date_entries WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM actor_appearances WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM anchor_evidence WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM event_documents WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM incident_documents WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM claim_evidence WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM pay_records WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM timeline_connections WHERE (source_id = ? AND source_type = "document") OR (target_id = ? AND target_type = "document")').run(docId, docId); } catch (e) {}
-
       // Delete from documents table
       currentCaseDb.prepare('DELETE FROM documents WHERE id = ?').run(docId);
+
+      // Clean up related document_date_entries if table exists
+      try { currentCaseDb.prepare('DELETE FROM document_date_entries WHERE document_id = ?').run(docId); } catch (e) {}
 
       return { success: true };
     } catch (error) {
@@ -559,12 +493,13 @@ function registerIpcHandlers() {
     }
   });
 
-  // Update recap status on a document (legacy, kept for compat)
+  // Update recap status on a document
   ipcMain.handle('documents:updateRecapStatus', async (event, docId, isRecap, responseReceived) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
       }
+      // Ensure columns exist
       try { currentCaseDb.prepare('SELECT is_recap FROM documents LIMIT 1').get(); }
       catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN is_recap BOOLEAN DEFAULT 0'); } catch (e2) {} }
       try { currentCaseDb.prepare('SELECT response_received FROM documents LIMIT 1').get(); }
@@ -573,28 +508,6 @@ function registerIpcHandlers() {
       currentCaseDb.prepare(`
         UPDATE documents SET is_recap = ?, response_received = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
       `).run(isRecap ? 1 : 0, responseReceived != null ? (responseReceived ? 1 : 0) : null, docId);
-
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // Update document subtype classification (replaces recap toggle)
-  ipcMain.handle('documents:updateDocumentSubtype', async (event, docId, subtype) => {
-    try {
-      if (!currentCaseDb) {
-        return { success: false, error: 'No case is open' };
-      }
-      try { currentCaseDb.prepare('SELECT document_subtype FROM documents LIMIT 1').get(); }
-      catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN document_subtype TEXT DEFAULT NULL'); } catch (e2) {} }
-      try { currentCaseDb.prepare('SELECT is_recap FROM documents LIMIT 1').get(); }
-      catch (e) { try { currentCaseDb.exec('ALTER TABLE documents ADD COLUMN is_recap BOOLEAN DEFAULT 0'); } catch (e2) {} }
-
-      const isRecap = subtype ? 1 : 0;
-      currentCaseDb.prepare(`
-        UPDATE documents SET document_subtype = ?, is_recap = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `).run(subtype || null, isRecap, docId);
 
       return { success: true };
     } catch (error) {
@@ -742,37 +655,7 @@ function registerIpcHandlers() {
         FROM actors
       `).all();
 
-      // Fetch actor-document links so precedent checks can be per-incident
-      const actorAppearances = currentCaseDb.prepare(`
-        SELECT actor_id, document_id FROM actor_appearances
-      `).all();
-
-      // Fetch direct incident-actor links for precise role checks
-      const incidentActors = currentCaseDb.prepare(`
-        SELECT incident_id, actor_id, role FROM incident_actors
-      `).all();
-
-      // Attach event-link weights and relevance to documents for case strength scoring
-      try {
-        const docWeights = currentCaseDb.prepare(
-          'SELECT document_id, relevance, weight FROM event_documents'
-        ).all();
-        const weightMap = {};
-        for (const dw of docWeights) {
-          if (!weightMap[dw.document_id] || (dw.weight || 3) > (weightMap[dw.document_id].weight || 3)) {
-            weightMap[dw.document_id] = { relevance: dw.relevance, weight: dw.weight || 3 };
-          }
-        }
-        for (const doc of documents) {
-          const w = weightMap[doc.id];
-          if (w) {
-            doc.link_relevance = w.relevance;
-            doc.link_weight = w.weight;
-          }
-        }
-      } catch (e) { /* weight column may not exist yet */ }
-
-      const analysis = analyzeAllPrecedents(documents, incidents, actors, jurisdiction, actorAppearances, incidentActors);
+      const analysis = analyzeAllPrecedents(documents, incidents, actors, jurisdiction);
 
       return { success: true, analysis, jurisdiction };
     } catch (error) {
@@ -997,28 +880,9 @@ function registerIpcHandlers() {
       }
 
       const incidents = currentCaseDb.prepare(`
-        SELECT i.*,
-          (SELECT COUNT(*) FROM incident_actors ia WHERE ia.incident_id = i.id) AS actor_count
-        FROM incidents i
-        ORDER BY i.incident_date DESC, i.created_at DESC
+        SELECT * FROM incidents
+        ORDER BY incident_date DESC, created_at DESC
       `).all();
-
-      // Attach linked documents and events to each incident
-      const docStmt = currentCaseDb.prepare(`
-        SELECT d.id, d.filename, d.evidence_type, d.document_date, id2.relationship
-        FROM incident_documents id2
-        JOIN documents d ON d.id = id2.document_id
-        WHERE id2.incident_id = ?
-      `);
-      const evtStmt = currentCaseDb.prepare(`
-        SELECT ie.event_id, ie.event_role
-        FROM incident_events ie
-        WHERE ie.incident_id = ?
-      `);
-      for (const inc of incidents) {
-        inc.documents = docStmt.all(inc.id);
-        inc.events = evtStmt.all(inc.id);
-      }
 
       return { success: true, incidents };
     } catch (error) {
@@ -1072,19 +936,6 @@ function registerIpcHandlers() {
           VALUES (?, ?, 'source')
         `);
         linkStmt.run(id, incidentData.sourceDocumentId);
-      }
-
-      // Link actors if provided: [{ actorId, role }]
-      if (incidentData.actors && Array.isArray(incidentData.actors)) {
-        const linkActorStmt = currentCaseDb.prepare(`
-          INSERT OR IGNORE INTO incident_actors (incident_id, actor_id, role)
-          VALUES (?, ?, ?)
-        `);
-        for (const { actorId, role } of incidentData.actors) {
-          if (actorId && role) {
-            linkActorStmt.run(id, actorId, role);
-          }
-        }
       }
 
       return {
@@ -1163,124 +1014,6 @@ function registerIpcHandlers() {
       currentCaseDb.prepare('DELETE FROM incidents WHERE id = ?').run(incidentId);
 
       return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('incidents:reclassify', async () => {
-    try {
-      if (!currentCaseDb) {
-        return { success: false, error: 'No case is open' };
-      }
-
-      const ctx = currentCaseDb.prepare(
-        "SELECT jurisdiction FROM case_context WHERE id = 1"
-      ).get();
-      const jurisdiction = ctx?.jurisdiction || 'both';
-
-      const incidents = currentCaseDb.prepare('SELECT * FROM incidents').all();
-
-      const updateStmt = currentCaseDb.prepare(`
-        UPDATE incidents
-        SET computed_severity = ?, severity_factors_json = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `);
-
-      let updated = 0;
-      for (const inc of incidents) {
-        const incidentData = {
-          severity: inc.base_severity,
-          suggestedSeverity: inc.base_severity,
-          harrisNature: null,
-          tangibleAction: false,
-          burlingtonProximity: inc.involves_retaliation ? true : false
-        };
-        const context = {
-          daysAfterProtectedActivity: inc.days_after_protected_activity
-        };
-        const severityResult = computeSeverity(incidentData, context, jurisdiction);
-        updateStmt.run(severityResult.computedSeverity, JSON.stringify(severityResult.factors), inc.id);
-        updated++;
-      }
-
-      console.log(`[IPC] incidents:reclassify: updated ${updated} incidents`);
-      return { success: true, updated };
-    } catch (error) {
-      console.error('[IPC] incidents:reclassify error:', error.message);
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('incidents:suggest', async () => {
-    try {
-      const caseDb = currentCaseDb;
-      const events = caseDb.prepare('SELECT * FROM events WHERE date IS NOT NULL ORDER BY date').all().map(evt => {
-        const tags = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(evt.id).map(r => r.tag);
-        return { ...evt, tags };
-      });
-      const existingIncidents = caseDb.prepare('SELECT * FROM incidents').all();
-      const suggestions = suggestIncidents(events, existingIncidents);
-      return { success: true, suggestions };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ── Incident ↔ Actor linking ──────────────────────────────────────────────
-
-  ipcMain.handle('incidents:linkActor', async (event, incidentId, actorId, role) => {
-    try {
-      if (!currentCaseDb) {
-        return { success: false, error: 'No case is open' };
-      }
-      const validRoles = ['perpetrator', 'target', 'witness', 'bystander'];
-      if (!validRoles.includes(role)) {
-        return { success: false, error: `Invalid role. Must be one of: ${validRoles.join(', ')}` };
-      }
-      currentCaseDb.prepare(`
-        INSERT OR REPLACE INTO incident_actors (incident_id, actor_id, role)
-        VALUES (?, ?, ?)
-      `).run(incidentId, actorId, role);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('incidents:unlinkActor', async (event, incidentId, actorId) => {
-    try {
-      if (!currentCaseDb) {
-        return { success: false, error: 'No case is open' };
-      }
-      currentCaseDb.prepare(
-        'DELETE FROM incident_actors WHERE incident_id = ? AND actor_id = ?'
-      ).run(incidentId, actorId);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('incidents:getActors', async (event, incidentId) => {
-    try {
-      if (!currentCaseDb) {
-        return { success: false, error: 'No case is open' };
-      }
-      const actors = currentCaseDb.prepare(`
-        SELECT a.*, ia.role AS incident_role
-        FROM incident_actors ia
-        JOIN actors a ON a.id = ia.actor_id
-        WHERE ia.incident_id = ?
-        ORDER BY
-          CASE ia.role
-            WHEN 'perpetrator' THEN 0
-            WHEN 'target' THEN 1
-            WHEN 'witness' THEN 2
-            WHEN 'bystander' THEN 3
-          END
-      `).all(incidentId);
-      return { success: true, actors };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -1368,12 +1101,6 @@ function registerIpcHandlers() {
 
       const id = uuidv4();
 
-      // Determine in_reporting_chain from relationship if not explicitly set
-      const relationship = actorData.relationship || null;
-      const inChain = actorData.inReportingChain !== undefined
-        ? (actorData.inReportingChain ? 1 : 0)
-        : (relationship && IN_CHAIN_RELATIONSHIPS.has(relationship) ? 1 : 0);
-
       const stmt = currentCaseDb.prepare(`
         INSERT INTO actors (
           id, name, email, role, title, department,
@@ -1381,9 +1108,8 @@ function registerIpcHandlers() {
           relationship_to_self, reports_to, is_self,
           has_written_statement, statement_is_dated, statement_is_specific,
           still_employed, reports_to_bad_actor, risk_factors,
-          gender, disability_status, start_date, end_date,
-          aliases, in_reporting_chain
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          gender, disability_status, start_date, end_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
@@ -1396,7 +1122,7 @@ function registerIpcHandlers() {
         actorData.classification || 'unknown',
         actorData.secondaryClassifications ? JSON.stringify(actorData.secondaryClassifications) : null,
         actorData.wouldTheyHelp || 'unknown',
-        relationship,
+        actorData.relationship || null,
         actorData.reportsTo || null,
         actorData.isSelf ? 1 : 0,
         actorData.hasWrittenStatement ? 1 : 0,
@@ -1408,9 +1134,7 @@ function registerIpcHandlers() {
         actorData.gender || null,
         actorData.disabilityStatus || null,
         actorData.startDate || null,
-        actorData.endDate || null,
-        JSON.stringify(actorData.aliases || []),
-        inChain
+        actorData.endDate || null
       );
 
       // Link to source document if provided
@@ -1420,11 +1144,6 @@ function registerIpcHandlers() {
           VALUES (?, ?, ?, 1)
         `);
         linkStmt.run(id, actorData.sourceDocumentId, actorData.roleInDocument || null);
-      }
-
-      // Refresh actor registry
-      if (actorRegistry) {
-        try { actorRegistry.loadAll(); } catch (e) { /* ignore */ }
       }
 
       return { success: true, actor: { id, ...actorData } };
@@ -1478,18 +1197,6 @@ function registerIpcHandlers() {
         values.push(Array.isArray(updates.secondaryClassifications) ? JSON.stringify(updates.secondaryClassifications) : updates.secondaryClassifications);
       }
 
-      // Handle aliases (JSON array)
-      if (updates.aliases !== undefined) {
-        fields.push('aliases = ?');
-        values.push(JSON.stringify(Array.isArray(updates.aliases) ? updates.aliases : []));
-      }
-
-      // Handle in_reporting_chain
-      if (updates.inReportingChain !== undefined) {
-        fields.push('in_reporting_chain = ?');
-        values.push(updates.inReportingChain ? 1 : 0);
-      }
-
       if (fields.length === 0) {
         return { success: true };
       }
@@ -1497,13 +1204,8 @@ function registerIpcHandlers() {
       fields.push("updated_at = datetime('now')");
       values.push(actorId);
 
-      const stmt = currentCaseDb.prepare('UPDATE actors SET ' + fields.join(', ') + ' WHERE id = ?');
+      const stmt = currentCaseDb.prepare(`UPDATE actors SET ${fields.join(', ')} WHERE id = ?`);
       stmt.run(...values);
-
-      // Refresh actor registry
-      if (actorRegistry) {
-        try { actorRegistry.loadAll(); } catch (e) { /* ignore */ }
-      }
 
       return { success: true };
     } catch (error) {
@@ -1562,17 +1264,17 @@ function registerIpcHandlers() {
         UPDATE incident_actors SET actor_id = ? WHERE actor_id = ?
       `).run(keepActorId, mergeActorId);
 
-      // Delete conflicting event links where both actors are in same event
+      // Delete conflicting anchor links where both actors are in same anchor
       currentCaseDb.prepare(`
-        DELETE FROM event_actors
-        WHERE actor_id = ? AND event_id IN (
-          SELECT event_id FROM event_actors WHERE actor_id = ?
+        DELETE FROM anchor_actors
+        WHERE actor_id = ? AND anchor_id IN (
+          SELECT anchor_id FROM anchor_actors WHERE actor_id = ?
         )
       `).run(mergeActorId, keepActorId);
 
-      // Move remaining event links
+      // Move remaining anchor links
       currentCaseDb.prepare(`
-        UPDATE event_actors SET actor_id = ? WHERE actor_id = ?
+        UPDATE anchor_actors SET actor_id = ? WHERE actor_id = ?
       `).run(keepActorId, mergeActorId);
 
       // Delete the merged actor
@@ -1736,101 +1438,6 @@ function registerIpcHandlers() {
       ).run(actorId, documentId);
 
       return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ==================== ACTOR REGISTRY ====================
-
-  /** Get relationship type taxonomy */
-  ipcMain.handle('actors:getRelationshipTypes', async () => {
-    return { success: true, types: RELATIONSHIP_TYPES };
-  });
-
-  /** Resolve harasser role from text using known actors */
-  ipcMain.handle('actors:resolveFromText', async (event, text, confirmedActorIds) => {
-    try {
-      if (!actorRegistry) {
-        return { success: true, role: 'unknown', inChain: false, actor: null, pending: [] };
-      }
-      const result = resolveHarasserForEntry(text, actorRegistry, confirmedActorIds || null);
-      return {
-        success: true,
-        role: result.role,
-        inChain: result.inChain,
-        actor: result.actor ? { id: result.actor.id, name: result.actor.name, relationship: result.actor.relationship } : null,
-        pending: result.pending.map(m => ({
-          actorId: m.actor.id,
-          actorName: m.actor.name,
-          confidence: m.confidence,
-          matchedOn: m.matchedOn,
-          relationship: m.actor.relationship,
-          classification: m.actor.classification,
-        })),
-      };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  /** Find all known actors mentioned in text */
-  ipcMain.handle('actors:findInText', async (event, text) => {
-    try {
-      if (!actorRegistry) {
-        return { success: true, matches: [] };
-      }
-      const matches = actorRegistry.findActorsInText(text);
-      return {
-        success: true,
-        matches: matches.map(m => ({
-          actorId: m.actor.id,
-          actorName: m.actor.name,
-          confidence: m.confidence,
-          matchedOn: m.matchedOn,
-          needsConfirmation: m.needsConfirmation,
-          relationship: m.actor.relationship,
-          relationshipLabel: m.actor.relationshipLabel,
-          harasserRole: m.actor.harasserRole,
-          inReportingChain: m.actor.inReportingChain,
-          classification: m.actor.classification,
-        })),
-      };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  /** Get actors in the reporting chain */
-  ipcMain.handle('actors:getChain', async () => {
-    try {
-      if (!actorRegistry) {
-        return { success: true, actors: [] };
-      }
-      const chain = actorRegistry.actorsInChain();
-      return {
-        success: true,
-        actors: chain.map(a => ({
-          id: a.id,
-          name: a.name,
-          relationship: a.relationship,
-          relationshipLabel: a.relationshipLabel,
-          title: a.title,
-          classification: a.classification,
-        })),
-      };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  /** Get summary of all actors for assessment prompts */
-  ipcMain.handle('actors:getSummary', async () => {
-    try {
-      if (!actorRegistry) {
-        return { success: true, summary: 'No actors defined.' };
-      }
-      return { success: true, summary: actorRegistry.summaryForAssessment() };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -2040,303 +1647,431 @@ function registerIpcHandlers() {
     }
   });
 
-  // ==================== EVENTS ====================
+  // ==================== ANCHORS ====================
 
-  ipcMain.handle('events:list', async (event, caseId) => {
+  ipcMain.handle('anchors:list', async (event, caseId) => {
     try {
-      const caseDb = currentCaseDb;
+      const caseDb = db.openCase(caseId);
 
-      const events = caseDb.prepare('SELECT * FROM events ORDER BY date, created_at').all();
+      // Ensure tables exist
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS anchors (
+          id TEXT PRIMARY KEY,
+          anchor_type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          anchor_date DATE,
+          date_confidence TEXT DEFAULT 'exact',
+          what_happened TEXT,
+          where_location TEXT,
+          impact_summary TEXT,
+          severity TEXT,
+          is_auto_generated BOOLEAN DEFAULT 1,
+          user_edited BOOLEAN DEFAULT 0,
+          source_context TEXT,
+          sort_order INTEGER,
+          is_expanded BOOLEAN DEFAULT 0,
+          contains_multiple_events BOOLEAN DEFAULT 0,
+          event_count INTEGER DEFAULT 1,
+          action_direction TEXT DEFAULT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS anchor_incidents (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          incident_id TEXT NOT NULL REFERENCES incidents(id),
+          PRIMARY KEY (anchor_id, incident_id)
+        );
+        CREATE TABLE IF NOT EXISTS anchor_documents (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          document_id TEXT NOT NULL REFERENCES documents(id),
+          relevance TEXT DEFAULT 'supports',
+          PRIMARY KEY (anchor_id, document_id)
+        );
+        CREATE TABLE IF NOT EXISTS anchor_actors (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          actor_id TEXT NOT NULL REFERENCES actors(id),
+          role_in_anchor TEXT,
+          PRIMARY KEY (anchor_id, actor_id)
+        );
+      `);
 
-      // Get linked items for each event
-      for (const evt of events) {
-        // Tags
+      const stmt = caseDb.prepare(`
+        SELECT * FROM anchors ORDER BY sort_order, anchor_date
+      `);
+      const anchors = stmt.all();
+
+      // Get linked items for each anchor
+      for (const anchor of anchors) {
         try {
-          evt.tags = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(evt.id).map(r => r.tag);
-        } catch (e) { evt.tags = []; }
-
-        // Documents
-        try {
-          evt.documents = caseDb.prepare(`
-            SELECT d.*, ed.relevance, ed.weight
+          anchor.documents = caseDb.prepare(`
+            SELECT d.*, ad.relevance
             FROM documents d
-            JOIN event_documents ed ON ed.document_id = d.id
-            WHERE ed.event_id = ?
-          `).all(evt.id);
-        } catch (e) { evt.documents = []; }
+            JOIN anchor_documents ad ON ad.document_id = d.id
+            WHERE ad.anchor_id = ?
+          `).all(anchor.id);
+        } catch (e) { anchor.documents = []; }
 
-        // Incidents (via incident_events)
         try {
-          evt.incidents = caseDb.prepare(`
-            SELECT i.*, ie.event_role
+          anchor.incidents = caseDb.prepare(`
+            SELECT i.*
             FROM incidents i
-            JOIN incident_events ie ON ie.incident_id = i.id
-            WHERE ie.event_id = ?
-          `).all(evt.id);
-        } catch (e) { evt.incidents = []; }
+            JOIN anchor_incidents ai ON ai.incident_id = i.id
+            WHERE ai.anchor_id = ?
+          `).all(anchor.id);
+        } catch (e) { anchor.incidents = []; }
 
-        // Actors
         try {
-          evt.actors = caseDb.prepare(`
-            SELECT a.*, ea.role
+          anchor.actors = caseDb.prepare(`
+            SELECT a.*, aa.role_in_anchor
             FROM actors a
-            JOIN event_actors ea ON ea.actor_id = a.id
-            WHERE ea.event_id = ?
-          `).all(evt.id);
-        } catch (e) { evt.actors = []; }
+            JOIN anchor_actors aa ON aa.actor_id = a.id
+            WHERE aa.anchor_id = ?
+          `).all(anchor.id);
+        } catch (e) { anchor.actors = []; }
 
-        // Precedents
+        // Get linked precedents
         try {
-          evt.precedents = caseDb.prepare('SELECT * FROM event_precedents WHERE event_id = ?').all(evt.id);
-        } catch (e) { evt.precedents = []; }
+          anchor.precedents = caseDb.prepare(`
+            SELECT * FROM anchor_precedents WHERE anchor_id = ?
+          `).all(anchor.id);
+        } catch (e) { anchor.precedents = []; }
       }
-      return { success: true, events };
+
+      caseDb.close();
+      return { success: true, anchors };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('events:generate', async (event, caseId) => {
+  ipcMain.handle('anchors:generate', async (event, caseId) => {
     try {
-      const caseDb = currentCaseDb;
+      const caseDb = db.openCase(caseId);
+
+      // Ensure anchor tables exist
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS anchors (
+          id TEXT PRIMARY KEY,
+          anchor_type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          anchor_date DATE,
+          date_confidence TEXT DEFAULT 'exact',
+          what_happened TEXT,
+          where_location TEXT,
+          impact_summary TEXT,
+          severity TEXT,
+          is_auto_generated BOOLEAN DEFAULT 1,
+          user_edited BOOLEAN DEFAULT 0,
+          source_context TEXT,
+          sort_order INTEGER,
+          is_expanded BOOLEAN DEFAULT 0,
+          contains_multiple_events BOOLEAN DEFAULT 0,
+          event_count INTEGER DEFAULT 1,
+          action_direction TEXT DEFAULT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS anchor_incidents (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          incident_id TEXT NOT NULL REFERENCES incidents(id),
+          PRIMARY KEY (anchor_id, incident_id)
+        );
+        CREATE TABLE IF NOT EXISTS anchor_documents (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          document_id TEXT NOT NULL REFERENCES documents(id),
+          relevance TEXT DEFAULT 'supports',
+          PRIMARY KEY (anchor_id, document_id)
+        );
+        CREATE TABLE IF NOT EXISTS anchor_actors (
+          anchor_id TEXT NOT NULL REFERENCES anchors(id),
+          actor_id TEXT NOT NULL REFERENCES actors(id),
+          role_in_anchor TEXT,
+          PRIMARY KEY (anchor_id, actor_id)
+        );
+      `);
 
       // Get existing data
       const documents = caseDb.prepare('SELECT * FROM documents').all();
+
       let incidents = [];
-      try { incidents = caseDb.prepare('SELECT * FROM incidents').all(); } catch (e) {}
+      try {
+        incidents = caseDb.prepare('SELECT * FROM incidents').all();
+      } catch (e) {}
+
       let context = null;
-      try { context = caseDb.prepare('SELECT * FROM case_context WHERE id = 1').get(); } catch (e) {}
+      try {
+        context = caseDb.prepare('SELECT * FROM case_context WHERE id = 1').get();
+      } catch (e) {}
 
-      // Get existing events for dedup
-      const existingEvents = caseDb.prepare('SELECT id, title, date FROM events').all();
+      let userEditedAnchors = [];
+      try {
+        userEditedAnchors = caseDb.prepare('SELECT * FROM anchors WHERE user_edited = 1').all();
+      } catch (e) {}
 
-      // Generate events from each source
+      // Generate anchors from each source
       const contextAnchors = context?.narrative
-        ? generateEventsFromContext(context.narrative, [])
+        ? generateAnchorsFromContext(context.narrative, userEditedAnchors)
         : [];
-      const incidentAnchors = generateEventsFromIncidents(incidents);
-      const documentAnchors = generateEventsFromDocuments(documents);
-      const allAnchors = mergeEvents(contextAnchors, incidentAnchors, documentAnchors);
+      const incidentAnchors = generateAnchorsFromIncidents(incidents);
+      const documentAnchors = generateAnchorsFromDocuments(documents);
 
-      // Add START event if hire_date exists and no employment_start event
-      const hasStart = existingEvents.some(e => e.title === 'Employment Started') ||
-        allAnchors.some(a => a.anchor_type === 'START');
-      if (context?.hire_date && !hasStart) {
+      // Merge all
+      const allAnchors = mergeAnchors(contextAnchors, incidentAnchors, documentAnchors);
+
+      // Add START anchor if hire_date exists
+      if (context?.hire_date && !allAnchors.some(a => a.anchor_type === 'START')) {
         allAnchors.unshift({
           id: uuidv4(),
           anchor_type: 'START',
           title: 'Employment Started',
-          anchor_date: context.hire_date
+          anchor_date: context.hire_date,
+          date_confidence: 'exact',
+          is_auto_generated: true,
+          sort_order: 0
         });
       }
 
-      if (allAnchors.length === 0) {
+      // Ensure anchor_precedents table exists
+      try {
+        caseDb.exec(`
+          CREATE TABLE IF NOT EXISTS anchor_precedents (
+            anchor_id TEXT NOT NULL REFERENCES anchors(id),
+            precedent_id TEXT NOT NULL,
+            relevance_note TEXT,
+            linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (anchor_id, precedent_id)
+          );
+        `);
+      } catch (e) {}
+
+      // Safety: only delete old auto-anchors if we actually generated new ones
+      // This prevents wiping everything when narrative is empty or generator fails
+      if (allAnchors.length > 0) {
+        caseDb.prepare('DELETE FROM anchor_documents WHERE anchor_id IN (SELECT id FROM anchors WHERE user_edited = 0)').run();
+        caseDb.prepare('DELETE FROM anchor_incidents WHERE anchor_id IN (SELECT id FROM anchors WHERE user_edited = 0)').run();
+        caseDb.prepare('DELETE FROM anchor_actors WHERE anchor_id IN (SELECT id FROM anchors WHERE user_edited = 0)').run();
+        try {
+          caseDb.prepare('DELETE FROM anchor_precedents WHERE anchor_id IN (SELECT id FROM anchors WHERE user_edited = 0)').run();
+        } catch (e) {}
+        caseDb.prepare('DELETE FROM anchors WHERE user_edited = 0').run();
+      } else {
+        caseDb.close();
         return { success: true, count: 0, actorsFound: 0, actors: [], skipped: true };
       }
 
-      // Detect actors from narrative
-      let detectedActors = [];
-      if (context?.narrative) {
-        try { detectedActors = extractActorsFromNarrative(context.narrative); } catch (e) {}
+      // Migrate: add action_direction column if missing
+      try {
+        caseDb.prepare('SELECT action_direction FROM anchors LIMIT 1').get();
+      } catch (e) {
+        try { caseDb.exec('ALTER TABLE anchors ADD COLUMN action_direction TEXT DEFAULT NULL'); } catch (e2) {}
       }
 
-      // Upsert detected actors
-      const actorInsertStmt = caseDb.prepare('INSERT OR IGNORE INTO actors (id, name, classification) VALUES (?, ?, ?)');
+      const insertStmt = caseDb.prepare(`
+        INSERT INTO anchors (
+          id, anchor_type, title, description, anchor_date, date_confidence,
+          what_happened, severity, is_auto_generated, user_edited, sort_order,
+          contains_multiple_events, event_count, action_direction
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      // Detect actors from narrative for linking
+      let detectedActors = [];
+      if (context?.narrative) {
+        try {
+          detectedActors = extractActorsFromNarrative(context.narrative);
+        } catch (e) {
+          console.error('[IPC] Actor extraction during anchor gen:', e.message);
+        }
+      }
+
+      // Insert or upsert detected actors into actors table
+      const actorInsertStmt = caseDb.prepare(`
+        INSERT OR IGNORE INTO actors (id, name, classification)
+        VALUES (?, ?, ?)
+      `);
       for (const actor of detectedActors) {
         try {
-          const existing = caseDb.prepare('SELECT id FROM actors WHERE LOWER(name) = LOWER(?)').get(actor.name);
-          if (!existing) {
+          const existingActor = caseDb.prepare('SELECT id FROM actors WHERE LOWER(name) = LOWER(?)').get(actor.name);
+          if (!existingActor) {
             const actorId = uuidv4();
             actorInsertStmt.run(actorId, actor.name, actor.suggestedClassification || 'unknown');
             actor.dbId = actorId;
           } else {
-            actor.dbId = existing.id;
+            actor.dbId = existingActor.id;
           }
-        } catch (e) {}
+        } catch (e) {
+          // Skip actor if insert fails (e.g. CHECK constraint)
+        }
       }
 
-      // Tag mapping from anchor_type
-      const tagMapping = {
-        'HARASSMENT': ['harassment'],
-        'ADVERSE_ACTION': ['adverse_action'],
-        'REPORTED': ['protected_activity'],
-        'HELP': ['help_request'],
-        'START': ['employment_start'],
-        'END': ['employment_end'],
-        'MILESTONE': []
-      };
-
-      // Precedent mapping by tag
-      const precedentMapping = {
-        'protected_activity': ['faragher', 'joshua_filing'],
-        'adverse_action': ['burlington_northern', 'harris', 'muldrow_some_harm'],
-        'harassment': ['harris', 'vance', 'morgan', 'faragher', 'monaghan_retaliation'],
-        'help_request': ['faragher'],
-        'employment_end': ['burlington_northern']
-      };
-
-      const insertEvt = caseDb.prepare(`
-        INSERT INTO events (id, case_id, date, title, description, event_type, what_happened, severity)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      const insertTag = caseDb.prepare('INSERT INTO event_tags (id, event_id, tag) VALUES (?, ?, ?)');
-
-      let added = 0;
       for (const anchor of allAnchors) {
-        // Dedup: skip if similar event already exists
-        const isDup = existingEvents.some(e =>
-          textSimilarity(e.title, anchor.title) > 0.7 ||
-          (e.title === anchor.title && e.date === (anchor.anchor_date || null))
-        );
-        if (isDup) continue;
+        // Skip if user-edited version exists
+        if (userEditedAnchors.some(u => u.id === anchor.id)) continue;
 
-        const evtId = anchor.id || uuidv4();
-        const evtType = (anchor.anchor_type || '').toLowerCase();
-
-        insertEvt.run(
-          evtId, caseId || null, anchor.anchor_date || null,
-          anchor.title, anchor.description || null, evtType,
-          anchor.what_happened || null, anchor.severity || null
-        );
-
-        // Insert tags
-        const tags = tagMapping[anchor.anchor_type] || [];
-        for (const tag of tags) {
-          insertTag.run(uuidv4(), evtId, tag);
+        // Detect action direction for ADVERSE_ACTION anchors
+        let actionDirection = null;
+        if (anchor.anchor_type === 'ADVERSE_ACTION') {
+          const anchorText = ((anchor.what_happened || '') + ' ' + (anchor.description || '') + ' ' + (anchor.title || '')).toLowerCase();
+          const towardOffenderPatterns = /eligible for rehire|given severance|let go|retired|discipline|consequence for|fired him|fired her|terminated him|terminated her|pip for him|pip for her|disciplined|reprimanded him|reprimanded her/;
+          actionDirection = towardOffenderPatterns.test(anchorText) ? 'toward_offender' : 'toward_me';
         }
 
-        // Link source document
+        insertStmt.run(
+          anchor.id,
+          anchor.anchor_type,
+          anchor.title,
+          anchor.description || null,
+          anchor.anchor_date || null,
+          anchor.date_confidence || 'unknown',
+          anchor.what_happened || null,
+          anchor.severity || null,
+          anchor.is_auto_generated ? 1 : 0,
+          0,
+          anchor.sort_order,
+          anchor.contains_multiple_events || 0,
+          anchor.event_count || 1,
+          actionDirection
+        );
+
+        // Link source document if exists
         if (anchor.source_document_id) {
-          try {
-            caseDb.prepare('INSERT INTO event_documents (id, event_id, document_id, relevance) VALUES (?, ?, ?, ?)').run(
-              uuidv4(), evtId, anchor.source_document_id, 'source'
-            );
-          } catch (e) {}
+          caseDb.prepare(`
+            INSERT OR IGNORE INTO anchor_documents (anchor_id, document_id, relevance)
+            VALUES (?, ?, 'source')
+          `).run(anchor.id, anchor.source_document_id);
         }
 
-        // Link source incident
+        // Link source incident if exists
         if (anchor.source_incident_id) {
-          try {
-            caseDb.prepare('INSERT INTO incident_events (id, incident_id, event_id, event_role) VALUES (?, ?, ?, ?)').run(
-              uuidv4(), anchor.source_incident_id, evtId, 'primary'
-            );
-          } catch (e) {}
+          caseDb.prepare(`
+            INSERT OR IGNORE INTO anchor_incidents (anchor_id, incident_id)
+            VALUES (?, ?)
+          `).run(anchor.id, anchor.source_incident_id);
         }
 
-        // Link detected actors mentioned in this event
+        // Link detected actors to this anchor based on name mention in anchor text
         if (anchor.what_happened || anchor.description) {
-          const evtText = (anchor.what_happened || '') + ' ' + (anchor.description || '');
+          const anchorText = (anchor.what_happened || '') + ' ' + (anchor.description || '');
           for (const actor of detectedActors) {
-            if (actor.dbId && actor.name && evtText.toLowerCase().includes(actor.name.toLowerCase())) {
+            if (actor.dbId && actor.name && anchorText.toLowerCase().includes(actor.name.toLowerCase())) {
               try {
-                caseDb.prepare('INSERT INTO event_actors (id, event_id, actor_id, role) VALUES (?, ?, ?, ?)').run(
-                  uuidv4(), evtId, actor.dbId, actor.suggestedClassification || 'mentioned'
-                );
+                caseDb.prepare(`
+                  INSERT OR IGNORE INTO anchor_actors (anchor_id, actor_id, role_in_anchor)
+                  VALUES (?, ?, ?)
+                `).run(anchor.id, actor.dbId, actor.suggestedClassification || 'mentioned');
               } catch (e) {}
             }
           }
         }
+      }
 
-        // Auto-link precedents based on tags
-        for (const tag of tags) {
-          const precs = precedentMapping[tag];
-          if (precs) {
-            for (const precId of precs) {
+      // Step 3: Auto-link precedents based on anchor type
+      try {
+        const precedentMapping = {
+          'REPORTED': ['faragher', 'joshua_filing'],
+          'ADVERSE_ACTION': ['burlington_northern', 'harris', 'muldrow_some_harm'],
+          'HELP': ['faragher'],
+          'END': ['burlington_northern']
+        };
+        for (const anchor of allAnchors) {
+          const relevantPrecedents = precedentMapping[anchor.anchor_type];
+          if (relevantPrecedents) {
+            for (const precId of relevantPrecedents) {
               try {
-                caseDb.prepare("INSERT INTO event_precedents (id, event_id, precedent_id, relevance_note, linked_at) VALUES (?, ?, ?, ?, datetime('now'))").run(
-                  uuidv4(), evtId, precId, 'Auto-linked based on event tag'
-                );
+                caseDb.prepare(`
+                  INSERT OR IGNORE INTO anchor_precedents (anchor_id, precedent_id, relevance_note, linked_at)
+                  VALUES (?, ?, ?, datetime('now'))
+                `).run(anchor.id, precId, 'Auto-linked based on anchor type');
               } catch (e) {}
             }
           }
         }
-
-        added++;
+      } catch (e) {
+        console.error('[IPC] Auto-link precedents error:', e.message);
       }
 
       // Update last scanned
-      try { caseDb.prepare("UPDATE case_context SET last_scanned_at = datetime('now') WHERE id = 1").run(); } catch (e) {}
+      try {
+        caseDb.prepare(`
+          UPDATE case_context SET last_scanned_at = datetime('now') WHERE id = 1
+        `).run();
+      } catch (e) {}
+
+      caseDb.close();
 
       return {
         success: true,
-        count: added,
+        count: allAnchors.length,
         actorsFound: detectedActors.length,
         actors: detectedActors.map(a => ({ name: a.name, classification: a.suggestedClassification, id: a.dbId }))
       };
     } catch (error) {
-      console.error('[IPC] events:generate error:', error.message);
+      console.error('[IPC] anchors:generate error:', error.message);
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('events:create', async (event, caseId, data) => {
+  ipcMain.handle('anchors:create', async (event, caseId, anchorData) => {
     try {
-      if (data.date) {
-        const d = new Date(data.date);
+      // Future date validation
+      if (anchorData.date) {
+        const anchorDate = new Date(anchorData.date);
         const today = new Date();
         today.setHours(23, 59, 59, 999);
-        if (d > today) {
+        if (anchorDate > today) {
           return { success: false, error: 'Date cannot be in the future' };
         }
       }
 
-      const caseDb = currentCaseDb;
+      const caseDb = db.openCase(caseId);
       const id = uuidv4();
 
+      // Get max sort order
+      const maxOrder = caseDb.prepare('SELECT MAX(sort_order) as max FROM anchors').get();
+      const sortOrder = (maxOrder?.max || 0) + 1;
+
       caseDb.prepare(`
-        INSERT INTO events (
-          id, case_id, date, title, description, event_type,
+        INSERT INTO anchors (
+          id, anchor_type, title, description, anchor_date, date_confidence,
           what_happened, where_location, impact_summary, severity,
-          event_weight, why_no_report, employer_notified, notice_date,
-          notice_method, employer_response, response_date, response_adequate
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          is_auto_generated, user_edited, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?)
       `).run(
         id,
-        caseId || null,
-        data.date || null,
-        data.title,
-        data.description || null,
-        data.type ? data.type.toLowerCase() : null,
-        data.whatHappened || null,
-        data.where || null,
-        data.impact || null,
-        data.severity || null,
-        data.eventWeight || 'significant',
-        data.whyNoReport || null,
-        data.employerNotified ? 1 : 0,
-        data.noticeDate || null,
-        data.noticeMethod || null,
-        data.employerResponse || null,
-        data.responseDate || null,
-        data.responseAdequate ? 1 : 0
+        anchorData.type,
+        anchorData.title,
+        anchorData.description || null,
+        anchorData.date || null,
+        anchorData.dateConfidence || 'exact',
+        anchorData.whatHappened || null,
+        anchorData.where || null,
+        anchorData.impact || null,
+        anchorData.severity || null,
+        sortOrder
       );
 
-      // Insert tags
-      if (data.tags && Array.isArray(data.tags)) {
-        const tagStmt = caseDb.prepare('INSERT INTO event_tags (id, event_id, tag) VALUES (?, ?, ?)');
-        for (const tag of data.tags) {
-          tagStmt.run(uuidv4(), id, tag);
-        }
-      }
-
-      return { success: true, event: { id, ...data } };
+      caseDb.close();
+      return { success: true, anchor: { id, ...anchorData } };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('events:update', async (event, caseId, eventId, updates) => {
+  ipcMain.handle('anchors:update', async (event, caseId, anchorId, updates) => {
     try {
+      // Future date validation
       if (updates.date) {
-        const d = new Date(updates.date);
+        const anchorDate = new Date(updates.date);
         const today = new Date();
         today.setHours(23, 59, 59, 999);
-        if (d > today) {
+        if (anchorDate > today) {
           return { success: false, error: 'Date cannot be in the future' };
         }
       }
 
-      const caseDb = currentCaseDb;
+      const caseDb = db.openCase(caseId);
 
       const fields = [];
       const values = [];
@@ -2344,352 +2079,343 @@ function registerIpcHandlers() {
       const fieldMap = {
         title: 'title',
         description: 'description',
-        date: 'date',
-        type: 'event_type',
+        date: 'anchor_date',
+        dateConfidence: 'date_confidence',
+        type: 'anchor_type',
         whatHappened: 'what_happened',
         where: 'where_location',
         impact: 'impact_summary',
         severity: 'severity',
-        eventWeight: 'event_weight',
-        whyNoReport: 'why_no_report',
-        employerNotified: 'employer_notified',
-        noticeDate: 'notice_date',
-        noticeMethod: 'notice_method',
-        employerResponse: 'employer_response',
-        employer_response: 'employer_response',
-        employerResponseType: 'employer_response_type',
-        employer_response_type: 'employer_response_type',
-        responseDate: 'response_date',
-        response_date: 'response_date',
-        responseAdequate: 'response_adequate',
-        response_adequate: 'response_adequate'
+        sortOrder: 'sort_order',
+        containsMultipleEvents: 'contains_multiple_events',
+        eventCount: 'event_count',
+        actionDirection: 'action_direction'
       };
 
-      const booleanFields = new Set(['employerNotified', 'responseAdequate', 'employer_notified', 'response_adequate']);
       for (const [key, dbField] of Object.entries(fieldMap)) {
         if (updates[key] !== undefined) {
           fields.push(`${dbField} = ?`);
-          let val = updates[key];
-          if (booleanFields.has(key) || typeof val === 'boolean') val = val ? 1 : 0;
-          values.push(val);
+          values.push(updates[key]);
         }
       }
 
+      // Mark as user edited
+      fields.push('user_edited = 1');
       fields.push("updated_at = datetime('now')");
-      values.push(eventId);
+      values.push(anchorId);
 
-      if (fields.length > 1) {
-        const stmt = caseDb.prepare(`UPDATE events SET ${fields.join(', ')} WHERE id = ?`);
-        stmt.run(...values);
-      }
+      const stmt = caseDb.prepare(`UPDATE anchors SET ${fields.join(', ')} WHERE id = ?`);
+      stmt.run(...values);
 
-      // Update tags if provided
-      if (updates.tags && Array.isArray(updates.tags)) {
-        caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId);
-        const tagStmt = caseDb.prepare('INSERT INTO event_tags (id, event_id, tag) VALUES (?, ?, ?)');
-        for (const tag of updates.tags) {
-          tagStmt.run(uuidv4(), eventId, tag);
-        }
-
-        // Auto-link precedents when tags change
-        const precMapping = {
-          'protected_activity': ['faragher', 'joshua_filing'],
-          'adverse_action': ['burlington_northern', 'harris', 'muldrow_some_harm'],
-          'harassment': ['harris', 'vance', 'morgan', 'faragher', 'monaghan_retaliation'],
-          'help_request': ['faragher'],
-          'employment_end': ['burlington_northern']
-        };
-        for (const tag of updates.tags) {
-          const precs = precMapping[tag];
-          if (precs) {
-            for (const precId of precs) {
-              try {
-                caseDb.prepare("INSERT OR IGNORE INTO event_precedents (id, event_id, precedent_id, relevance_note, linked_at) VALUES (?, ?, ?, ?, datetime('now'))").run(
-                  uuidv4(), eventId, precId, 'Auto-linked on tag change'
-                );
-              } catch (e) {}
-            }
-          }
-        }
-      }
-
+      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('events:delete', async (event, caseId, eventId) => {
+  ipcMain.handle('anchors:delete', async (event, caseId, anchorId) => {
     try {
-      const caseDb = currentCaseDb;
+      const caseDb = db.openCase(caseId);
 
-      // Delete from all junction tables
-      caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId);
-      caseDb.prepare('DELETE FROM event_documents WHERE event_id = ?').run(eventId);
-      caseDb.prepare('DELETE FROM event_actors WHERE event_id = ?').run(eventId);
-      try { caseDb.prepare('DELETE FROM event_precedents WHERE event_id = ?').run(eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM event_links WHERE source_event_id = ? OR target_event_id = ?').run(eventId, eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM incident_events WHERE event_id = ?').run(eventId); } catch (e) {}
-
-      caseDb.prepare('DELETE FROM events WHERE id = ?').run(eventId);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('events:linkEvidence', async (event, caseId, eventId, documentId) => {
-    try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('INSERT INTO event_documents (id, event_id, document_id, relevance) VALUES (?, ?, ?, ?)').run(
-        uuidv4(), eventId, documentId, 'supports'
-      );
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('events:unlinkEvidence', async (event, caseId, eventId, documentId) => {
-    try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('DELETE FROM event_documents WHERE event_id = ? AND document_id = ?').run(eventId, documentId);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('events:getRelatedEvidence', async (event, caseId, eventId) => {
-    try {
-      const caseDb = currentCaseDb;
-
-      const evt = caseDb.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
-      if (!evt) {
-        return { success: false, error: 'Event not found' };
-      }
-
-      // Tags
+      // Delete links
+      caseDb.prepare('DELETE FROM anchor_documents WHERE anchor_id = ?').run(anchorId);
+      caseDb.prepare('DELETE FROM anchor_incidents WHERE anchor_id = ?').run(anchorId);
+      caseDb.prepare('DELETE FROM anchor_actors WHERE anchor_id = ?').run(anchorId);
       try {
-        evt.tags = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(evt.id).map(r => r.tag);
-      } catch (e) { evt.tags = []; }
+        caseDb.prepare('DELETE FROM anchor_precedents WHERE anchor_id = ?').run(anchorId);
+      } catch (e) {}
 
-      // Linked documents
+      // Delete anchor
+      caseDb.prepare('DELETE FROM anchors WHERE id = ?').run(anchorId);
+
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:linkEvidence', async (event, caseId, anchorId, documentId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      caseDb.prepare(`
+        INSERT OR IGNORE INTO anchor_documents (anchor_id, document_id, relevance)
+        VALUES (?, ?, 'supports')
+      `).run(anchorId, documentId);
+
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:getRelatedEvidence', async (event, caseId, anchorId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      const anchor = caseDb.prepare('SELECT * FROM anchors WHERE id = ?').get(anchorId);
+      if (!anchor) {
+        caseDb.close();
+        return { success: false, error: 'Anchor not found' };
+      }
+
+      // Get linked documents
       let linkedDocs = [];
       try {
         linkedDocs = caseDb.prepare(`
-          SELECT d.*, ed.relevance, ed.weight
+          SELECT d.*, ad.relevance
           FROM documents d
-          JOIN event_documents ed ON ed.document_id = d.id
-          WHERE ed.event_id = ?
-        `).all(eventId);
+          JOIN anchor_documents ad ON ad.document_id = d.id
+          WHERE ad.anchor_id = ?
+        `).all(anchorId);
       } catch (e) {}
 
-      // Linked incidents
+      // Get linked incidents
       let linkedIncidents = [];
       try {
         linkedIncidents = caseDb.prepare(`
-          SELECT i.*, ie.event_role
+          SELECT i.*
           FROM incidents i
-          JOIN incident_events ie ON ie.incident_id = i.id
-          WHERE ie.event_id = ?
-        `).all(eventId);
+          JOIN anchor_incidents ai ON ai.incident_id = i.id
+          WHERE ai.anchor_id = ?
+        `).all(anchorId);
       } catch (e) {}
 
-      // Linked actors
+      // Get linked actors
       let linkedActors = [];
       try {
         linkedActors = caseDb.prepare(`
-          SELECT a.*, ea.role
+          SELECT a.*, aa.role_in_anchor
           FROM actors a
-          JOIN event_actors ea ON ea.actor_id = a.id
-          WHERE ea.event_id = ?
-        `).all(eventId);
+          JOIN anchor_actors aa ON aa.actor_id = a.id
+          WHERE aa.anchor_id = ?
+        `).all(anchorId);
       } catch (e) {}
 
-      // Nearby documents (within 14 days)
+      // Find nearby evidence (within 14 days if anchor has date)
       let nearbyDocs = [];
-      if (evt.date) {
+      if (anchor.anchor_date) {
         try {
           const allDocs = caseDb.prepare('SELECT * FROM documents').all();
-          const evtDate = new Date(evt.date);
+          const anchorDate = new Date(anchor.anchor_date);
+
           nearbyDocs = allDocs.filter(d => {
             if (!d.document_date) return false;
             if (linkedDocs.some(ld => ld.id === d.id)) return false;
+
             const docDate = new Date(d.document_date);
-            const daysDiff = Math.abs((docDate - evtDate) / (1000 * 60 * 60 * 24));
+            const daysDiff = Math.abs((docDate - anchorDate) / (1000 * 60 * 60 * 24));
             return daysDiff <= 14;
           }).slice(0, 10);
         } catch (e) {}
       }
 
-      // Linked precedents
+      // Get linked precedents
       let linkedPrecedents = [];
       try {
-        linkedPrecedents = caseDb.prepare('SELECT * FROM event_precedents WHERE event_id = ?').all(eventId);
+        linkedPrecedents = caseDb.prepare(`
+          SELECT * FROM anchor_precedents WHERE anchor_id = ?
+        `).all(anchorId);
       } catch (e) {}
 
-      // Causality links
-      let links = [];
-      try {
-        links = caseDb.prepare('SELECT * FROM event_links WHERE source_event_id = ? OR target_event_id = ?').all(eventId, eventId);
-      } catch (e) {}
+      caseDb.close();
 
       return {
         success: true,
-        event: evt,
+        anchor,
         linked: {
           documents: linkedDocs,
           incidents: linkedIncidents,
           actors: linkedActors,
-          precedents: linkedPrecedents,
-          links
+          precedents: linkedPrecedents
         },
-        nearby: { documents: nearbyDocs }
+        nearby: {
+          documents: nearbyDocs
+        }
       };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  // ==================== EVENT EXTENDED OPERATIONS ====================
+  // ==================== ANCHOR EXTENDED OPERATIONS ====================
 
-  ipcMain.handle('events:clone', async (event, caseId, eventId) => {
+  ipcMain.handle('anchors:clone', async (event, caseId, anchorId) => {
     try {
-      const caseDb = currentCaseDb;
+      const caseDb = db.openCase(caseId);
 
-      const original = caseDb.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
+      const original = caseDb.prepare('SELECT * FROM anchors WHERE id = ?').get(anchorId);
       if (!original) {
-        return { success: false, error: 'Event not found' };
+        caseDb.close();
+        return { success: false, error: 'Anchor not found' };
       }
 
       const newId = uuidv4();
+      const maxOrder = caseDb.prepare('SELECT MAX(sort_order) as max FROM anchors').get();
+      const newOrder = (maxOrder?.max || 0) + 1;
 
       caseDb.prepare(`
-        INSERT INTO events (
-          id, case_id, date, title, description, event_type,
+        INSERT INTO anchors (
+          id, anchor_type, title, description, anchor_date, date_confidence,
           what_happened, where_location, impact_summary, severity,
-          event_weight, why_no_report, employer_notified, notice_date,
-          notice_method, employer_response, response_date, response_adequate
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          is_auto_generated, user_edited, source_context, sort_order,
+          contains_multiple_events, event_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?, ?)
       `).run(
-        newId, original.case_id, original.date,
-        original.title + ' (copy)', original.description, original.event_type,
-        original.what_happened, original.where_location, original.impact_summary, original.severity,
-        original.event_weight, original.why_no_report, original.employer_notified, original.notice_date,
-        original.notice_method, original.employer_response, original.response_date, original.response_adequate
+        newId,
+        original.anchor_type,
+        original.title + ' (copy)',
+        original.description,
+        original.anchor_date,
+        original.date_confidence,
+        original.what_happened,
+        original.where_location,
+        original.impact_summary,
+        original.severity,
+        original.source_context,
+        newOrder,
+        original.contains_multiple_events || 0,
+        original.event_count || 1
       );
-
-      // Clone tags
-      try {
-        const tags = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(eventId);
-        const tagStmt = caseDb.prepare('INSERT INTO event_tags (id, event_id, tag) VALUES (?, ?, ?)');
-        for (const t of tags) { tagStmt.run(uuidv4(), newId, t.tag); }
-      } catch (e) {}
 
       // Clone linked documents
       try {
-        const docs = caseDb.prepare('SELECT * FROM event_documents WHERE event_id = ?').all(eventId);
+        const docs = caseDb.prepare('SELECT * FROM anchor_documents WHERE anchor_id = ?').all(anchorId);
         for (const doc of docs) {
-          caseDb.prepare('INSERT INTO event_documents (id, event_id, document_id, relevance) VALUES (?, ?, ?, ?)').run(uuidv4(), newId, doc.document_id, doc.relevance);
+          caseDb.prepare('INSERT OR IGNORE INTO anchor_documents (anchor_id, document_id, relevance) VALUES (?, ?, ?)').run(newId, doc.document_id, doc.relevance);
         }
       } catch (e) {}
 
       // Clone linked incidents
       try {
-        const incs = caseDb.prepare('SELECT * FROM incident_events WHERE event_id = ?').all(eventId);
+        const incs = caseDb.prepare('SELECT * FROM anchor_incidents WHERE anchor_id = ?').all(anchorId);
         for (const inc of incs) {
-          caseDb.prepare('INSERT INTO incident_events (id, incident_id, event_id, event_role) VALUES (?, ?, ?, ?)').run(uuidv4(), inc.incident_id, newId, inc.event_role);
+          caseDb.prepare('INSERT OR IGNORE INTO anchor_incidents (anchor_id, incident_id) VALUES (?, ?)').run(newId, inc.incident_id);
         }
       } catch (e) {}
 
       // Clone linked actors
       try {
-        const actors = caseDb.prepare('SELECT * FROM event_actors WHERE event_id = ?').all(eventId);
+        const actors = caseDb.prepare('SELECT * FROM anchor_actors WHERE anchor_id = ?').all(anchorId);
         for (const actor of actors) {
-          caseDb.prepare('INSERT INTO event_actors (id, event_id, actor_id, role) VALUES (?, ?, ?, ?)').run(uuidv4(), newId, actor.actor_id, actor.role);
+          caseDb.prepare('INSERT OR IGNORE INTO anchor_actors (anchor_id, actor_id, role_in_anchor) VALUES (?, ?, ?)').run(newId, actor.actor_id, actor.role_in_anchor);
         }
       } catch (e) {}
 
       // Clone linked precedents
       try {
-        const precs = caseDb.prepare('SELECT * FROM event_precedents WHERE event_id = ?').all(eventId);
+        const precs = caseDb.prepare('SELECT * FROM anchor_precedents WHERE anchor_id = ?').all(anchorId);
         for (const prec of precs) {
-          caseDb.prepare('INSERT INTO event_precedents (id, event_id, precedent_id, relevance_note) VALUES (?, ?, ?, ?)').run(uuidv4(), newId, prec.precedent_id, prec.relevance_note);
+          caseDb.prepare('INSERT OR IGNORE INTO anchor_precedents (anchor_id, precedent_id, relevance_note) VALUES (?, ?, ?)').run(newId, prec.precedent_id, prec.relevance_note);
         }
       } catch (e) {}
 
+      caseDb.close();
       return { success: true, newId };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  // events:reorder — no-op (sort_order removed from schema, events sorted by date)
-  ipcMain.handle('events:reorder', async () => {
-    return { success: true };
-  });
-
-  ipcMain.handle('events:linkPrecedent', async (event, caseId, eventId, precedentId, relevanceNote) => {
+  ipcMain.handle('anchors:reorder', async (event, caseId, orderedIds) => {
     try {
-      const caseDb = currentCaseDb;
-      const existing = caseDb.prepare('SELECT id FROM event_precedents WHERE event_id = ? AND precedent_id = ?').get(eventId, precedentId);
-      if (existing) {
-        caseDb.prepare("UPDATE event_precedents SET relevance_note = ?, linked_at = datetime('now') WHERE id = ?").run(relevanceNote || null, existing.id);
-      } else {
-        caseDb.prepare("INSERT INTO event_precedents (id, event_id, precedent_id, relevance_note, linked_at) VALUES (?, ?, ?, ?, datetime('now'))").run(
-          uuidv4(), eventId, precedentId, relevanceNote || null
-        );
-      }
+      const caseDb = db.openCase(caseId);
+
+      const updateStmt = caseDb.prepare("UPDATE anchors SET sort_order = ?, updated_at = datetime('now') WHERE id = ?");
+      const txn = caseDb.transaction(() => {
+        for (let i = 0; i < orderedIds.length; i++) {
+          updateStmt.run(i, orderedIds[i]);
+        }
+      });
+      txn();
+
+      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('events:unlinkPrecedent', async (event, caseId, eventId, precedentId) => {
+  ipcMain.handle('anchors:linkPrecedent', async (event, caseId, anchorId, precedentId, relevanceNote) => {
     try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('DELETE FROM event_precedents WHERE event_id = ? AND precedent_id = ?').run(eventId, precedentId);
+      const caseDb = db.openCase(caseId);
+
+      // Ensure table exists
+      try {
+        caseDb.exec(`
+          CREATE TABLE IF NOT EXISTS anchor_precedents (
+            anchor_id TEXT NOT NULL REFERENCES anchors(id),
+            precedent_id TEXT NOT NULL,
+            relevance_note TEXT,
+            linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (anchor_id, precedent_id)
+          );
+        `);
+      } catch (e) {}
+
+      caseDb.prepare(`
+        INSERT OR REPLACE INTO anchor_precedents (anchor_id, precedent_id, relevance_note, linked_at)
+        VALUES (?, ?, ?, datetime('now'))
+      `).run(anchorId, precedentId, relevanceNote || null);
+
+      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('events:getPrecedents', async (event, caseId, eventId) => {
+  ipcMain.handle('anchors:unlinkPrecedent', async (event, caseId, anchorId, precedentId) => {
     try {
-      const caseDb = currentCaseDb;
-      const precedents = caseDb.prepare('SELECT * FROM event_precedents WHERE event_id = ?').all(eventId);
+      const caseDb = db.openCase(caseId);
+      caseDb.prepare('DELETE FROM anchor_precedents WHERE anchor_id = ? AND precedent_id = ?').run(anchorId, precedentId);
+      caseDb.close();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('anchors:getPrecedents', async (event, caseId, anchorId) => {
+    try {
+      const caseDb = db.openCase(caseId);
+
+      let precedents = [];
+      try {
+        precedents = caseDb.prepare('SELECT * FROM anchor_precedents WHERE anchor_id = ?').all(anchorId);
+      } catch (e) {}
+
+      caseDb.close();
       return { success: true, precedents };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('events:breakApart', async (event, caseId, eventId) => {
+  ipcMain.handle('anchors:breakApart', async (event, caseId, anchorId) => {
     try {
-      const caseDb = currentCaseDb;
+      const caseDb = db.openCase(caseId);
 
-      const original = caseDb.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
+      const original = caseDb.prepare('SELECT * FROM anchors WHERE id = ?').get(anchorId);
       if (!original) {
-        return { success: false, error: 'Event not found' };
+        caseDb.close();
+        return { success: false, error: 'Anchor not found' };
       }
 
       const textToSplit = original.what_happened || original.description || '';
-      const subSegments = splitEventSegment(textToSplit);
+      const subSegments = splitAnchorSegment(textToSplit);
 
       if (subSegments.length <= 1) {
+        caseDb.close();
         return { success: false, error: 'Cannot break apart — only one event detected' };
       }
 
-      // Get original tags for cloning
-      let originalTags = [];
-      try {
-        originalTags = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(eventId).map(r => r.tag);
-      } catch (e) {}
+      const newAnchors = [];
+      const baseOrder = original.sort_order || 0;
 
-      const newEvents = [];
       for (let i = 0; i < subSegments.length; i++) {
         const segment = subSegments[i].trim();
         if (segment.length < 10) continue;
@@ -2699,389 +2425,99 @@ function registerIpcHandlers() {
         const title = segment.slice(0, 60).replace(/[,.]$/, '').trim();
 
         caseDb.prepare(`
-          INSERT INTO events (id, case_id, date, title, description, event_type, what_happened, where_location, severity)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO anchors (
+            id, anchor_type, title, description, anchor_date, date_confidence,
+            what_happened, where_location, impact_summary, severity,
+            is_auto_generated, user_edited, source_context, sort_order,
+            contains_multiple_events, event_count
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, 0, 1)
         `).run(
-          newId, original.case_id, dateInfo.date || original.date,
-          title, segment.slice(0, 500), original.event_type,
-          segment, original.where_location, original.severity
+          newId,
+          original.anchor_type,
+          title,
+          segment.slice(0, 500),
+          dateInfo.date || original.anchor_date,
+          dateInfo.confidence || original.date_confidence,
+          segment,
+          original.where_location,
+          null,
+          original.severity,
+          segment.slice(0, 200),
+          baseOrder + i + 1
         );
 
-        // Copy tags from original
-        const tagStmt = caseDb.prepare('INSERT INTO event_tags (id, event_id, tag) VALUES (?, ?, ?)');
-        for (const tag of originalTags) {
-          tagStmt.run(uuidv4(), newId, tag);
-        }
-
-        newEvents.push({ id: newId, title, segment });
+        newAnchors.push({ id: newId, title, segment });
       }
 
-      // Delete the original event and its links
-      caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId);
-      caseDb.prepare('DELETE FROM event_documents WHERE event_id = ?').run(eventId);
-      caseDb.prepare('DELETE FROM event_actors WHERE event_id = ?').run(eventId);
-      try { caseDb.prepare('DELETE FROM event_precedents WHERE event_id = ?').run(eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM event_links WHERE source_event_id = ? OR target_event_id = ?').run(eventId, eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM incident_events WHERE event_id = ?').run(eventId); } catch (e) {}
-      caseDb.prepare('DELETE FROM events WHERE id = ?').run(eventId);
+      // Delete the original anchor and its links
+      caseDb.prepare('DELETE FROM anchor_documents WHERE anchor_id = ?').run(anchorId);
+      caseDb.prepare('DELETE FROM anchor_incidents WHERE anchor_id = ?').run(anchorId);
+      caseDb.prepare('DELETE FROM anchor_actors WHERE anchor_id = ?').run(anchorId);
+      try { caseDb.prepare('DELETE FROM anchor_precedents WHERE anchor_id = ?').run(anchorId); } catch (e) {}
+      caseDb.prepare('DELETE FROM anchors WHERE id = ?').run(anchorId);
 
-      return { success: true, newEvents };
+      caseDb.close();
+      return { success: true, newAnchors };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('events:linkIncident', async (event, caseId, eventId, incidentId, eventRole) => {
+  ipcMain.handle('anchors:linkIncident', async (event, caseId, anchorId, incidentId) => {
     try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('INSERT INTO incident_events (id, incident_id, event_id, event_role) VALUES (?, ?, ?, ?)').run(
-        uuidv4(), incidentId, eventId, eventRole || 'primary'
-      );
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('events:unlinkIncident', async (event, caseId, eventId, incidentId) => {
-    try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('DELETE FROM incident_events WHERE event_id = ? AND incident_id = ?').run(eventId, incidentId);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('events:linkActor', async (event, caseId, eventId, actorId, role) => {
-    try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('INSERT INTO event_actors (id, event_id, actor_id, role) VALUES (?, ?, ?, ?)').run(
-        uuidv4(), eventId, actorId, role || 'involved'
-      );
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('events:unlinkActor', async (event, caseId, eventId, actorId) => {
-    try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('DELETE FROM event_actors WHERE event_id = ? AND actor_id = ?').run(eventId, actorId);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('events:linkDocumentV2', async (event, caseId, eventId, documentId, relevanceV2) => {
-    try {
-      const caseDb = currentCaseDb;
-      const relevance = Array.isArray(relevanceV2) ? relevanceV2[0] : (relevanceV2 || 'context');
-
-      const existing = caseDb.prepare('SELECT id FROM event_documents WHERE event_id = ? AND document_id = ?').get(eventId, documentId);
-      if (existing) {
-        caseDb.prepare('UPDATE event_documents SET relevance = ? WHERE id = ?').run(relevance, existing.id);
-      } else {
-        caseDb.prepare('INSERT INTO event_documents (id, event_id, document_id, relevance) VALUES (?, ?, ?, ?)').run(
-          uuidv4(), eventId, documentId, relevance
-        );
-      }
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('events:setDocumentWeight', async (event, caseId, eventId, documentId, weight) => {
-    try {
-      const caseDb = currentCaseDb;
-      const w = Math.max(1, Math.min(5, parseInt(weight) || 3));
-      caseDb.prepare('UPDATE event_documents SET weight = ? WHERE event_id = ? AND document_id = ?').run(w, eventId, documentId);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ==================== EVENT TAGS ====================
-
-  ipcMain.handle('eventTags:set', async (event, eventId, tags) => {
-    try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId);
-      const stmt = caseDb.prepare('INSERT INTO event_tags (id, event_id, tag) VALUES (?, ?, ?)');
-      for (const tag of (tags || [])) {
-        stmt.run(uuidv4(), eventId, tag);
-      }
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('eventTags:listAll', async () => {
-    try {
-      const caseDb = currentCaseDb;
-      const tags = caseDb.prepare('SELECT DISTINCT tag FROM event_tags ORDER BY tag').all().map(r => r.tag);
-      return { success: true, tags };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ==================== EVENT LINKS (CAUSALITY) ====================
-
-  ipcMain.handle('eventLinks:list', async () => {
-    try {
-      const caseDb = currentCaseDb;
-      const links = caseDb.prepare(`
-        SELECT el.*,
-          se.title as source_title, se.date as source_date,
-          te.title as target_title, te.date as target_date
-        FROM event_links el
-        JOIN events se ON se.id = el.source_event_id
-        JOIN events te ON te.id = el.target_event_id
-      `).all();
-      return { success: true, links };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('eventLinks:create', async (event, data) => {
-    try {
-      const caseDb = currentCaseDb;
-      const id = uuidv4();
-
-      // Calculate days between
-      let daysBetween = null;
-      if (data.sourceEventId && data.targetEventId) {
-        const source = caseDb.prepare('SELECT date FROM events WHERE id = ?').get(data.sourceEventId);
-        const target = caseDb.prepare('SELECT date FROM events WHERE id = ?').get(data.targetEventId);
-        if (source?.date && target?.date) {
-          daysBetween = Math.round((new Date(target.date) - new Date(source.date)) / (1000 * 60 * 60 * 24));
-        }
-      }
-
+      const caseDb = db.openCase(caseId);
       caseDb.prepare(`
-        INSERT INTO event_links (id, source_event_id, target_event_id, link_type, confidence, days_between)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(id, data.sourceEventId, data.targetEventId, data.linkType || 'related', data.confidence || 1.0, daysBetween);
-      return { success: true, id };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('eventLinks:delete', async (event, linkId) => {
-    try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('DELETE FROM event_links WHERE id = ?').run(linkId);
+        INSERT OR IGNORE INTO anchor_incidents (anchor_id, incident_id)
+        VALUES (?, ?)
+      `).run(anchorId, incidentId);
+      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('eventLinks:suggest', async () => {
+  ipcMain.handle('anchors:unlinkEvidence', async (event, caseId, anchorId, documentId) => {
     try {
-      const caseDb = currentCaseDb;
-      // Load all events with tags and actors
-      const events = caseDb.prepare('SELECT * FROM events ORDER BY date').all().map(evt => {
-        const tags = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(evt.id).map(r => r.tag);
-        const actors = caseDb.prepare(`
-          SELECT a.id, a.name FROM event_actors ea JOIN actors a ON ea.actor_id = a.id WHERE ea.event_id = ?
-        `).all(evt.id);
-        return { ...evt, tags, actors };
-      });
-      const existingLinks = caseDb.prepare('SELECT * FROM event_links').all();
-      const suggestions = detectCausality(events, existingLinks);
-      return { success: true, suggestions };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('eventTags:suggest', async (event, eventId) => {
-    try {
-      const caseDb = currentCaseDb;
-      const evt = caseDb.prepare('SELECT title, description, what_happened FROM events WHERE id = ?').get(eventId);
-      if (!evt) return { success: false, error: 'Event not found' };
-      const tags = suggestTags(evt.title, evt.description, evt.what_happened);
-      return { success: true, tags };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ==================== INCIDENT EVENTS ====================
-
-  ipcMain.handle('incidentEvents:list', async (event, incidentId) => {
-    try {
-      const caseDb = currentCaseDb;
-      const items = caseDb.prepare(`
-        SELECT e.*, ie.event_role
-        FROM events e
-        JOIN incident_events ie ON ie.event_id = e.id
-        WHERE ie.incident_id = ?
-        ORDER BY e.date
-      `).all(incidentId);
-
-      // Attach tags
-      for (const evt of items) {
-        try {
-          evt.tags = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(evt.id).map(r => r.tag);
-        } catch (e) { evt.tags = []; }
-      }
-
-      return { success: true, events: items };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('incidentEvents:link', async (event, incidentId, eventId, eventRole) => {
-    try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('INSERT INTO incident_events (id, incident_id, event_id, event_role) VALUES (?, ?, ?, ?)').run(
-        uuidv4(), incidentId, eventId, eventRole || 'primary'
-      );
+      const caseDb = db.openCase(caseId);
+      caseDb.prepare('DELETE FROM anchor_documents WHERE anchor_id = ? AND document_id = ?').run(anchorId, documentId);
+      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('incidentEvents:unlink', async (event, incidentId, eventId) => {
+  ipcMain.handle('anchors:unlinkIncident', async (event, caseId, anchorId, incidentId) => {
     try {
-      const caseDb = currentCaseDb;
-      caseDb.prepare('DELETE FROM incident_events WHERE incident_id = ? AND event_id = ?').run(incidentId, eventId);
+      const caseDb = db.openCase(caseId);
+      caseDb.prepare('DELETE FROM anchor_incidents WHERE anchor_id = ? AND incident_id = ?').run(anchorId, incidentId);
+      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  // ==================== DOCUMENT COPY ====================
-
-  ipcMain.handle('documents:copy', async (event, docId) => {
+  ipcMain.handle('anchors:linkActor', async (event, caseId, anchorId, actorId, roleInAnchor) => {
     try {
-      const caseDb = currentCaseDb;
-
-      const original = caseDb.prepare('SELECT * FROM documents WHERE id = ?').get(docId);
-      if (!original) {
-        return { success: false, error: 'Document not found' };
-      }
-
-      const newId = uuidv4();
-      const newFilename = original.filename.replace(/(\.[^.]+)$/, ' (copy)$1');
-
+      const caseDb = db.openCase(caseId);
       caseDb.prepare(`
-        INSERT INTO documents (
-          id, filename, original_path, file_type, file_size, sha256_hash,
-          encrypted_content, metadata_json,
-          file_created_at, file_modified_at,
-          document_date, document_date_confidence, content_dates_json,
-          extracted_text, ocr_text, evidence_type,
-          evidence_confidence, evidence_secondary, evidence_scores_json,
-          user_context, group_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        newId, newFilename, original.original_path, original.file_type, original.file_size, original.sha256_hash,
-        original.encrypted_content, original.metadata_json,
-        original.file_created_at, original.file_modified_at,
-        original.document_date, original.document_date_confidence, original.content_dates_json,
-        original.extracted_text, original.ocr_text, original.evidence_type,
-        original.evidence_confidence, original.evidence_secondary, original.evidence_scores_json,
-        original.user_context, original.group_id
-      );
-
-      const newDoc = caseDb.prepare('SELECT * FROM documents WHERE id = ?').get(newId);
-      return { success: true, document: docToSummary(newDoc) };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ==================== DAMAGES ====================
-
-  ipcMain.handle('damages:list', async () => {
-    try {
-      const caseDb = currentCaseDb;
-      if (!caseDb) return { success: false, error: 'No case open' };
-
-      const damages = caseDb.prepare('SELECT * FROM damages ORDER BY date_from, created_at').all();
-      return { success: true, damages };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('damages:create', async (event, data) => {
-    try {
-      const caseDb = currentCaseDb;
-      if (!caseDb) return { success: false, error: 'No case open' };
-
-      const id = uuidv4();
-      caseDb.prepare(`
-        INSERT INTO damages (id, category, description, amount, currency, date_from, date_to, is_ongoing, evidence_document_id, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        id, data.category, data.description || null, data.amount || null,
-        data.currency || 'AUD', data.dateFrom || null, data.dateTo || null,
-        data.isOngoing ? 1 : 0, data.evidenceDocumentId || null, data.notes || null
-      );
-      return { success: true, damage: { id, ...data } };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('damages:update', async (event, id, updates) => {
-    try {
-      const caseDb = currentCaseDb;
-      if (!caseDb) return { success: false, error: 'No case open' };
-
-      const fieldMap = {
-        category: 'category',
-        description: 'description',
-        amount: 'amount',
-        currency: 'currency',
-        dateFrom: 'date_from',
-        dateTo: 'date_to',
-        isOngoing: 'is_ongoing',
-        evidenceDocumentId: 'evidence_document_id',
-        notes: 'notes'
-      };
-
-      const fields = [];
-      const values = [];
-
-      for (const [key, dbField] of Object.entries(fieldMap)) {
-        if (updates[key] !== undefined) {
-          fields.push(`${dbField} = ?`);
-          values.push(updates[key]);
-        }
-      }
-
-      fields.push("updated_at = datetime('now')");
-      values.push(id);
-
-      caseDb.prepare(`UPDATE damages SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        INSERT OR IGNORE INTO anchor_actors (anchor_id, actor_id, role_in_anchor)
+        VALUES (?, ?, ?)
+      `).run(anchorId, actorId, roleInAnchor || 'involved');
+      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('damages:delete', async (event, id) => {
+  ipcMain.handle('anchors:unlinkActor', async (event, caseId, anchorId, actorId) => {
     try {
-      const caseDb = currentCaseDb;
-      if (!caseDb) return { success: false, error: 'No case open' };
-
-      caseDb.prepare('DELETE FROM damages WHERE id = ?').run(id);
+      const caseDb = db.openCase(caseId);
+      caseDb.prepare('DELETE FROM anchor_actors WHERE anchor_id = ? AND actor_id = ?').run(anchorId, actorId);
+      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -3092,7 +2528,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('context:get', async (event, caseId) => {
     try {
-      const caseDb = currentCaseDb;
+      const caseDb = db.openCase(caseId);
 
       // Ensure table exists and has a row
       caseDb.exec(`
@@ -3112,6 +2548,8 @@ function registerIpcHandlers() {
       `);
 
       const context = caseDb.prepare('SELECT * FROM case_context WHERE id = 1').get();
+
+      caseDb.close();
       return { success: true, context };
     } catch (error) {
       return { success: false, error: error.message };
@@ -3120,7 +2558,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('context:update', async (event, caseId, updates) => {
     try {
-      const caseDb = currentCaseDb;
+      const caseDb = db.openCase(caseId);
 
       // Ensure table exists
       caseDb.exec(`
@@ -3163,377 +2601,13 @@ function registerIpcHandlers() {
 
       const stmt = caseDb.prepare(`UPDATE case_context SET ${fields.join(', ')} WHERE id = 1`);
       stmt.run(...values);
+
+      caseDb.close();
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
-  // ==================== CATEGORIZER ====================
-
-  ipcMain.handle('categorizer:categorize', async (event, text, isPrimary) => {
-    try {
-      const result = categorize(text, isPrimary || false);
-      return { success: true, result };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('categorizer:buildChain', async (event, entries) => {
-    try {
-      const result = categorizeAndBuildChain(entries);
-      return { success: true, ...result };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('categorizer:analyzeDocuments', async () => {
-    try {
-      if (!currentCaseDb) {
-        return { success: false, error: 'No case is open' };
-      }
-
-      // Pull all documents with extracted text
-      const docs = currentCaseDb.prepare(`
-        SELECT id, filename, extracted_text, ocr_text, evidence_type, document_date
-        FROM documents
-        WHERE extracted_text IS NOT NULL OR ocr_text IS NOT NULL
-        ORDER BY document_date ASC, ingested_at ASC
-      `).all();
-
-      if (docs.length === 0) {
-        return { success: true, categorized: [], chain: null, summary: null };
-      }
-
-      // Also pull incidents to find the primary one
-      const incidents = currentCaseDb.prepare(`
-        SELECT id, title, description, incident_date
-        FROM incidents
-        ORDER BY incident_date ASC
-        LIMIT 1
-      `).all();
-
-      const primaryIncidentId = incidents.length > 0 ? incidents[0].id : null;
-
-      // Find the primary incident document — use incident_documents link if available,
-      // otherwise fall back to earliest INCIDENT-type document
-      let primaryDocId = null;
-      if (primaryIncidentId) {
-        const linked = currentCaseDb.prepare(`
-          SELECT document_id FROM incident_documents WHERE incident_id = ?
-          ORDER BY rowid ASC LIMIT 1
-        `).get(primaryIncidentId);
-        if (linked) primaryDocId = linked.document_id;
-      }
-      if (!primaryDocId) {
-        const incidentDoc = docs.find(d => d.evidence_type === 'INCIDENT');
-        if (incidentDoc) primaryDocId = incidentDoc.id;
-      }
-
-      // Build entries for the categorizer
-      const entries = docs.map(doc => {
-        const text = [doc.extracted_text, doc.ocr_text].filter(Boolean).join('\n');
-        const isPrimary = doc.id === primaryDocId;
-        return { text, isPrimary, docId: doc.id, filename: doc.filename, date: doc.document_date };
-      });
-
-      // Categorize each
-      const categorized = entries.map(e => {
-        const result = categorize(e.text, e.isPrimary);
-        result.docId = e.docId;
-        result.filename = e.filename;
-        result.documentDate = e.date;
-        return result;
-      });
-
-      // Build chain
-      const chain = buildChain(categorized);
-      const summary = chain.toSummary();
-
-      return { success: true, categorized, summary };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ==================== CONTEXT DOCUMENTS ====================
-
-  ipcMain.handle('contextDocs:list', async () => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-      const docs = contextStore.listContextDocuments(currentCaseDb);
-      return { success: true, documents: docs };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('contextDocs:ingest', async (event, { text, filename, docType, displayName, dateEffective, notes }) => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-      const result = contextStore.ingestContextDocument(currentCaseDb, {
-        text, filename, docType, displayName, dateEffective, notes
-      });
-      return { success: true, ...result };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('contextDocs:ingestFile', async (event, { filePath, docType, displayName, dateEffective, notes }) => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-      const path = require('path');
-      const filename = path.basename(filePath);
-      const ext = path.extname(filePath).toLowerCase();
-
-      const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif', '.tiff', '.tif', '.svg'];
-      const pdfExts = ['.pdf'];
-      let fileContent;
-
-      if (imageExts.includes(ext)) {
-        // Run OCR on image files (policy docs are often photos of printed text)
-        const { runOcr } = require('./ingest/ocr-engine');
-        const rawBuffer = fs.readFileSync(filePath);
-        const ocrText = await runOcr(rawBuffer, `image/${ext.slice(1)}`);
-        if (ocrText && ocrText.length > 10) {
-          fileContent = ocrText;
-          console.log(`[contextDocs] OCR extracted ${ocrText.length} chars from ${filename}`);
-        } else {
-          fileContent = `[Image file: ${filename}]\nType: ${ext.slice(1).toUpperCase()}\nUploaded as supporting evidence.\n(OCR could not extract readable text from this image.)`;
-          console.log(`[contextDocs] OCR got minimal text from ${filename}, stored as image reference`);
-        }
-      } else if (pdfExts.includes(ext)) {
-        // Extract text from PDFs using pdf-parse
-        const pdfParse = require('pdf-parse');
-        const rawBuffer = fs.readFileSync(filePath);
-        try {
-          const pdfData = await pdfParse(rawBuffer);
-          fileContent = (pdfData.text || '').trim();
-          console.log(`[contextDocs] PDF extracted ${fileContent.length} chars from ${filename}`);
-          // If PDF has very little text it might be a scanned doc — try OCR
-          if (fileContent.length < 50) {
-            console.log(`[contextDocs] PDF text too short, likely scanned — skipping OCR for PDFs`);
-            if (fileContent.length === 0) {
-              fileContent = `[Scanned PDF: ${filename}]\nThis PDF appears to be a scanned document with no extractable text.\nPage count: ${pdfData.numpages || 'unknown'}`;
-            }
-          }
-        } catch (pdfErr) {
-          console.error(`[contextDocs] PDF parse failed for ${filename}:`, pdfErr.message);
-          fileContent = `[PDF file: ${filename}]\nCould not extract text from this PDF.`;
-        }
-      } else {
-        fileContent = fs.readFileSync(filePath, 'utf-8');
-      }
-
-      const result = contextStore.ingestContextDocument(currentCaseDb, {
-        text: fileContent,
-        filename,
-        docType,
-        displayName: displayName || path.parse(filePath).name,
-        dateEffective,
-        notes
-      });
-      return { success: true, ...result };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('contextDocs:delete', async (event, docId) => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-      contextStore.deleteContextDocument(currentCaseDb, docId);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('contextDocs:toggleActive', async (event, docId, isActive) => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-      contextStore.toggleContextDocumentActive(currentCaseDb, docId, isActive);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('contextDocs:get', async (event, docId) => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-      const doc = contextStore.getContextDocument(currentCaseDb, docId);
-      return doc ? { success: true, document: doc } : { success: false, error: 'Not found' };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('contextDocs:search', async (event, query) => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-      const results = contextStore.searchContextDocuments(currentCaseDb, query);
-      return { success: true, results };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('contextDocs:signalsSummary', async () => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-      const summary = contextStore.activeSignalsSummary(currentCaseDb);
-      return { success: true, summary };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('contextDocs:types', async () => {
-    return { success: true, types: contextStore.DOCUMENT_TYPES };
-  });
-
-  // ==================== SETTINGS ====================
-
-  ipcMain.handle('settings:get', async (event, key) => {
-    try {
-      const value = db.getSetting(key);
-      return { success: true, value };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('settings:set', async (event, key, value) => {
-    try {
-      db.setSetting(key, value);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ==================== ASSESSOR ====================
-  console.log('[IPC] Registering assessor handlers...');
-
-  ipcMain.handle('assessor:assess', async (event, { inputText, docType }) => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-
-      const apiKey = db.getSetting('anthropic_api_key');
-      console.log('[Assessor] assess called, docType=' + docType + ', hasKey=' + !!apiKey + ', textLen=' + (inputText?.length || 0));
-
-      // Gather vault incidents
-      let vaultIncidents = [];
-      try {
-        const incidents = currentCaseDb.prepare('SELECT * FROM incidents').all();
-        vaultIncidents = incidents.map(inc => ({
-          incident_type: inc.incident_type,
-          incident_severity: inc.computed_severity || inc.base_severity,
-          harasser_role: null,
-          harasser_in_reporting_chain: false,
-          reports: [],
-          employer_liability: {
-            level: 'unknown',
-            signals: inc.involves_retaliation ? ['potential_retaliation_post_report'] : [],
-          },
-        }));
-      } catch (e) { /* no incidents table yet */ }
-
-      const assessor = new DocumentAssessor(apiKey || null);
-
-      // Wrap the entire assess call in a 45s timeout to prevent hangs
-      const result = await Promise.race([
-        assessor.assess({
-          inputText,
-          docType,
-          vaultIncidents,
-          caseDb: currentCaseDb,
-        }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Assessment timed out after 45 seconds. Try again or check your API key in Settings.')), 45000)
-        ),
-      ]);
-
-      console.log('[Assessor] assess completed, flags=' + (result.auto_flags?.length || 0));
-      return { success: true, result };
-    } catch (error) {
-      console.error('[Assessor] assess error:', error.message);
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('assessor:expandFlag', async (event, { flag, inputText }) => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-      const apiKey = db.getSetting('anthropic_api_key');
-      if (!apiKey) return { success: false, error: 'API key not configured. Set it in Settings.' };
-
-      let vaultIncidents = [];
-      try {
-        const incidents = currentCaseDb.prepare('SELECT * FROM incidents').all();
-        vaultIncidents = incidents.map(inc => ({
-          incident_type: inc.incident_type,
-          incident_severity: inc.computed_severity || inc.base_severity,
-          employer_liability: {
-            level: 'unknown',
-            signals: inc.involves_retaliation ? ['potential_retaliation_post_report'] : [],
-          },
-        }));
-      } catch (e) {}
-
-      const assessor = new DocumentAssessor(apiKey);
-      const analysis = await assessor.expandFlag(flag, {
-        inputText,
-        vaultIncidents,
-        caseDb: currentCaseDb,
-      });
-
-      return { success: true, analysis };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('assessor:deepAnalysis', async (event, { result, inputText }) => {
-    try {
-      if (!currentCaseDb) return { success: false, error: 'No case open' };
-      const apiKey = db.getSetting('anthropic_api_key');
-      if (!apiKey) return { success: false, error: 'API key not configured. Set it in Settings.' };
-
-      let vaultIncidents = [];
-      try {
-        const incidents = currentCaseDb.prepare('SELECT * FROM incidents').all();
-        vaultIncidents = incidents.map(inc => ({
-          incident_type: inc.incident_type,
-          incident_severity: inc.computed_severity || inc.base_severity,
-          employer_liability: {
-            level: 'unknown',
-            signals: inc.involves_retaliation ? ['potential_retaliation_post_report'] : [],
-          },
-        }));
-      } catch (e) {}
-
-      const assessor = new DocumentAssessor(apiKey);
-      const memo = await assessor.requestDeepAnalysis(result, {
-        inputText,
-        vaultIncidents,
-        caseDb: currentCaseDb,
-      });
-
-      return { success: true, memo };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle('assessor:inputTypes', async () => {
-    return { success: true, types: DOCUMENT_INPUT_TYPES };
-  });
-
-  console.log('[IPC] All handlers registered successfully');
 }
 
 function closeCurrentCase() {
@@ -3541,7 +2615,6 @@ function closeCurrentCase() {
     currentCaseDb.close();
     currentCaseDb = null;
     currentCaseId = null;
-    actorRegistry = null;
   }
 }
 

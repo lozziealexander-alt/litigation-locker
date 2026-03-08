@@ -11,6 +11,9 @@ export default function ActorBadges({ actors, max = 3 }) {
     const colorMap = {
       'bad_actor': '#DC2626',
       'enabler': '#F97316',
+      'involved': '#7C3AED',
+      'aware': '#2563EB',
+      'responsible': '#B91C1C',
       'witness_supportive': '#16A34A',
       'witness_neutral': '#6B7280',
       'witness_hostile': '#DC2626',

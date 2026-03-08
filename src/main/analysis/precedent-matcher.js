@@ -510,12 +510,40 @@ function analyzePrecedent(precedent, documents, incidents, actors, jurisdiction 
   }
 
   // Calculate alignment — use required elements if any, otherwise use all elements
+  // Weight-aware: documents with higher weights (1-5) contribute more to alignment
   const requiredElements = precedent.elements.filter(e => e.required);
   const scoringElements = requiredElements.length > 0 ? requiredElements : precedent.elements;
   const satisfiedScoring = scoringElements.filter(e => elementResults[e.id].satisfied);
-  const alignmentPercent = scoringElements.length > 0
+
+  // Calculate weight bonus: high-weight documents boost alignment, low-weight penalize
+  let weightBonus = 0;
+  if (satisfiedScoring.length > 0) {
+    const allWeights = [];
+    for (const el of satisfiedScoring) {
+      const result = elementResults[el.id];
+      if (result.evidence) {
+        for (const ev of result.evidence) {
+          if (ev.type === 'document') {
+            const doc = documents.find(d => d.id === ev.id);
+            if (doc && doc.link_weight) {
+              // Penalize "against" documents
+              const mult = doc.link_relevance === 'against' ? -1 : 1;
+              allWeights.push((doc.link_weight - 3) * mult); // -2 to +2 range
+            }
+          }
+        }
+      }
+    }
+    if (allWeights.length > 0) {
+      const avgWeight = allWeights.reduce((a, b) => a + b, 0) / allWeights.length;
+      weightBonus = Math.round(avgWeight * 3); // up to +/-6% per weight point
+    }
+  }
+
+  const basePercent = scoringElements.length > 0
     ? Math.round((satisfiedScoring.length / scoringElements.length) * 100)
     : 0;
+  const alignmentPercent = Math.max(0, Math.min(100, basePercent + weightBonus));
 
   // Build elements as array for rendering
   const elementsArray = precedent.elements.map(e => ({

@@ -4,6 +4,9 @@ import { colors, shadows, spacing, typography, radius } from '../styles/tokens';
 const CLASSIFICATIONS = [
   { value: 'bad_actor', label: 'Bad Actor', color: '#DC2626' },
   { value: 'enabler', label: 'Enabler', color: '#F97316' },
+  { value: 'involved', label: 'Involved', color: '#7C3AED' },
+  { value: 'aware', label: 'Aware', color: '#2563EB' },
+  { value: 'responsible', label: 'Responsible', color: '#B91C1C' },
   { value: 'witness_supportive', label: 'Supportive Witness', color: '#16A34A' },
   { value: 'witness_neutral', label: 'Neutral Witness', color: '#6B7280' },
   { value: 'witness_hostile', label: 'Hostile Witness', color: '#DC2626' },
@@ -705,7 +708,7 @@ function getStyles() {
     // Classification grid
     classGrid: {
       display: 'grid',
-      gridTemplateColumns: 'repeat(2, 1fr)',
+      gridTemplateColumns: 'repeat(3, 1fr)',
       gap: spacing.xs,
       marginBottom: spacing.sm
     },

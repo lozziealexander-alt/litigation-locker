@@ -15,6 +15,8 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
   const [protectedClasses, setProtectedClasses] = useState([]);
   const [chainAnalysis, setChainAnalysis] = useState(null);
   const [selectedAlert, setSelectedAlert] = useState(null);
+  const [causalityLinks, setCausalityLinks] = useState([]);
+  const [suggestedIncidents, setSuggestedIncidents] = useState([]);
 
   function toggleSection(section) {
     setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -65,6 +67,16 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     } catch (e) {
       console.warn('[Dashboard] categorizer analysis error:', e);
     }
+
+    // Load causality links + suggested incidents
+    try {
+      const linksResult = await window.api.eventLinks.list();
+      if (linksResult.success) setCausalityLinks(linksResult.links || []);
+    } catch (e) {}
+    try {
+      const suggestResult = await window.api.incidents.suggest();
+      if (suggestResult.success) setSuggestedIncidents(suggestResult.suggestions || []);
+    } catch (e) {}
 
     // Compute stats
     const docs = docsResult.documents || [];
@@ -447,6 +459,20 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
             value={stats?.timelineSpanDays || 0}
             label="Days Span"
           />
+          <StatCard
+            icon={'\u{1F525}'}
+            value={causalityLinks.length}
+            label="Causality Links"
+            sublabel={causalityLinks.length > 0 ? `${causalityLinks.filter(l => l.link_type === 'caused').length} causal` : 'none yet'}
+          />
+          {suggestedIncidents.length > 0 && (
+            <StatCard
+              icon={'\u{1F6A8}'}
+              value={suggestedIncidents.length}
+              label="Suggested Incidents"
+              sublabel="Auto-detected patterns"
+            />
+          )}
         </div>
 
         {/* Case Strength */}
@@ -594,19 +620,38 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
                   Object.keys(chainAnalysis.employerLiability.noticeByRecipient).length > 0 && (
                   <div style={{ marginTop: spacing.md }}>
                     <div style={chainStyles.sectionLabel}>Notice by Recipient</div>
-                    {Object.entries(chainAnalysis.employerLiability.noticeByRecipient).map(([recipient, data]) => (
-                      <div key={recipient} style={chainStyles.recipientRow}>
-                        <span style={chainStyles.recipientName}>{recipient}</span>
-                        <span style={chainStyles.recipientCount}>notified {data.timesNotified}x</span>
-                        <span style={{
-                          ...chainStyles.recipientAction,
-                          color: data.actionTaken ? colors.success : colors.error
-                        }}>
-                          {data.actionTaken ? 'action taken' : 'no action taken'}
-                        </span>
-                        {data.allVerbalOnly && <span style={chainStyles.verbalTag}>verbal only</span>}
-                      </div>
-                    ))}
+                    {Object.entries(chainAnalysis.employerLiability.noticeByRecipient).map(([recipient, data]) => {
+                      const importance = data.recipientImportance || {};
+                      const importanceColors = {
+                        critical: { bg: '#FEE2E2', color: '#DC2626', border: '#FECACA' },
+                        high: { bg: '#FEF3C7', color: '#92400E', border: '#FDE68A' },
+                        moderate: { bg: '#DBEAFE', color: '#1E40AF', border: '#BFDBFE' },
+                        external: { bg: '#F3F4F6', color: '#6B7280', border: '#E5E7EB' },
+                        low: { bg: '#F3F4F6', color: '#9CA3AF', border: '#E5E7EB' },
+                      };
+                      const ic = importanceColors[importance.level] || importanceColors.low;
+                      const actionStatus = data.actionStatus || (data.actionTaken ? 'yes' : 'no');
+                      const actionColor = actionStatus === 'yes' ? colors.success : actionStatus === 'no' ? colors.error : '#92400E';
+                      const actionLabel = actionStatus === 'yes' ? 'action taken' : actionStatus === 'no' ? 'no action taken' : 'no remedy documented';
+
+                      return (
+                        <div key={recipient} style={{ ...chainStyles.recipientRow, flexDirection: 'column', alignItems: 'flex-start', gap: '4px', padding: `${spacing.sm} ${spacing.md}`, marginBottom: spacing.xs, border: `1px solid ${ic.border}`, borderRadius: radius.sm, background: ic.bg + '40' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: spacing.sm, width: '100%', flexWrap: 'wrap' }}>
+                            <span style={{ ...chainStyles.recipientName, fontWeight: 600 }}>{importance.label || recipient}</span>
+                            <span style={chainStyles.recipientCount}>notified {data.timesNotified}x</span>
+                            <span style={{ ...chainStyles.recipientAction, color: actionColor, fontWeight: 600 }}>
+                              {actionLabel}
+                            </span>
+                            {data.allVerbalOnly && <span style={chainStyles.verbalTag}>verbal only</span>}
+                          </div>
+                          {importance.note && (
+                            <div style={{ fontSize: '11px', color: ic.color, lineHeight: '1.3' }}>
+                              {importance.note}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1257,7 +1302,10 @@ const styles = {
   alertList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: spacing.sm
+    gap: spacing.sm,
+    maxHeight: '400px',
+    overflowY: 'auto',
+    paddingRight: spacing.xs
   },
   alertItem: {
     padding: spacing.md,

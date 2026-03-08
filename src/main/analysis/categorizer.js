@@ -129,6 +129,16 @@ const NO_ACTION_PATTERNS = [
   /\b(never heard back|no one got back to me)\b/i,
 ];
 
+const ACTION_TAKEN_PATTERNS = [
+  /\b(they (investigated|looked into|addressed|took action|followed up|responded|intervened))\b/i,
+  /\b(investigation was (conducted|opened|launched|initiated))\b/i,
+  /\b(remedial (action|steps|measures) (were |was )?(taken|implemented))\b/i,
+  /\b(moved (me|him|her|them|the |my )|transferred|separated|reassigned)\b/i,
+  /\b(received (a )?(written |formal )?(warning|reprimand|counseling|discipline))\b/i,
+  /\b((placed on|put on|received) (a )?PIP)\b/i,
+  /\b(HR (met with|spoke to|talked to|interviewed|contacted))\b/i,
+];
+
 const INCIDENT_TYPE_MAP = {
   sexual_harassment: [
     /\b(sexual(ly)?|sex)\b/i,
@@ -334,6 +344,9 @@ function buildFlags(text, category) {
     if (NO_ACTION_PATTERNS.some(p => p.test(text))) {
       flags.push('no_action_taken');
     }
+    if (ACTION_TAKEN_PATTERNS.some(p => p.test(text))) {
+      flags.push('action_taken');
+    }
     if (CONDUCT_CONTINUED_PATTERNS.some(p => p.test(text))) {
       flags.push('conduct_continued_after_report');
     }
@@ -500,8 +513,22 @@ class NoticeRecord {
     return this.reportsToRecipient.length;
   }
 
+  /**
+   * Three-state action tracking:
+   *   'yes'     — employer explicitly took action (RESPONSE_RECEIVED linked)
+   *   'no'      — text explicitly says nothing was done (no_action_taken flag)
+   *   'unknown' — text doesn't mention outcome either way
+   */
+  get actionStatus() {
+    const hasExplicitNoAction = this.reportsToRecipient.some(r => r.flags.includes('no_action_taken'));
+    const hasExplicitAction = this.reportsToRecipient.some(r => r.flags.includes('action_taken'));
+    if (hasExplicitAction) return 'yes';
+    if (hasExplicitNoAction) return 'no';
+    return 'unknown';
+  }
+
   get anyActionTaken() {
-    return this.reportsToRecipient.some(r => !r.flags.includes('no_action_taken'));
+    return this.actionStatus === 'yes';
   }
 
   get allVerbal() {
@@ -515,13 +542,17 @@ class NoticeRecord {
 
   get liabilitySignals() {
     const signals = [];
-    if (this.noticeCount >= 1 && !this.anyActionTaken) {
+    const status = this.actionStatus;
+    // 'unknown' is treated same as 'no' — absence of documented remedy is legally significant
+    const noRemedyDocumented = status !== 'yes';
+
+    if (this.noticeCount >= 1 && noRemedyDocumented) {
       signals.push('notice_without_remedy');
     }
-    if (this.noticeCount >= 2 && !this.anyActionTaken) {
+    if (this.noticeCount >= 2 && noRemedyDocumented) {
       signals.push('repeated_notice_no_action');
     }
-    if (this.noticeCount >= 3 && !this.anyActionTaken) {
+    if (this.noticeCount >= 3 && noRemedyDocumented) {
       signals.push('pattern_of_deliberate_indifference');
     }
     if (this.effectiveVerbalOnly) {
@@ -538,8 +569,10 @@ class NoticeRecord {
   toSummary() {
     return {
       recipient: this.recipient,
+      recipientImportance: getRecipientImportance(this.recipient),
       timesNotified: this.noticeCount,
       actionTaken: this.anyActionTaken,
+      actionStatus: this.actionStatus,
       allVerbalOnly: this.allVerbal,
       verbalGapCoveredByEmail: this.verbalGapCoveredByEmail,
       effectiveVerbalOnly: this.effectiveVerbalOnly,
@@ -649,14 +682,22 @@ class IncidentChain {
     const signals = this.employerLiabilitySignals;
     let score = 0;
 
-    const countSignal = (name) => signals.filter(s => s === name).length;
-    score += 2 * countSignal('notice_without_remedy');
-    score += 3 * countSignal('repeated_notice_no_action');
-    score += 4 * countSignal('pattern_of_deliberate_indifference');
-    score += 3 * countSignal('conduct_continued_after_notice');
-    score += 3 * countSignal('potential_retaliation_post_report');
-    score += 2 * countSignal('hostile_work_environment_ongoing');
-    score += signals.length;
+    const SIGNAL_WEIGHTS = {
+      notice_without_remedy: 2,
+      repeated_notice_no_action: 3,
+      pattern_of_deliberate_indifference: 4,
+      conduct_continued_after_notice: 3,
+      potential_retaliation_post_report: 3,
+      hostile_work_environment_ongoing: 2,
+      employer_had_multiple_opportunities_to_remedy: 2,
+      multiple_reports_to_same_recipient: 1,
+      no_written_acknowledgement_of_notice: 1,
+      verbal_notice_covered_by_followup_email: 0,  // mitigating — not a risk signal
+    };
+
+    for (const signal of signals) {
+      score += SIGNAL_WEIGHTS[signal] ?? 1;
+    }
 
     if (score >= 10) return 'critical';
     if (score >= 6) return 'high';
@@ -722,6 +763,40 @@ function scoreDocumentation(chain) {
   if (score >= 6) return 'moderate';
   if (score >= 3) return 'limited';
   return 'weak';
+}
+
+// ---------------------------------------------------------------------------
+// Recipient importance
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify how legally significant this notice recipient is.
+ *
+ * Faragher/Ellerth analysis cares about WHO was told:
+ *   - HR / compliance / legal  → employer is FULLY on notice; highest importance
+ *   - Skip-level / senior mgmt → strong constructive notice (bypassed direct supervisor)
+ *   - Direct supervisor         → employer on notice only if supervisor has authority to act
+ *   - External (EEOC, attorney) → not employer notice, but documents employee diligence
+ *   - Coworker / informal       → weakest; employer may argue they didn't know
+ */
+function getRecipientImportance(recipient) {
+  const r = (recipient || '').toLowerCase();
+  if (['hr', 'human resources', 'people ops', 'compliance', 'legal', 'general counsel', 'clo', 'ethics'].some(k => r.includes(k))) {
+    return { level: 'critical', label: 'HR / Compliance', note: 'Employer is fully on legal notice — duty to investigate attaches immediately' };
+  }
+  if (['director', 'vp', 'vice president', 'senior', 'executive', 'chief', 'coo', 'ceo', 'cfo', 'skip-level', 'skip level'].some(k => r.includes(k))) {
+    return { level: 'high', label: 'Senior Management', note: 'Strong constructive notice — management above direct supervisor was informed' };
+  }
+  if (['supervisor', 'manager', 'boss', 'lead', 'team lead'].some(k => r.includes(k))) {
+    return { level: 'moderate', label: 'Direct Supervisor', note: 'Employer on notice if supervisor has authority to act or report up' };
+  }
+  if (['eeoc', 'labor board', 'department of labor', 'attorney', 'lawyer', 'law enforcement', 'police'].some(k => r.includes(k))) {
+    return { level: 'external', label: 'External / Government', note: 'Not direct employer notice, but documents employee took reasonable steps' };
+  }
+  if (['union', 'steward', 'shop steward'].some(k => r.includes(k))) {
+    return { level: 'moderate', label: 'Union Representative', note: 'Union notice may trigger employer duty depending on CBA' };
+  }
+  return { level: 'low', label: 'Other', note: 'Informal notice — employer may argue they were unaware' };
 }
 
 // ---------------------------------------------------------------------------
@@ -834,14 +909,31 @@ function buildChain(entries, knownHarasserRole = null) {
     }
   }
 
-  // Detect if conduct continued after any report was made
-  const allFollowupText = [
-    ...chain.reports,
-    ...chain.followupEmails,
-    ...chain.meetings,
-  ].map(e => e.rawText).join(' ');
+  // Detect if conduct continued after any report was made.
+  // Only check documents that come AFTER the first report (by date or position),
+  // and also check report text itself for "conduct continued" language.
+  const firstReportDate = chain.reports.length > 0
+    ? chain.reports[0].dateHint || chain.reports[0].documentDate
+    : null;
 
-  chain.conductContinuedPostReport = CONDUCT_CONTINUED_PATTERNS.some(p => p.test(allFollowupText));
+  const postReportEntries = [];
+  // Reports themselves can mention conduct continuing
+  for (const r of chain.reports) {
+    if (r.flags.includes('conduct_continued_after_report')) {
+      postReportEntries.push(r);
+    }
+  }
+  // Follow-up emails and meetings after the first report
+  for (const e of [...chain.followupEmails, ...chain.meetings]) {
+    postReportEntries.push(e);
+  }
+
+  if (postReportEntries.length > 0) {
+    const postReportText = postReportEntries.map(e => e.rawText).join(' ');
+    chain.conductContinuedPostReport = CONDUCT_CONTINUED_PATTERNS.some(p => p.test(postReportText));
+  } else {
+    chain.conductContinuedPostReport = false;
+  }
 
   return chain;
 }

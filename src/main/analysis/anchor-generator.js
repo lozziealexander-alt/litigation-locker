@@ -189,18 +189,6 @@ const ANCHOR_PATTERNS = {
     color: '#BE185D'
   },
 
-  MILESTONE: {
-    patterns: [
-      /(?:promoted|promotion)/gi,
-      /(?:new\s+(?:manager|supervisor|boss|team|department|role))/gi,
-      /(?:policy|rule)\s+(?:changed|updated|implemented)/gi,
-      /(?:investigation|audit|review)\s+(?:started|began|opened|launched|concluded)/gi,
-      /(?:settlement|mediation|arbitration)\s+(?:offered|proposed|began|concluded)/gi
-    ],
-    defaultTitle: 'Milestone',
-    color: '#6B7280'
-  },
-
   END: {
     patterns: [
       /(?:last day|final day|ended|left|departed|quit|resigned)/gi,
@@ -665,12 +653,24 @@ function getAnchorColor(type) {
 }
 
 module.exports = {
+  // Event-named exports (primary)
+  generateEventsFromContext: generateAnchorsFromContext,
+  generateEventsFromIncidents: generateAnchorsFromIncidents,
+  generateEventsFromDocuments: generateAnchorsFromDocuments,
+  mergeEvents: mergeAnchors,
+  getEventColor: getAnchorColor,
+  splitEventSegment: splitAnchorSegment,
+  EVENT_PATTERNS: ANCHOR_PATTERNS,
+
+  // Legacy exports (backwards compat)
   generateAnchorsFromContext,
   generateAnchorsFromIncidents,
   generateAnchorsFromDocuments,
   mergeAnchors,
   getAnchorColor,
   splitAnchorSegment,
+
+  // Shared utilities
   segmentNarrative,
   extractDate,
   extractActorsFromNarrative,

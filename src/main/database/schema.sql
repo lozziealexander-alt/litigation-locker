@@ -241,75 +241,121 @@ CREATE TABLE IF NOT EXISTS case_context (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Anchors (major case milestones)
-CREATE TABLE IF NOT EXISTS anchors (
+-- Events (atomic things that happened on specific dates)
+CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
-  anchor_type TEXT NOT NULL CHECK(anchor_type IN ('START', 'REPORTED', 'HELP', 'ADVERSE_ACTION', 'HARASSMENT', 'MILESTONE', 'END')),
+  case_id TEXT,
+  date TEXT,
   title TEXT NOT NULL,
   description TEXT,
-  anchor_date DATE,
-  date_confidence TEXT DEFAULT 'exact',
-
-  -- What/Where
+  event_type TEXT,
   what_happened TEXT,
   where_location TEXT,
-
-  -- Impact assessment
   impact_summary TEXT,
-  severity TEXT CHECK(severity IN ('minor', 'moderate', 'severe', 'egregious')),
+  severity TEXT,
+  event_weight TEXT DEFAULT 'significant',
+  why_no_report TEXT,
+  employer_notified BOOLEAN DEFAULT 0,
+  notice_date DATE,
+  notice_method TEXT,
+  employer_response TEXT,
+  response_date DATE,
+  response_adequate BOOLEAN,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 
-  -- Generation
-  is_auto_generated BOOLEAN DEFAULT 1,
-  user_edited BOOLEAN DEFAULT 0,
-  source_context TEXT,
+-- Multi-tag support (one event can have multiple tags)
+CREATE TABLE IF NOT EXISTS event_tags (
+  id TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  tag TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_tags_event ON event_tags(event_id);
+CREATE INDEX IF NOT EXISTS idx_event_tags_tag ON event_tags(tag);
 
-  -- Display
-  sort_order INTEGER,
-  is_expanded BOOLEAN DEFAULT 0,
+-- Causality links between events
+CREATE TABLE IF NOT EXISTS event_links (
+  id TEXT PRIMARY KEY,
+  source_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  target_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  link_type TEXT NOT NULL,
+  confidence REAL DEFAULT 1.0,
+  days_between INTEGER
+);
 
-  -- Multi-event tracking
-  contains_multiple_events BOOLEAN DEFAULT 0,
-  event_count INTEGER DEFAULT 1,
+-- Link events to documents
+CREATE TABLE IF NOT EXISTS event_documents (
+  id TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  relevance TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_event_documents_event ON event_documents(event_id);
+CREATE INDEX IF NOT EXISTS idx_event_documents_doc ON event_documents(document_id);
 
-  -- Direction
-  action_direction TEXT DEFAULT NULL,
+-- Link events to actors
+CREATE TABLE IF NOT EXISTS event_actors (
+  id TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  role TEXT
+);
 
+-- Link events to precedents
+CREATE TABLE IF NOT EXISTS event_precedents (
+  id TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  precedent_id TEXT NOT NULL,
+  relevance_note TEXT,
+  linked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_event_precedents_event ON event_precedents(event_id);
+
+-- Junction table linking events to incidents (EEOC structure)
+CREATE TABLE IF NOT EXISTS incident_events (
+  id TEXT PRIMARY KEY,
+  incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  event_role TEXT
+);
+
+-- Document regions (for future split/merge UI)
+CREATE TABLE IF NOT EXISTS document_regions (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id),
+  region_label TEXT,
+  page_start INTEGER,
+  page_end INTEGER,
+  char_start INTEGER,
+  char_end INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Document merges (for future merge tracking)
+CREATE TABLE IF NOT EXISTS document_merges (
+  id TEXT PRIMARY KEY,
+  result_document_id TEXT NOT NULL REFERENCES documents(id),
+  source_document_id TEXT NOT NULL REFERENCES documents(id),
+  merge_type TEXT DEFAULT 'manual',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Damages table
+CREATE TABLE IF NOT EXISTS damages (
+  id TEXT PRIMARY KEY,
+  category TEXT NOT NULL,
+  description TEXT,
+  amount REAL,
+  currency TEXT DEFAULT 'AUD',
+  date_from DATE,
+  date_to DATE,
+  is_ongoing BOOLEAN DEFAULT 0,
+  evidence_document_id TEXT REFERENCES documents(id),
+  notes TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-
--- Link anchors to incidents
-CREATE TABLE IF NOT EXISTS anchor_incidents (
-  anchor_id TEXT NOT NULL REFERENCES anchors(id),
-  incident_id TEXT NOT NULL REFERENCES incidents(id),
-  PRIMARY KEY (anchor_id, incident_id)
-);
-
--- Link anchors to documents
-CREATE TABLE IF NOT EXISTS anchor_documents (
-  anchor_id TEXT NOT NULL REFERENCES anchors(id),
-  document_id TEXT NOT NULL REFERENCES documents(id),
-  relevance TEXT DEFAULT 'supports',
-  PRIMARY KEY (anchor_id, document_id)
-);
-
--- Link anchors to actors
-CREATE TABLE IF NOT EXISTS anchor_actors (
-  anchor_id TEXT NOT NULL REFERENCES anchors(id),
-  actor_id TEXT NOT NULL REFERENCES actors(id),
-  role_in_anchor TEXT,
-  PRIMARY KEY (anchor_id, actor_id)
-);
-
--- Link anchors to precedents
-CREATE TABLE IF NOT EXISTS anchor_precedents (
-  anchor_id TEXT NOT NULL REFERENCES anchors(id),
-  precedent_id TEXT NOT NULL,
-  relevance_note TEXT,
-  linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (anchor_id, precedent_id)
-);
-CREATE INDEX IF NOT EXISTS idx_anchor_precedents_anchor ON anchor_precedents(anchor_id);
 
 -- Document date entries (allow one document to appear at multiple timeline dates)
 CREATE TABLE IF NOT EXISTS document_date_entries (
@@ -333,5 +379,6 @@ CREATE INDEX IF NOT EXISTS idx_timeline_target ON timeline_connections(target_id
 CREATE INDEX IF NOT EXISTS idx_date_entries_doc ON document_date_entries(document_id);
 CREATE INDEX IF NOT EXISTS idx_date_entries_date ON document_date_entries(entry_date);
 CREATE INDEX IF NOT EXISTS idx_pay_records_actor ON pay_records(actor_id);
-CREATE INDEX IF NOT EXISTS idx_anchors_date ON anchors(anchor_date);
-CREATE INDEX IF NOT EXISTS idx_anchors_type ON anchors(anchor_type);
+CREATE INDEX IF NOT EXISTS idx_events_date ON events(date);
+CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+CREATE INDEX IF NOT EXISTS idx_damages_category ON damages(category);

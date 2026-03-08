@@ -124,7 +124,8 @@ async function processFile(filePath, caseKey) {
 
 /**
  * Pick the best date from all available sources.
- * Priority: document metadata date > email date > NLP-extracted date > file date
+ * Priority: metadata date > labeled content date > header content date > other content date > file date
+ * Prefers dates extracted from document content over filesystem dates.
  */
 function pickBestDate(metadata, contentDates, stats) {
   // 1. Document metadata date (EXIF, PDF creation, email date)
@@ -132,13 +133,20 @@ function pickBestDate(metadata, contentDates, stats) {
     return { date: metadata.documentDate, confidence: 'exact' };
   }
 
-  // 2. First NLP-extracted date from content
+  // 2. NLP-extracted dates from content, sorted by priority (labeled > header > body)
   if (contentDates.length > 0) {
+    // contentDates are already sorted by priority then position
     const best = contentDates[0];
-    return { date: best.date, confidence: best.confidence || 'inferred' };
+
+    // If the best date has a label ("Date:", "Sent:", etc.) or is in the header, treat as exact
+    const confidence = best.priority >= 2 ? 'exact'
+      : best.confidence === 'exact' ? 'exact'
+      : best.confidence || 'inferred';
+
+    return { date: best.date, confidence };
   }
 
-  // 3. File modification date as fallback
+  // 3. File modification date as last resort
   if (stats.mtime) {
     return { date: stats.mtime.toISOString(), confidence: 'approximate' };
   }

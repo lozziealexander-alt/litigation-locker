@@ -22,9 +22,10 @@ const DOCUMENT_SUBTYPE_OPTIONS = [
   { value: 'forward_fyi', label: '📤 Forward / FYI' }
 ];
 
-export default function DocumentPanel({ document: doc, onClose, onDocumentUpdated }) {
+export default function DocumentPanel({ document: doc, onClose, onDocumentUpdated, onNavigate }) {
   const { mode } = useTheme();
   const [fullDoc, setFullDoc] = useState(null);
+  const [allDocs, setAllDocs] = useState([]);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editName, setEditName] = useState('');
   const [isEditingDate, setIsEditingDate] = useState(false);
@@ -66,6 +67,28 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
       setActorSearch('');
     }
   }, [doc?.id]);
+
+  // Load all docs for prev/next navigation
+  useEffect(() => {
+    if (!onNavigate) return;
+    (async () => {
+      try {
+        const result = await window.api.documents.list();
+        if (result.success) {
+          const sorted = (result.documents || []).sort((a, b) => {
+            const da = a.document_date || '';
+            const db = b.document_date || '';
+            return da.localeCompare(db);
+          });
+          setAllDocs(sorted);
+        }
+      } catch (e) {}
+    })();
+  }, [onNavigate]);
+
+  const currentDocIndex = allDocs.findIndex(d => d.id === doc?.id);
+  const prevDoc = currentDocIndex > 0 ? allDocs[currentDocIndex - 1] : null;
+  const nextDoc = currentDocIndex < allDocs.length - 1 ? allDocs[currentDocIndex + 1] : null;
 
   useEffect(() => {
     if (isEditingName && nameInputRef.current) {
@@ -315,6 +338,37 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
               </svg>
             </button>
           </div>
+
+          {/* Prev/Next navigation */}
+          {onNavigate && allDocs.length > 1 && (
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '6px 16px', background: colors.bgSecondary, borderBottom: `1px solid ${colors.border}`,
+              fontSize: '12px'
+            }}>
+              <button
+                disabled={!prevDoc}
+                onClick={() => prevDoc && onNavigate(prevDoc)}
+                style={{
+                  background: 'none', border: `1px solid ${prevDoc ? colors.border : 'transparent'}`,
+                  borderRadius: '6px', padding: '4px 10px', cursor: prevDoc ? 'pointer' : 'default',
+                  color: prevDoc ? colors.textPrimary : colors.textMuted, fontWeight: 600,
+                  opacity: prevDoc ? 1 : 0.4
+                }}
+              >{'\u2190'} Prev</button>
+              <span style={{ color: colors.textMuted }}>{currentDocIndex + 1} / {allDocs.length}</span>
+              <button
+                disabled={!nextDoc}
+                onClick={() => nextDoc && onNavigate(nextDoc)}
+                style={{
+                  background: 'none', border: `1px solid ${nextDoc ? colors.border : 'transparent'}`,
+                  borderRadius: '6px', padding: '4px 10px', cursor: nextDoc ? 'pointer' : 'default',
+                  color: nextDoc ? colors.textPrimary : colors.textMuted, fontWeight: 600,
+                  opacity: nextDoc ? 1 : 0.4
+                }}
+              >Next {'\u2192'}</button>
+            </div>
+          )}
 
           {/* Preview button */}
           {canPreview && (
@@ -750,6 +804,20 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
               }}
             >
               {'\uD83D\uDDD1\uFE0F'} Delete Document
+            </button>
+            <button
+              style={{ ...styles.deleteButton, border: `1px solid ${colors.border}`, color: colors.textSecondary, marginTop: spacing.sm }}
+              onClick={async () => {
+                const result = await window.api.documents.copy(displayDoc.id);
+                if (result.success) {
+                  onDocumentUpdated?.();
+                  alert(`Created copy: ${result.document.filename}`);
+                } else {
+                  alert('Error copying document: ' + (result.error || 'Unknown error'));
+                }
+              }}
+            >
+              {'\u{1F4CB}'} Copy Document
             </button>
           </div>
         </div>

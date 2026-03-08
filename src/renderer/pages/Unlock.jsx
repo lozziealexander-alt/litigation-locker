@@ -18,8 +18,15 @@ export default function Unlock({ onUnlock }) {
   }, []);
 
   async function checkVaultExists() {
-    const exists = await window.api.vault.exists();
-    setIsNewVault(!exists);
+    try {
+      const exists = await window.api.vault.exists();
+      console.log('[Unlock] vault.exists =>', exists);
+      setIsNewVault(!exists);
+    } catch (err) {
+      console.error('[Unlock] vault.exists error:', err);
+      // If check fails, assume vault exists (safe default — show unlock, not create)
+      setIsNewVault(false);
+    }
     setIsLoading(false);
   }
 

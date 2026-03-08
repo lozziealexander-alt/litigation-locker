@@ -1,9 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { colors, shadows, spacing, typography, radius, getSeverityColor } from '../styles/tokens';
 
 export default function IncidentApproval({ incidents, jurisdiction = 'both', onApprove, onDismiss, onClose }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [editedIncident, setEditedIncident] = useState(incidents[0] || null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [docContent, setDocContent] = useState(null);
+  const [showDoc, setShowDoc] = useState(false);
+  const [loadingDoc, setLoadingDoc] = useState(false);
 
   if (!incidents || incidents.length === 0) {
     return null;
@@ -12,35 +17,72 @@ export default function IncidentApproval({ incidents, jurisdiction = 'both', onA
   const current = incidents[currentIndex];
   const isLast = currentIndex === incidents.length - 1;
 
+  // Reset doc view when switching incidents
+  useEffect(() => {
+    setShowDoc(false);
+    setDocContent(null);
+  }, [currentIndex]);
+
+  async function handleViewDocument() {
+    if (!current.sourceDocumentId) return;
+    if (showDoc) { setShowDoc(false); return; }
+    setLoadingDoc(true);
+    try {
+      const result = await window.api.documents.get(current.sourceDocumentId);
+      if (result.success && result.document) {
+        const text = result.document.extracted_text || result.document.ocr_text || '(No text content extracted)';
+        setDocContent({ text, filename: result.document.filename, fileType: result.document.file_type });
+      } else {
+        setDocContent({ text: 'Could not load document.', filename: '', fileType: '' });
+      }
+    } catch (e) {
+      setDocContent({ text: 'Error loading document: ' + e.message, filename: '', fileType: '' });
+    }
+    setLoadingDoc(false);
+    setShowDoc(true);
+  }
+
   function handleFieldChange(field, value) {
     setEditedIncident(prev => ({ ...prev, [field]: value }));
   }
 
-  function handleApprove() {
-    onApprove({
-      title: editedIncident.suggestedTitle,
-      description: editedIncident.suggestedDescription,
-      date: editedIncident.suggestedDate,
-      severity: editedIncident.suggestedSeverity,
-      type: editedIncident.type,
-      subtype: editedIncident.subtype,
-      sourceDocumentId: editedIncident.sourceDocumentId,
-      involvesRetaliation: editedIncident.burlingtonProximity,
-      harrisNature: editedIncident.harrisNature,
-      tangibleAction: editedIncident.tangibleAction,
-      burlingtonProximity: editedIncident.burlingtonProximity
-    });
+  async function handleApprove(e) {
+    e.stopPropagation();
+    e.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await onApprove({
+        title: editedIncident.suggestedTitle,
+        description: editedIncident.suggestedDescription,
+        date: editedIncident.suggestedDate,
+        severity: editedIncident.suggestedSeverity,
+        type: editedIncident.type,
+        subtype: editedIncident.subtype,
+        sourceDocumentId: editedIncident.sourceDocumentId,
+        involvesRetaliation: editedIncident.burlingtonProximity,
+        harrisNature: editedIncident.harrisNature,
+        tangibleAction: editedIncident.tangibleAction,
+        burlingtonProximity: editedIncident.burlingtonProximity
+      });
 
-    if (isLast) {
-      onClose();
-    } else {
-      const nextIndex = currentIndex + 1;
-      setCurrentIndex(nextIndex);
-      setEditedIncident(incidents[nextIndex]);
+      if (isLast) {
+        onClose();
+      } else {
+        const nextIndex = currentIndex + 1;
+        setCurrentIndex(nextIndex);
+        setEditedIncident(incidents[nextIndex]);
+      }
+    } catch (err) {
+      console.error('[IncidentApproval] approve error:', err);
+      setError(err.message || 'Failed to create incident');
     }
+    setSaving(false);
   }
 
-  function handleDismiss() {
+  function handleDismiss(e) {
+    e.stopPropagation();
     onDismiss(current);
 
     if (isLast) {
@@ -57,8 +99,8 @@ export default function IncidentApproval({ incidents, jurisdiction = 'both', onA
   }
 
   return (
-    <div style={styles.overlay}>
-      <div style={styles.modal}>
+    <div style={styles.overlay} onClick={e => e.stopPropagation()}>
+      <div style={styles.modal} onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div style={styles.header}>
           <div>
@@ -74,10 +116,33 @@ export default function IncidentApproval({ incidents, jurisdiction = 'both', onA
         <div style={styles.matchPreview}>
           <div style={styles.matchLabel}>Detected from:</div>
           <div style={styles.matchText}>"{current.matchedText}"</div>
-          <div style={styles.confidence}>
-            Confidence: {Math.round(current.confidence * 100)}%
+          <div style={{ display: 'flex', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm }}>
+            <div style={styles.confidence}>
+              Confidence: {Math.round(current.confidence * 100)}%
+            </div>
+            {current.sourceDocumentId && (
+              <button
+                style={styles.viewDocBtn}
+                onClick={handleViewDocument}
+                disabled={loadingDoc}
+              >
+                {loadingDoc ? 'Loading...' : showDoc ? 'Hide Document' : '\uD83D\uDCC4 View Source Document'}
+              </button>
+            )}
           </div>
         </div>
+
+        {/* Document content viewer */}
+        {showDoc && docContent && (
+          <div style={styles.docViewer}>
+            {docContent.filename && (
+              <div style={{ fontSize: typography.fontSize.xs, fontWeight: typography.fontWeight.semibold, color: colors.textMuted, marginBottom: spacing.xs }}>
+                {docContent.filename} {docContent.fileType ? `(${docContent.fileType})` : ''}
+              </div>
+            )}
+            <div style={styles.docViewerContent}>{docContent.text}</div>
+          </div>
+        )}
 
         {/* Editable fields */}
         <div style={styles.form}>
@@ -167,13 +232,24 @@ export default function IncidentApproval({ incidents, jurisdiction = 'both', onA
           </div>
         )}
 
+        {/* Error display */}
+        {error && (
+          <div style={styles.errorBar}>
+            {error}
+          </div>
+        )}
+
         {/* Actions */}
         <div style={styles.actions}>
-          <button style={styles.dismissBtn} onClick={handleDismiss}>
+          <button style={styles.dismissBtn} onClick={handleDismiss} disabled={saving}>
             Dismiss
           </button>
-          <button style={styles.approveBtn} onClick={handleApprove}>
-            Accept {isLast ? '& Close' : '& Next'}
+          <button
+            style={{ ...styles.approveBtn, opacity: saving ? 0.6 : 1 }}
+            onClick={handleApprove}
+            disabled={saving}
+          >
+            {saving ? 'Saving...' : `Accept ${isLast ? '& Close' : '& Next'}`}
           </button>
         </div>
       </div>
@@ -340,6 +416,15 @@ const styles = {
     borderRadius: radius.full
   },
 
+  // Error
+  errorBar: {
+    padding: spacing.md,
+    background: '#FEF2F2',
+    borderTop: `1px solid #FECACA`,
+    color: '#DC2626',
+    fontSize: typography.fontSize.sm
+  },
+
   // Actions
   actions: {
     display: 'flex',
@@ -368,5 +453,31 @@ const styles = {
     fontWeight: typography.fontWeight.semibold,
     color: colors.textInverse,
     cursor: 'pointer'
+  },
+
+  // Document viewer
+  viewDocBtn: {
+    padding: `${spacing.xs} ${spacing.sm}`,
+    background: '#78350F',
+    color: '#FEF3C7',
+    border: 'none',
+    borderRadius: radius.sm,
+    fontSize: typography.fontSize.xs,
+    fontWeight: typography.fontWeight.medium,
+    cursor: 'pointer'
+  },
+  docViewer: {
+    maxHeight: '200px',
+    overflowY: 'auto',
+    padding: spacing.md,
+    background: colors.surfaceAlt,
+    borderBottom: `1px solid ${colors.border}`
+  },
+  docViewerContent: {
+    fontSize: typography.fontSize.sm,
+    color: colors.textSecondary,
+    lineHeight: typography.lineHeight.relaxed,
+    whiteSpace: 'pre-wrap',
+    fontFamily: 'inherit'
   }
 };

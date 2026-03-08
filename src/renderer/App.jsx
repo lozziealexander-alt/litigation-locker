@@ -3,11 +3,12 @@ import Unlock from './pages/Unlock';
 import Timeline from './pages/Timeline';
 import People from './pages/People';
 import Dashboard from './pages/Dashboard';
-import Anchors from './pages/Anchors';
+import Events from './pages/Events';
 import ContextDocs from './pages/ContextDocs';
 import Assessor from './pages/Assessor';
 import Settings from './pages/Settings';
 import DocumentPanel from './components/DocumentPanel';
+import EventPanel from './components/EventPanel';
 import ActorDetail from './components/ActorDetail';
 import { useTheme } from './styles/ThemeContext';
 import { colors, shadows, spacing, typography, radius } from './styles/tokens';
@@ -19,12 +20,16 @@ export default function App() {
   const [cases, setCases] = useState([]);
   const [activeCase, setActiveCase] = useState(null);
   const [selectedDocument, setSelectedDocument] = useState(null);
+  const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedActor, setSelectedActor] = useState(null);
-  const [currentPage, setCurrentPage] = useState('anchors');
+  const [currentPage, setCurrentPage] = useState('events');
   const [timelineKey, setTimelineKey] = useState(0);
   const [peopleKey, setPeopleKey] = useState(0);
   const [dashboardKey, setDashboardKey] = useState(0);
+  const [eventsKey, setEventsKey] = useState(0);
   const [highlightDocIds, setHighlightDocIds] = useState(null);
+  const [renamingCaseId, setRenamingCaseId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
 
   // Recompute styles each render so they pick up current theme colors
   const styles = getStyles();
@@ -82,6 +87,17 @@ export default function App() {
         await selectCase(result.case);
       }
     }
+  }
+
+  async function handleRenameCase(caseId, newName) {
+    const trimmed = newName.trim();
+    if (!trimmed) { setRenamingCaseId(null); return; }
+    const result = await window.api.cases.rename(caseId, trimmed);
+    if (result.success) {
+      setCases(prev => prev.map(c => c.id === caseId ? { ...c, name: trimmed } : c));
+      if (activeCase?.id === caseId) setActiveCase(prev => ({ ...prev, name: trimmed }));
+    }
+    setRenamingCaseId(null);
   }
 
   async function handleBurn() {
@@ -142,12 +158,12 @@ export default function App() {
           <button
             style={{
               ...styles.caseButton,
-              ...(currentPage === 'anchors' ? styles.navButtonActive : {})
+              ...(currentPage === 'events' ? styles.navButtonActive : {})
             }}
-            onClick={() => setCurrentPage('anchors')}
+            onClick={() => setCurrentPage('events')}
           >
-            <span style={styles.caseIcon}>{'\u{1F4CD}'}</span>
-            <span style={styles.caseName}>Anchors</span>
+            <span style={styles.caseIcon}>{'\u{1F4CC}'}</span>
+            <span style={styles.caseName}>Events</span>
           </button>
           <button
             style={{
@@ -174,7 +190,7 @@ export default function App() {
               ...styles.caseButton,
               ...(currentPage === 'dashboard' ? styles.navButtonActive : {})
             }}
-            onClick={() => setCurrentPage('dashboard')}
+            onClick={() => { setDashboardKey(k => k + 1); setCurrentPage('dashboard'); }}
           >
             <span style={styles.caseIcon}>{'\uD83D\uDCCA'}</span>
             <span style={styles.caseName}>Dashboard</span>
@@ -219,9 +235,29 @@ export default function App() {
                 ...(c.id === activeCase?.id ? styles.caseButtonActive : {})
               }}
               onClick={() => selectCase(c)}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setRenamingCaseId(c.id);
+                setRenameValue(c.name);
+              }}
             >
               <span style={styles.caseIcon}>{'\uD83D\uDCC1'}</span>
-              <span style={styles.caseName}>{c.name}</span>
+              {renamingCaseId === c.id ? (
+                <input
+                  autoFocus
+                  value={renameValue}
+                  onChange={e => setRenameValue(e.target.value)}
+                  onBlur={() => handleRenameCase(c.id, renameValue)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleRenameCase(c.id, renameValue);
+                    if (e.key === 'Escape') setRenamingCaseId(null);
+                  }}
+                  onClick={e => e.stopPropagation()}
+                  style={styles.renameInput}
+                />
+              ) : (
+                <span style={styles.caseName}>{c.name}</span>
+              )}
             </button>
           ))}
           <button style={styles.addCaseButton} onClick={handleCreateCase}>
@@ -246,15 +282,20 @@ export default function App() {
 
       {/* Main content */}
       <div style={styles.main}>
-        {currentPage === 'anchors' && (
-          <Anchors caseId={activeCase.id} />
+        {currentPage === 'events' && (
+          <Events key={eventsKey} caseId={activeCase.id} onSelectEvent={setSelectedEvent} onSelectDocument={setSelectedDocument} />
         )}
         {currentPage === 'timeline' && (
           <Timeline
             key={timelineKey}
             onSelectDocument={setSelectedDocument}
+            onSelectEvent={setSelectedEvent}
             highlightDocIds={highlightDocIds}
             onClearHighlights={() => setHighlightDocIds(null)}
+            onDataChanged={() => {
+              setDashboardKey(k => k + 1);
+              setEventsKey(k => k + 1);
+            }}
           />
         )}
         {currentPage === 'people' && (
@@ -286,11 +327,27 @@ export default function App() {
         )}
       </div>
 
-      {/* Document panel */}
+      {/* Event panel */}
+      {selectedEvent && (
+        <EventPanel
+          event={selectedEvent}
+          onClose={() => setSelectedEvent(null)}
+          onSelectDocument={setSelectedDocument}
+          onNavigate={setSelectedEvent}
+          onEventUpdated={() => {
+            setEventsKey(k => k + 1);
+            setTimelineKey(k => k + 1);
+            setDashboardKey(k => k + 1);
+          }}
+        />
+      )}
+
+      {/* Document panel — rendered AFTER EventPanel so it always appears on top */}
       {selectedDocument && (
         <DocumentPanel
           document={selectedDocument}
           onClose={() => setSelectedDocument(null)}
+          onNavigate={setSelectedDocument}
           onDocumentUpdated={() => {
             setTimelineKey(k => k + 1);
             setDashboardKey(k => k + 1);
@@ -463,6 +520,17 @@ function getStyles() {
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap'
+    },
+    renameInput: {
+      flex: 1,
+      background: colors.bg,
+      color: colors.textPrimary,
+      border: `1px solid ${colors.primary}`,
+      borderRadius: radius.sm,
+      padding: '2px 6px',
+      fontSize: typography.fontSize.sm,
+      outline: 'none',
+      minWidth: 0
     },
     addCaseButton: {
       width: '100%',
