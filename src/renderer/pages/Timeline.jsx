@@ -70,6 +70,8 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
   const [highlightedEventId, setHighlightedEventId] = useState(null);
   const [nearDuplicates, setNearDuplicates] = useState([]);
   const [showDuplicateReview, setShowDuplicateReview] = useState(false);
+  const [linkSuggestions, setLinkSuggestions] = useState(null);
+  const [showLinkModal, setShowLinkModal] = useState(false);
   // Events spine
   const [events, setEvents] = useState([]);
   const [showEventSpine, setShowEventSpine] = useState(true);
@@ -77,6 +79,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
   const [eventLinks, setEventLinks] = useState([]);
   const [focusedItemIndex, setFocusedItemIndex] = useState(-1);
   const focusedItemRef = useRef(null);
+  const caseIdRef = useRef(null);
   const timelineRef = useRef(null);
   const timelineInnerRef = useRef(null);
   const containerRef = useRef(null);
@@ -195,6 +198,19 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
 
           loadTimeline();
           onDataChanged?.();
+
+          // Suggest event links for the first newly ingested document
+          if (result.documents && result.documents.length > 0 && caseIdRef.current) {
+            const firstDocId = result.documents[0].id;
+            window.api.events.suggestLinks(caseIdRef.current, firstDocId)
+              .then(linkResult => {
+                if (linkResult.success && linkResult.suggestions.length > 0) {
+                  setLinkSuggestions({ documentId: firstDocId, suggestions: linkResult.suggestions });
+                  setShowLinkModal(true);
+                }
+              })
+              .catch(() => {});
+          }
         } else {
           console.error('[Timeline] ingest failed:', result.error);
           alert('Import failed: ' + (result.error || 'Unknown error'));
@@ -229,6 +245,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
     try {
       const currentCase = await window.api.cases.current();
       const caseId = currentCase?.caseId;
+      caseIdRef.current = caseId;
       const [timelineResult, connectionsResult, precedentResult, incidentsResult, jurisdictionResult, actorsResult, eventsResult] = await Promise.all([
         window.api.timeline.get(),
         window.api.timeline.getConnections(),
@@ -1622,6 +1639,52 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
       )}
 
       {/* Near-duplicate review overlay */}
+      {/* Document-Event Link Suggestion Modal */}
+      {showLinkModal && linkSuggestions && (
+        <div style={styles.linkOverlay} onClick={() => { setShowLinkModal(false); setLinkSuggestions(null); }}>
+          <div style={styles.linkModal} onClick={e => e.stopPropagation()}>
+            <h3 style={styles.linkModalTitle}>Link Document to Events?</h3>
+            <p style={styles.linkModalHint}>
+              This document might support {linkSuggestions.suggestions.length} existing event{linkSuggestions.suggestions.length !== 1 ? 's' : ''}:
+            </p>
+            {linkSuggestions.suggestions.map(s => (
+              <div key={s.event.id} style={styles.suggestionCard}>
+                <div style={styles.suggestionScore}>{s.score}%</div>
+                <div style={styles.suggestionInfo}>
+                  <strong style={styles.suggestionTitle}>{s.event.title}</strong>
+                  <div style={styles.suggestionDate}>
+                    {s.event.date ? new Date(s.event.date).toLocaleDateString() : 'No date'}
+                  </div>
+                  <div style={styles.suggestionReason}>{s.reason}</div>
+                </div>
+                <button
+                  style={styles.linkBtn}
+                  onClick={async () => {
+                    await window.api.events.linkDocumentV2(
+                      caseIdRef.current,
+                      s.event.id,
+                      linkSuggestions.documentId,
+                      'supports'
+                    );
+                    setShowLinkModal(false);
+                    setLinkSuggestions(null);
+                    loadTimeline();
+                  }}
+                >
+                  Link
+                </button>
+              </div>
+            ))}
+            <button
+              style={styles.skipBtn}
+              onClick={() => { setShowLinkModal(false); setLinkSuggestions(null); }}
+            >
+              Skip for now
+            </button>
+          </div>
+        </div>
+      )}
+
       {showDuplicateReview && nearDuplicates.length > 0 && (
         <div style={styles.dupOverlay}>
           <div style={styles.dupPanel}>
@@ -2787,6 +2850,95 @@ function getStyles() {
       paddingTop: spacing.xs,
       borderTop: `1px solid ${colors.border}`,
       lineHeight: 1.4
+    },
+    linkOverlay: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,0.55)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 9000
+    },
+    linkModal: {
+      background: colors.surface,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.lg,
+      padding: '24px',
+      width: '480px',
+      maxWidth: '90vw',
+      boxShadow: shadows.lg
+    },
+    linkModalTitle: {
+      margin: '0 0 8px',
+      fontSize: typography.fontSize.lg,
+      color: colors.text
+    },
+    linkModalHint: {
+      margin: '0 0 16px',
+      fontSize: typography.fontSize.sm,
+      color: colors.textSecondary
+    },
+    suggestionCard: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '12px',
+      padding: '12px',
+      marginBottom: '8px',
+      background: colors.background,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.md
+    },
+    suggestionScore: {
+      minWidth: '44px',
+      textAlign: 'center',
+      fontWeight: 700,
+      fontSize: typography.fontSize.sm,
+      color: '#8B5CF6',
+      background: 'rgba(139,92,246,0.1)',
+      borderRadius: radius.sm,
+      padding: '4px 6px'
+    },
+    suggestionInfo: {
+      flex: 1,
+      minWidth: 0
+    },
+    suggestionTitle: {
+      fontSize: typography.fontSize.sm,
+      color: colors.text,
+      display: 'block',
+      marginBottom: '2px'
+    },
+    suggestionDate: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted
+    },
+    suggestionReason: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textSecondary,
+      marginTop: '2px'
+    },
+    linkBtn: {
+      padding: '6px 14px',
+      background: '#8B5CF6',
+      color: '#fff',
+      border: 'none',
+      borderRadius: radius.sm,
+      cursor: 'pointer',
+      fontSize: typography.fontSize.sm,
+      fontWeight: 600,
+      whiteSpace: 'nowrap'
+    },
+    skipBtn: {
+      marginTop: '12px',
+      width: '100%',
+      padding: '8px',
+      background: 'transparent',
+      color: colors.textSecondary,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.sm,
+      cursor: 'pointer',
+      fontSize: typography.fontSize.sm
     }
   };
 }

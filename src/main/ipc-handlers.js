@@ -2809,10 +2809,12 @@ function registerIpcHandlers() {
 
   ipcMain.handle('events:suggestLinks', async (event, caseId, documentId) => {
     try {
+      console.log('[suggestLinks] called with documentId:', documentId, 'caseId:', caseId);
       const caseDb = currentCaseDb;
 
       // Get document details
       const doc = caseDb.prepare('SELECT * FROM documents WHERE id = ?').get(documentId);
+      console.log('[suggestLinks] doc:', doc ? doc.filename : 'NOT FOUND', '| date:', doc?.document_date, '| type:', doc?.evidence_type);
       if (!doc) return { success: false, error: 'Document not found' };
 
       // Get actors linked to this document via actor_appearances
@@ -2874,7 +2876,9 @@ function registerIpcHandlers() {
 
       suggestions.sort((a, b) => b.score - a.score);
 
-      return { success: true, suggestions: suggestions.slice(0, 5) };
+      const top = suggestions.slice(0, 5);
+      console.log('[suggestLinks] returning', top.length, 'suggestions:', top.map(s => `"${s.event.title}" (${s.score}%)`).join(', ') || 'none');
+      return { success: true, suggestions: top };
     } catch (error) {
       console.error('[IPC] events:suggestLinks error:', error.message);
       return { success: false, error: error.message };
