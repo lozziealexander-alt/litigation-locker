@@ -13,6 +13,8 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
   const [collapsedSections, setCollapsedSections] = useState({});
   const [showCaseStrength, setShowCaseStrength] = useState(false);
   const [protectedClasses, setProtectedClasses] = useState([]);
+  const [chainAnalysis, setChainAnalysis] = useState(null);
+  const [selectedAlert, setSelectedAlert] = useState(null);
 
   function toggleSection(section) {
     setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -52,6 +54,16 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     if (connectionsResult.success) {
       setConnections(connectionsResult.connections);
       setEscalation(connectionsResult.escalation);
+    }
+
+    // Run incident chain analysis (categorizer)
+    try {
+      const chainResult = await window.api.categorizer.analyzeDocuments();
+      if (chainResult.success && chainResult.summary) {
+        setChainAnalysis(chainResult.summary);
+      }
+    } catch (e) {
+      console.warn('[Dashboard] categorizer analysis error:', e);
     }
 
     // Compute stats
@@ -134,31 +146,50 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     return parts.join(' ');
   }
 
+  // Helper: find document by id
+  function findDoc(docId) {
+    return documents.find(d => d.id === docId);
+  }
+
   // Get pattern alerts
   function getAlerts() {
     const alerts = [];
 
     // Escalation
     if (escalation?.hasEscalation) {
+      // Gather all incident-type documents as related evidence
+      const incidentDocs = documents.filter(d =>
+        ['INCIDENT', 'ADVERSE_ACTION'].includes(d.evidence_type)
+      );
       alerts.push({
         type: 'escalation',
         severity: 'warning',
         title: 'Escalating Pattern',
         description: `Severity trending ${escalation.trend}: ${escalation.escalations} escalations vs ${escalation.deescalations} de-escalations`,
-        legal: 'Harris v. Forklift - pattern demonstrates hostile environment'
+        legal: 'Harris v. Forklift - pattern demonstrates hostile environment',
+        relatedDocs: incidentDocs,
+        relatedIncidents: incidents,
+        detail: `${escalation.escalations} escalation${escalation.escalations !== 1 ? 's' : ''} detected with ${escalation.deescalations} de-escalation${escalation.deescalations !== 1 ? 's' : ''}. This pattern of increasing severity demonstrates a worsening hostile environment, which is a key element under Harris v. Forklift Systems.`
       });
     }
 
     // Retaliation timing
     const retaliationConns = connections.filter(c => c.connectionType === 'retaliation_chain');
     retaliationConns.forEach(conn => {
+      const sourceDoc = findDoc(conn.sourceId);
+      const targetDoc = findDoc(conn.targetId);
+      const relatedDocs = [sourceDoc, targetDoc].filter(Boolean);
+
       if (conn.daysBetween <= 14) {
         alerts.push({
           type: 'retaliation',
           severity: 'critical',
           title: `${conn.daysBetween} Days After Protected Activity`,
           description: 'Very close temporal proximity strongly supports retaliation inference',
-          legal: 'Burlington Northern v. White'
+          legal: 'Burlington Northern v. White',
+          relatedDocs,
+          connection: conn,
+          detail: `Only ${conn.daysBetween} days elapsed between the protected activity${sourceDoc ? ` (${sourceDoc.filename})` : ''} and the adverse action${targetDoc ? ` (${targetDoc.filename})` : ''}. Courts have consistently held that temporal proximity of this closeness is sufficient to establish a prima facie case of retaliation under Burlington Northern v. White.`
         });
       } else if (conn.daysBetween <= 30) {
         alerts.push({
@@ -166,7 +197,10 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
           severity: 'warning',
           title: `${conn.daysBetween} Days After Protected Activity`,
           description: 'Close temporal proximity supports retaliation claim',
-          legal: 'Burlington Northern v. White'
+          legal: 'Burlington Northern v. White',
+          relatedDocs,
+          connection: conn,
+          detail: `${conn.daysBetween} days elapsed between the protected activity${sourceDoc ? ` (${sourceDoc.filename})` : ''} and the adverse action${targetDoc ? ` (${targetDoc.filename})` : ''}. This temporal proximity, while not as strong as under 14 days, still supports an inference of retaliation under Burlington Northern v. White.`
         });
       }
     });
@@ -174,12 +208,17 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     // Temporal clusters
     const clusterConns = connections.filter(c => c.connectionType === 'temporal_cluster');
     clusterConns.forEach(conn => {
+      const sourceDoc = findDoc(conn.sourceId);
+      const targetDoc = findDoc(conn.targetId);
       alerts.push({
         type: 'cluster',
         severity: 'info',
         title: 'Event Cluster Detected',
         description: conn.description,
-        legal: 'Morgan - continuing violation pattern'
+        legal: 'Morgan - continuing violation pattern',
+        relatedDocs: [sourceDoc, targetDoc].filter(Boolean),
+        connection: conn,
+        detail: `Multiple events occurring in close temporal proximity suggest a continuing pattern of conduct. Under National Railroad Passenger Corp. v. Morgan, incidents that are part of a continuing violation may be considered together, even if some fall outside the statute of limitations filing window.`
       });
     });
 
@@ -438,6 +477,118 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
           </div>
         )}
 
+        {/* Incident Chain Analysis (Employer Liability) */}
+        {chainAnalysis && (
+          <div style={styles.card}>
+            <h3
+              style={styles.collapsibleTitle}
+              onClick={() => toggleSection('chain')}
+            >
+              <span style={styles.chevron}>{collapsedSections.chain ? '\u25B6' : '\u25BC'}</span>
+              Employer Liability Analysis
+              <span style={{
+                ...styles.strengthBadge,
+                background: chainAnalysis.employerLiability?.level === 'critical' ? colors.error :
+                             chainAnalysis.employerLiability?.level === 'high' ? '#F97316' :
+                             chainAnalysis.employerLiability?.level === 'moderate' ? colors.warning : colors.success
+              }}>
+                {chainAnalysis.employerLiability?.level?.toUpperCase()}
+              </span>
+            </h3>
+            {!collapsedSections.chain && (
+              <div style={{ padding: `0 ${spacing.md} ${spacing.md}` }}>
+                {/* Top metrics row */}
+                <div style={{ display: 'flex', gap: spacing.md, marginBottom: spacing.md, flexWrap: 'wrap' }}>
+                  <div style={chainStyles.metric}>
+                    <div style={chainStyles.metricValue}>{chainAnalysis.incidentSeverity || 'N/A'}</div>
+                    <div style={chainStyles.metricLabel}>Incident Severity</div>
+                  </div>
+                  <div style={chainStyles.metric}>
+                    <div style={chainStyles.metricValue}>{chainAnalysis.documentationStrength || 'N/A'}</div>
+                    <div style={chainStyles.metricLabel}>Documentation</div>
+                  </div>
+                  <div style={chainStyles.metric}>
+                    <div style={chainStyles.metricValue}>{chainAnalysis.reports?.length || 0}</div>
+                    <div style={chainStyles.metricLabel}>Reports Filed</div>
+                  </div>
+                  <div style={chainStyles.metric}>
+                    <div style={chainStyles.metricValue}>{chainAnalysis.retaliationEntries || 0}</div>
+                    <div style={chainStyles.metricLabel}>Retaliation</div>
+                  </div>
+                </div>
+
+                {/* Reports breakdown */}
+                {chainAnalysis.reports?.length > 0 && (
+                  <div style={{ marginBottom: spacing.md }}>
+                    <div style={chainStyles.sectionLabel}>Notice History</div>
+                    {chainAnalysis.reports.map((r, i) => (
+                      <div key={i} style={chainStyles.reportRow}>
+                        <span style={chainStyles.reportBadge}>#{r.noticeSequence}</span>
+                        <span style={chainStyles.reportCategory}>{r.category?.replace('REPORT_', '').replace('_', ' ')}</span>
+                        <span style={chainStyles.reportTo}>{r.reportedTo ? `to ${r.reportedTo}` : ''}</span>
+                        {r.date && <span style={chainStyles.reportDate}>{r.date}</span>}
+                        {r.flags?.map((f, fi) => (
+                          <span key={fi} style={{
+                            ...chainStyles.flag,
+                            background: f.includes('no_action') ? '#FEE2E2' :
+                                       f.includes('verbal') ? '#FEF3C7' :
+                                       f.includes('continued') ? '#FEE2E2' : '#F3F4F6',
+                            color: f.includes('no_action') ? '#DC2626' :
+                                   f.includes('verbal') ? '#92400E' :
+                                   f.includes('continued') ? '#DC2626' : '#6B7280'
+                          }}>
+                            {f.replace(/_/g, ' ')}
+                          </span>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Liability signals */}
+                {chainAnalysis.employerLiability?.signals?.length > 0 && (
+                  <div>
+                    <div style={chainStyles.sectionLabel}>Liability Signals (Faragher/Ellerth)</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: spacing.xs }}>
+                      {chainAnalysis.employerLiability.signals.map((signal, i) => (
+                        <span key={i} style={chainStyles.signalTag}>
+                          {signal.replace(/_/g, ' ')}
+                        </span>
+                      ))}
+                    </div>
+                    {chainAnalysis.employerLiability.conductContinuedPostReport && (
+                      <div style={chainStyles.continuedWarning}>
+                        Conduct continued after employer was put on notice
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Notice by recipient */}
+                {chainAnalysis.employerLiability?.noticeByRecipient &&
+                  Object.keys(chainAnalysis.employerLiability.noticeByRecipient).length > 0 && (
+                  <div style={{ marginTop: spacing.md }}>
+                    <div style={chainStyles.sectionLabel}>Notice by Recipient</div>
+                    {Object.entries(chainAnalysis.employerLiability.noticeByRecipient).map(([recipient, data]) => (
+                      <div key={recipient} style={chainStyles.recipientRow}>
+                        <span style={chainStyles.recipientName}>{recipient}</span>
+                        <span style={chainStyles.recipientCount}>notified {data.timesNotified}x</span>
+                        <span style={{
+                          ...chainStyles.recipientAction,
+                          color: data.actionTaken ? colors.success : colors.error
+                        }}>
+                          {data.actionTaken ? 'action taken' : 'no action taken'}
+                        </span>
+                        {data.allVerbalOnly && <span style={chainStyles.verbalTag}>verbal only</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Two Column Layout */}
         <div style={styles.twoColumn}>
           {/* Left: Alerts */}
@@ -465,8 +616,8 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
                           borderLeftColor: alert.severity === 'critical' ? colors.error :
                                            alert.severity === 'warning' ? colors.warning : colors.primary
                         }}
-                        onClick={() => onNavigateToTimeline?.()}
-                        title="View on timeline"
+                        onClick={() => setSelectedAlert(alert)}
+                        title="View details"
                       >
                         <div style={styles.alertTitle}>{alert.title}</div>
                         <div style={styles.alertDesc}>{alert.description}</div>
@@ -593,6 +744,200 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
           </div>
         </div>
       </div>
+
+      {/* Alert Detail Modal */}
+      {selectedAlert && (
+        <div style={styles.overlay} onClick={() => setSelectedAlert(null)}>
+          <div style={{...styles.overlayPanel, width: '650px'}} onClick={e => e.stopPropagation()}>
+            <div style={styles.overlayHeader}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: spacing.sm }}>
+                <span style={{
+                  display: 'inline-block',
+                  padding: `${spacing.xs} ${spacing.sm}`,
+                  borderRadius: radius.sm,
+                  fontSize: typography.fontSize.xs,
+                  fontWeight: typography.fontWeight.bold,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                  color: '#fff',
+                  background: selectedAlert.severity === 'critical' ? colors.error :
+                              selectedAlert.severity === 'warning' ? colors.warning : colors.primary
+                }}>
+                  {selectedAlert.severity}
+                </span>
+                <h2 style={styles.overlayTitle}>{selectedAlert.title}</h2>
+              </div>
+              <button style={styles.overlayClose} onClick={() => setSelectedAlert(null)}>{'\u2715'}</button>
+            </div>
+            <div style={styles.overlayContent}>
+              {/* Legal basis */}
+              <div style={{
+                padding: spacing.md,
+                background: colors.surfaceAlt,
+                borderRadius: radius.md,
+                marginBottom: spacing.lg,
+                borderLeft: `3px solid ${colors.primary}`
+              }}>
+                <div style={{ fontSize: typography.fontSize.xs, color: colors.textMuted, marginBottom: spacing.xs, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Legal Basis</div>
+                <div style={{ fontSize: typography.fontSize.sm, color: colors.textPrimary, fontStyle: 'italic' }}>{selectedAlert.legal}</div>
+              </div>
+
+              {/* Analysis */}
+              {selectedAlert.detail && (
+                <div style={{ marginBottom: spacing.lg }}>
+                  <div style={{ fontSize: typography.fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Analysis</div>
+                  <p style={{ fontSize: typography.fontSize.sm, color: colors.textSecondary, lineHeight: '1.6', margin: 0 }}>
+                    {selectedAlert.detail}
+                  </p>
+                </div>
+              )}
+
+              {/* Related Evidence */}
+              {selectedAlert.relatedDocs?.length > 0 && (
+                <div style={{ marginBottom: spacing.lg }}>
+                  <div style={{ fontSize: typography.fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Linked Evidence ({selectedAlert.relatedDocs.length})
+                  </div>
+                  {selectedAlert.relatedDocs.map((doc, i) => (
+                    <div
+                      key={doc.id || i}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: spacing.sm,
+                        padding: spacing.sm,
+                        marginBottom: spacing.xs,
+                        background: colors.surfaceAlt,
+                        borderRadius: radius.sm,
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => {
+                        setSelectedAlert(null);
+                        onSelectDocument?.(doc.id);
+                      }}
+                    >
+                      <span style={{
+                        display: 'inline-block',
+                        padding: `2px ${spacing.xs}`,
+                        borderRadius: radius.xs,
+                        fontSize: typography.fontSize.xs,
+                        fontWeight: typography.fontWeight.medium,
+                        background: getEvidenceColor(doc.evidence_type) + '22',
+                        color: getEvidenceColor(doc.evidence_type)
+                      }}>
+                        {(doc.evidence_type || '').replace(/_/g, ' ')}
+                      </span>
+                      <span style={{ fontSize: typography.fontSize.sm, color: colors.textPrimary, flex: 1 }}>
+                        {doc.filename}
+                      </span>
+                      {doc.document_date && (
+                        <span style={{ fontSize: typography.fontSize.xs, color: colors.textMuted }}>
+                          {new Date(doc.document_date).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Related Incidents (for escalation alerts) */}
+              {selectedAlert.relatedIncidents?.length > 0 && (
+                <div style={{ marginBottom: spacing.lg }}>
+                  <div style={{ fontSize: typography.fontSize.xs, color: colors.textMuted, marginBottom: spacing.sm, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Related Incidents ({selectedAlert.relatedIncidents.length})
+                  </div>
+                  {selectedAlert.relatedIncidents.map((inc, i) => (
+                    <div
+                      key={inc.id || i}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: spacing.sm,
+                        padding: spacing.sm,
+                        marginBottom: spacing.xs,
+                        background: colors.surfaceAlt,
+                        borderRadius: radius.sm
+                      }}
+                    >
+                      <span style={{
+                        display: 'inline-block',
+                        padding: `2px ${spacing.xs}`,
+                        borderRadius: radius.xs,
+                        fontSize: typography.fontSize.xs,
+                        fontWeight: typography.fontWeight.bold,
+                        background: getSeverityColor(inc.severity) + '22',
+                        color: getSeverityColor(inc.severity)
+                      }}>
+                        {inc.severity}
+                      </span>
+                      <span style={{ fontSize: typography.fontSize.sm, color: colors.textPrimary, flex: 1 }}>
+                        {inc.description}
+                      </span>
+                      {inc.incident_date && (
+                        <span style={{ fontSize: typography.fontSize.xs, color: colors.textMuted }}>
+                          {new Date(inc.incident_date).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Connection detail (for retaliation/cluster) */}
+              {selectedAlert.connection && (
+                <div style={{
+                  padding: spacing.md,
+                  background: colors.surfaceAlt,
+                  borderRadius: radius.md,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: spacing.md
+                }}>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: typography.fontSize.xl, fontWeight: typography.fontWeight.bold, color: colors.textPrimary }}>
+                      {selectedAlert.connection.daysBetween}
+                    </div>
+                    <div style={{ fontSize: typography.fontSize.xs, color: colors.textMuted }}>days</div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: typography.fontSize.sm, color: colors.textPrimary }}>{selectedAlert.connection.description}</div>
+                    <div style={{ fontSize: typography.fontSize.xs, color: colors.textMuted, marginTop: spacing.xs }}>
+                      Strength: <span style={{
+                        color: selectedAlert.connection.strength === 'strong' ? colors.error :
+                               selectedAlert.connection.strength === 'moderate' ? colors.warning : colors.textMuted,
+                        fontWeight: typography.fontWeight.medium
+                      }}>{selectedAlert.connection.strength}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: spacing.sm, marginTop: spacing.lg }}>
+                <button
+                  style={{
+                    flex: 1,
+                    padding: spacing.sm,
+                    background: colors.surfaceAlt,
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: radius.sm,
+                    color: colors.textPrimary,
+                    fontSize: typography.fontSize.sm,
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => {
+                    const docIds = selectedAlert?.relatedDocs?.map(d => d.id).filter(Boolean) || [];
+                    setSelectedAlert(null);
+                    onNavigateToTimeline?.(docIds.length > 0 ? docIds : undefined);
+                  }}
+                >
+                  View on Timeline
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Case Strength Overlay */}
       {showCaseStrength && precedentAnalysis && (
@@ -1178,5 +1523,122 @@ const styles = {
     color: colors.textMuted,
     fontStyle: 'italic',
     lineHeight: typography.lineHeight.relaxed
+  }
+};
+
+const chainStyles = {
+  metric: {
+    flex: '1 1 100px',
+    background: colors.surfaceAlt,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    textAlign: 'center',
+    minWidth: '80px'
+  },
+  metricValue: {
+    fontSize: typography.fontSize.lg,
+    fontWeight: typography.fontWeight.bold,
+    color: colors.textPrimary,
+    textTransform: 'capitalize'
+  },
+  metricLabel: {
+    fontSize: typography.fontSize.xs,
+    color: colors.textMuted,
+    marginTop: '2px'
+  },
+  sectionLabel: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+    marginBottom: spacing.xs
+  },
+  reportRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.xs,
+    padding: `${spacing.xs} 0`,
+    borderBottom: `1px solid ${colors.border}`,
+    flexWrap: 'wrap'
+  },
+  reportBadge: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: typography.fontWeight.bold,
+    color: colors.textInverse,
+    background: colors.primary,
+    borderRadius: radius.full,
+    padding: '1px 8px',
+    minWidth: '24px',
+    textAlign: 'center'
+  },
+  reportCategory: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.medium,
+    color: colors.textPrimary,
+    textTransform: 'capitalize'
+  },
+  reportTo: {
+    fontSize: typography.fontSize.sm,
+    color: colors.textSecondary
+  },
+  reportDate: {
+    fontSize: typography.fontSize.xs,
+    color: colors.textMuted,
+    fontFamily: typography.fontFamilyMono
+  },
+  flag: {
+    fontSize: '10px',
+    padding: '1px 6px',
+    borderRadius: radius.sm,
+    fontWeight: typography.fontWeight.medium
+  },
+  signalTag: {
+    fontSize: typography.fontSize.xs,
+    padding: '2px 8px',
+    borderRadius: radius.sm,
+    background: '#FEE2E2',
+    color: '#991B1B',
+    fontWeight: typography.fontWeight.medium,
+    textTransform: 'capitalize'
+  },
+  continuedWarning: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    background: '#FEF2F2',
+    border: '1px solid #FECACA',
+    borderRadius: radius.md,
+    fontSize: typography.fontSize.sm,
+    color: '#DC2626',
+    fontWeight: typography.fontWeight.medium
+  },
+  recipientRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: spacing.sm,
+    padding: `${spacing.xs} 0`,
+    borderBottom: `1px solid ${colors.border}`
+  },
+  recipientName: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.textPrimary,
+    textTransform: 'capitalize',
+    minWidth: '80px'
+  },
+  recipientCount: {
+    fontSize: typography.fontSize.xs,
+    color: colors.textMuted
+  },
+  recipientAction: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: typography.fontWeight.medium
+  },
+  verbalTag: {
+    fontSize: '10px',
+    padding: '1px 6px',
+    borderRadius: radius.sm,
+    background: '#FEF3C7',
+    color: '#92400E'
   }
 };

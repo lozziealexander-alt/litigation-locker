@@ -10,6 +10,7 @@ const { analyzeAllPrecedents, getDocumentPrecedentBadges } = require('./analysis
 const { classifyEvidence } = require('./ingest/evidence-classifier');
 const { detectIncidents, computeSeverity } = require('./analysis/incident-detector');
 const { detectActors, findPotentialDuplicates } = require('./analysis/actor-detector');
+const { categorize, buildChain, categorizeAndBuildChain } = require('./analysis/categorizer');
 const {
   generateAnchorsFromContext,
   generateAnchorsFromIncidents,
@@ -2575,6 +2576,82 @@ function registerIpcHandlers() {
       const stmt = caseDb.prepare(`UPDATE case_context SET ${fields.join(', ')} WHERE id = 1`);
       stmt.run(...values);
       return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+  // ==================== CATEGORIZER ====================
+
+  ipcMain.handle('categorizer:categorize', async (event, text, isPrimary) => {
+    try {
+      const result = categorize(text, isPrimary || false);
+      return { success: true, result };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('categorizer:buildChain', async (event, entries) => {
+    try {
+      const result = categorizeAndBuildChain(entries);
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('categorizer:analyzeDocuments', async () => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+
+      // Pull all documents with extracted text
+      const docs = currentCaseDb.prepare(`
+        SELECT id, filename, extracted_text, ocr_text, evidence_type, document_date
+        FROM documents
+        WHERE extracted_text IS NOT NULL OR ocr_text IS NOT NULL
+        ORDER BY document_date ASC, ingested_at ASC
+      `).all();
+
+      if (docs.length === 0) {
+        return { success: true, categorized: [], chain: null, summary: null };
+      }
+
+      // Also pull incidents to find the primary one
+      const incidents = currentCaseDb.prepare(`
+        SELECT id, title, description, incident_date
+        FROM incidents
+        ORDER BY incident_date ASC
+        LIMIT 1
+      `).all();
+
+      const primaryIncidentId = incidents.length > 0 ? incidents[0].id : null;
+
+      // Build entries for the categorizer
+      const entries = docs.map(doc => {
+        const text = [doc.extracted_text, doc.ocr_text].filter(Boolean).join('\n');
+
+        // If the evidence_type is INCIDENT and it's the earliest, treat as primary
+        const isPrimary = doc.evidence_type === 'INCIDENT' && doc.id === docs[0]?.id;
+
+        return { text, isPrimary, docId: doc.id, filename: doc.filename, date: doc.document_date };
+      });
+
+      // Categorize each
+      const categorized = entries.map(e => {
+        const result = categorize(e.text, e.isPrimary);
+        result.docId = e.docId;
+        result.filename = e.filename;
+        result.documentDate = e.date;
+        return result;
+      });
+
+      // Build chain
+      const chain = buildChain(categorized);
+      const summary = chain.toSummary();
+
+      return { success: true, categorized, summary };
     } catch (error) {
       return { success: false, error: error.message };
     }

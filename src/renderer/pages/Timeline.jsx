@@ -41,7 +41,7 @@ function getEvidenceIcon(type) {
 const ZOOM_LEVELS = ['year', 'month', 'day', 'hour'];
 const ZOOM_LABELS = { year: 'Year', month: 'Month', day: 'Day', hour: 'Hour' };
 
-export default function Timeline({ onSelectDocument }) {
+export default function Timeline({ onSelectDocument, highlightDocIds, onClearHighlights }) {
   const { mode } = useTheme();
   const [dated, setDated] = useState([]);
   const [undated, setUndated] = useState([]);
@@ -76,6 +76,26 @@ export default function Timeline({ onSelectDocument }) {
   const dragCounter = useRef(0);
 
   const styles = getStyles();
+
+  // Convert highlightDocIds array to a Set for fast lookup
+  const externalHighlightSet = useMemo(
+    () => (highlightDocIds && highlightDocIds.length > 0 ? new Set(highlightDocIds) : null),
+    [highlightDocIds]
+  );
+
+  // Scroll to first highlighted doc when navigating from Dashboard alert
+  useEffect(() => {
+    if (!externalHighlightSet || loading) return;
+    // Small delay to let the DOM render
+    const timer = setTimeout(() => {
+      const firstId = highlightDocIds[0];
+      const el = document.querySelector(`[data-event-id="${firstId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [externalHighlightSet, loading]);
 
   // ---- Native DOM drag/drop handlers (bypass React delegation issues) ----
   // NOTE: depends on [loading] because on first mount `loading=true` renders a
@@ -796,6 +816,38 @@ export default function Timeline({ onSelectDocument }) {
         </div>
       )}
 
+      {/* External highlight banner */}
+      {externalHighlightSet && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: `${spacing.sm} ${spacing.lg}`,
+          background: '#fbbf2420',
+          borderBottom: '2px solid #fbbf24',
+          fontSize: typography.fontSize.sm,
+          color: '#fbbf24'
+        }}>
+          <span>
+            {'\uD83D\uDD0D'} Highlighting {externalHighlightSet.size} linked document{externalHighlightSet.size !== 1 ? 's' : ''} from alert
+          </span>
+          <button
+            onClick={onClearHighlights}
+            style={{
+              background: 'transparent',
+              border: '1px solid #fbbf24',
+              borderRadius: radius.sm,
+              color: '#fbbf24',
+              padding: `2px ${spacing.sm}`,
+              fontSize: typography.fontSize.xs,
+              cursor: 'pointer'
+            }}
+          >
+            Clear Highlights
+          </button>
+        </div>
+      )}
+
       {/* Empty state */}
       {timeline.length === 0 && filteredUndated.length === 0 && totalDocs === 0 && (
         <div style={styles.emptyState}>
@@ -908,10 +960,25 @@ export default function Timeline({ onSelectDocument }) {
                         style={{
                           ...styles.eventCardCompact,
                           borderLeftColor: getEvidenceColor(doc.evidence_type),
-                          ...(doc.isDateEntry ? { borderStyle: 'dashed' } : {})
+                          ...(doc.isDateEntry ? { borderStyle: 'dashed' } : {}),
+                          ...(externalHighlightSet?.has(doc.id) ? {
+                            background: '#fbbf2430',
+                            borderColor: '#fbbf24',
+                            boxShadow: '0 0 0 2px #fbbf24, 0 0 8px #fbbf2466',
+                            position: 'relative'
+                          } : {})
                         }}
                         onClick={() => onSelectDocument && onSelectDocument(doc)}
                       >
+                        {externalHighlightSet?.has(doc.id) && (
+                          <span style={{
+                            position: 'absolute', top: -8, right: -4,
+                            background: '#fbbf24', color: '#000',
+                            fontSize: '9px', fontWeight: 700,
+                            padding: '1px 5px', borderRadius: '4px',
+                            letterSpacing: '0.5px', zIndex: 2
+                          }}>LINKED</span>
+                        )}
                         <span style={styles.eventIcon}>{getEvidenceIcon(doc.evidence_type)}</span>
                         <span style={styles.compactTitle}>
                           {doc.isDateEntry ? '\uD83D\uDCCC ' : ''}{doc.group_id ? '\uD83D\uDCCE ' : ''}{doc.filename}
@@ -936,7 +1003,13 @@ export default function Timeline({ onSelectDocument }) {
                             borderLeftColor: getEvidenceColor(doc.evidence_type),
                             ...(doc.isDateEntry ? styles.eventCardPinned : {}),
                             ...(hoveredEvent === doc.id ? styles.eventCardHover : {}),
-                            ...(highlightedEventId === doc.id ? { boxShadow: `0 0 0 2px ${getEvidenceColor(doc.evidence_type)}` } : {})
+                            ...(highlightedEventId === doc.id ? { boxShadow: `0 0 0 2px ${getEvidenceColor(doc.evidence_type)}` } : {}),
+                            ...(externalHighlightSet?.has(doc.id) ? {
+                              background: '#fbbf2430',
+                              borderColor: '#fbbf24',
+                              boxShadow: '0 0 0 2px #fbbf24, 0 0 8px #fbbf2466',
+                              position: 'relative'
+                            } : {})
                           }}
                           onClick={() => {
                             if (showConnections && eventConnections.length > 0) {
@@ -947,6 +1020,15 @@ export default function Timeline({ onSelectDocument }) {
                           onMouseEnter={() => setHoveredEvent(doc.id)}
                           onMouseLeave={() => setHoveredEvent(null)}
                         >
+                          {externalHighlightSet?.has(doc.id) && (
+                            <span style={{
+                              position: 'absolute', top: -8, right: -4,
+                              background: '#fbbf24', color: '#000',
+                              fontSize: '10px', fontWeight: 700,
+                              padding: '2px 6px', borderRadius: '4px',
+                              letterSpacing: '0.5px', zIndex: 2
+                            }}>LINKED</span>
+                          )}
                           {retaliationConn && (
                             <div style={styles.retaliationBadge}>
                               {'\u26A1'} {retaliationConn.daysBetween} days after protected activity

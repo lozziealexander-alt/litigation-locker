@@ -238,6 +238,35 @@ window.api = {
     delete: () => Promise.resolve({ success: true }),
     getMembers: () => Promise.resolve({ success: true, members: [] })
   },
+  categorizer: {
+    categorize: () => Promise.resolve({ success: true, result: { category: 'INCIDENT', severity: 'high', confidence: 0.85 } }),
+    buildChain: () => Promise.resolve({ success: true, summary: {} }),
+    analyzeDocuments: () => Promise.resolve({ success: true, summary: {
+      incidentType: 'retaliation',
+      incidentSeverity: 'high',
+      incidentDate: 'January 10, 2024',
+      reports: [
+        { category: 'REPORT_HR', reportedTo: 'HR', date: 'January 10, 2024', noticeSequence: 1, flags: [] },
+        { category: 'REPORT_SUPERVISOR', reportedTo: 'supervisor', date: 'January 12, 2024', noticeSequence: 1, flags: ['verbal_report_only'] },
+        { category: 'REPORT_HR', reportedTo: 'HR', date: 'February 20, 2024', noticeSequence: 2, flags: ['no_action_taken', 'conduct_continued_after_report'] }
+      ],
+      followupEmails: 1,
+      meetings: 1,
+      witnesses: 0,
+      responsesReceived: 0,
+      retaliationEntries: 1,
+      documentationStrength: 'moderate',
+      employerLiability: {
+        level: 'high',
+        signals: ['notice_without_remedy', 'repeated_notice_no_action', 'conduct_continued_after_notice', 'potential_retaliation_post_report', 'hostile_work_environment_ongoing'],
+        conductContinuedPostReport: true,
+        noticeByRecipient: {
+          HR: { timesNotified: 2, actionTaken: false, allVerbalOnly: false, liabilitySignals: ['notice_without_remedy', 'repeated_notice_no_action', 'multiple_reports_to_same_recipient'] },
+          supervisor: { timesNotified: 1, actionTaken: false, allVerbalOnly: true, liabilitySignals: ['notice_without_remedy', 'no_written_acknowledgement_of_notice'] }
+        }
+      }
+    }})
+  },
   dialog: {
     openFiles: () => Promise.resolve({ canceled: true, filePaths: [] })
   }

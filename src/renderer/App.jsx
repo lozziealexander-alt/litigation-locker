@@ -20,6 +20,7 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState('anchors');
   const [timelineKey, setTimelineKey] = useState(0);
   const [peopleKey, setPeopleKey] = useState(0);
+  const [highlightDocIds, setHighlightDocIds] = useState(null);
 
   // Recompute styles each render so they pick up current theme colors
   const styles = getStyles();
@@ -218,6 +219,8 @@ export default function App() {
           <Timeline
             key={timelineKey}
             onSelectDocument={setSelectedDocument}
+            highlightDocIds={highlightDocIds}
+            onClearHighlights={() => setHighlightDocIds(null)}
           />
         )}
         {currentPage === 'people' && (
@@ -228,7 +231,10 @@ export default function App() {
         )}
         {currentPage === 'dashboard' && (
           <Dashboard
-            onNavigateToTimeline={() => setCurrentPage('timeline')}
+            onNavigateToTimeline={(docIds) => {
+              setHighlightDocIds(docIds || null);
+              setCurrentPage('timeline');
+            }}
             onNavigateToPeople={() => setCurrentPage('people')}
             onSelectDocument={setSelectedDocument}
             onSelectActor={setSelectedActor}

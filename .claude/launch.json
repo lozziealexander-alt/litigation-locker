@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "preview",
+      "name": "litigation-locker",
       "runtimeExecutable": "node",
       "runtimeArgs": ["preview-server.js"],
       "port": 3847

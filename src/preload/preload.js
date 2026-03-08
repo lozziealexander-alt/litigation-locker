@@ -143,6 +143,13 @@ contextBridge.exposeInMainWorld('api', {
   // File utilities (Electron 22+ requires webUtils for drag-and-drop file paths)
   getPathForFile: (file) => webUtils.getPathForFile(file),
 
+  // Categorizer (incident chain analysis)
+  categorizer: {
+    categorize: (text, isPrimary) => ipcRenderer.invoke('categorizer:categorize', text, isPrimary),
+    buildChain: (entries) => ipcRenderer.invoke('categorizer:buildChain', entries),
+    analyzeDocuments: () => ipcRenderer.invoke('categorizer:analyzeDocuments')
+  },
+
   // Debug
   debug: {
     testIngest: () => ipcRenderer.invoke('debug:testIngest')
