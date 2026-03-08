@@ -8,7 +8,7 @@ const { processFiles } = require('./ingest/file-processor');
 const { analyzeConnections, detectEscalationPattern } = require('./analysis/timeline-connections');
 const { analyzeAllPrecedents, getDocumentPrecedentBadges } = require('./analysis/precedent-matcher');
 const { classifyEvidence } = require('./ingest/evidence-classifier');
-const { detectIncidents, computeSeverity } = require('./analysis/incident-detector');
+const { detectIncidents, computeSeverity, suggestActorsForIncident } = require('./analysis/incident-detector');
 const { detectActors, findPotentialDuplicates } = require('./analysis/actor-detector');
 const { categorize, buildChain, categorizeAndBuildChain } = require('./analysis/categorizer');
 const { ActorRegistry, resolveHarasserForEntry, RELATIONSHIP_TYPES, IN_CHAIN_RELATIONSHIPS } = require('./analysis/actor-registry');
@@ -264,6 +264,13 @@ function registerIpcHandlers() {
         const allText = [doc.extracted_text, doc.ocr_text].filter(Boolean).join('\n');
         if (allText) {
           const detected = detectIncidents(allText, doc.document_date, doc.id);
+          // Suggest actor roles for each detected incident
+          if (detected.length > 0 && actorRegistry && actorRegistry.actors.size > 0) {
+            for (const incident of detected) {
+              const textForActors = incident.suggestedDescription || incident.matchedText || '';
+              incident.suggestedActors = suggestActorsForIncident(textForActors, actorRegistry);
+            }
+          }
           if (detected.length > 0) {
             allDetectedIncidents.push(...detected);
           }
@@ -721,7 +728,12 @@ function registerIpcHandlers() {
         SELECT actor_id, document_id FROM actor_appearances
       `).all();
 
-      const analysis = analyzeAllPrecedents(documents, incidents, actors, jurisdiction, actorAppearances);
+      // Fetch direct incident-actor links for precise role checks
+      const incidentActors = currentCaseDb.prepare(`
+        SELECT incident_id, actor_id, role FROM incident_actors
+      `).all();
+
+      const analysis = analyzeAllPrecedents(documents, incidents, actors, jurisdiction, actorAppearances, incidentActors);
 
       return { success: true, analysis, jurisdiction };
     } catch (error) {
@@ -946,8 +958,10 @@ function registerIpcHandlers() {
       }
 
       const incidents = currentCaseDb.prepare(`
-        SELECT * FROM incidents
-        ORDER BY incident_date DESC, created_at DESC
+        SELECT i.*,
+          (SELECT COUNT(*) FROM incident_actors ia WHERE ia.incident_id = i.id) AS actor_count
+        FROM incidents i
+        ORDER BY i.incident_date DESC, i.created_at DESC
       `).all();
 
       return { success: true, incidents };
@@ -1002,6 +1016,19 @@ function registerIpcHandlers() {
           VALUES (?, ?, 'source')
         `);
         linkStmt.run(id, incidentData.sourceDocumentId);
+      }
+
+      // Link actors if provided: [{ actorId, role }]
+      if (incidentData.actors && Array.isArray(incidentData.actors)) {
+        const linkActorStmt = currentCaseDb.prepare(`
+          INSERT OR IGNORE INTO incident_actors (incident_id, actor_id, role)
+          VALUES (?, ?, ?)
+        `);
+        for (const { actorId, role } of incidentData.actors) {
+          if (actorId && role) {
+            linkActorStmt.run(id, actorId, role);
+          }
+        }
       }
 
       return {
@@ -1080,6 +1107,65 @@ function registerIpcHandlers() {
       currentCaseDb.prepare('DELETE FROM incidents WHERE id = ?').run(incidentId);
 
       return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ── Incident ↔ Actor linking ──────────────────────────────────────────────
+
+  ipcMain.handle('incidents:linkActor', async (event, incidentId, actorId, role) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+      const validRoles = ['perpetrator', 'target', 'witness', 'bystander'];
+      if (!validRoles.includes(role)) {
+        return { success: false, error: `Invalid role. Must be one of: ${validRoles.join(', ')}` };
+      }
+      currentCaseDb.prepare(`
+        INSERT OR REPLACE INTO incident_actors (incident_id, actor_id, role)
+        VALUES (?, ?, ?)
+      `).run(incidentId, actorId, role);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('incidents:unlinkActor', async (event, incidentId, actorId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+      currentCaseDb.prepare(
+        'DELETE FROM incident_actors WHERE incident_id = ? AND actor_id = ?'
+      ).run(incidentId, actorId);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('incidents:getActors', async (event, incidentId) => {
+    try {
+      if (!currentCaseDb) {
+        return { success: false, error: 'No case is open' };
+      }
+      const actors = currentCaseDb.prepare(`
+        SELECT a.*, ia.role AS incident_role
+        FROM incident_actors ia
+        JOIN actors a ON a.id = ia.actor_id
+        WHERE ia.incident_id = ?
+        ORDER BY
+          CASE ia.role
+            WHEN 'perpetrator' THEN 0
+            WHEN 'target' THEN 1
+            WHEN 'witness' THEN 2
+            WHEN 'bystander' THEN 3
+          END
+      `).all(incidentId);
+      return { success: true, actors };
     } catch (error) {
       return { success: false, error: error.message };
     }

@@ -452,7 +452,7 @@ const PRECEDENTS = {
 /**
  * Analyze case evidence against all precedents
  */
-function analyzeAllPrecedents(documents, incidents = [], actors = [], jurisdiction = 'both', actorAppearances = []) {
+function analyzeAllPrecedents(documents, incidents = [], actors = [], jurisdiction = 'both', actorAppearances = [], incidentActors = []) {
   const results = {};
 
   for (const [key, precedent] of Object.entries(PRECEDENTS)) {
@@ -461,7 +461,7 @@ function analyzeAllPrecedents(documents, incidents = [], actors = [], jurisdicti
     if (jurisdiction === 'federal' && precJurisdiction === 'FL') continue;
     if (jurisdiction === 'state' && precJurisdiction === 'federal') continue;
 
-    results[key] = analyzePrecedent(precedent, documents, incidents, actors, jurisdiction, actorAppearances);
+    results[key] = analyzePrecedent(precedent, documents, incidents, actors, jurisdiction, actorAppearances, incidentActors);
   }
 
   // Build key precedents based on jurisdiction
@@ -502,11 +502,11 @@ function analyzeAllPrecedents(documents, incidents = [], actors = [], jurisdicti
 /**
  * Analyze single precedent
  */
-function analyzePrecedent(precedent, documents, incidents, actors, jurisdiction = 'both', actorAppearances = []) {
+function analyzePrecedent(precedent, documents, incidents, actors, jurisdiction = 'both', actorAppearances = [], incidentActors = []) {
   const elementResults = {};
 
   for (const element of precedent.elements) {
-    elementResults[element.id] = analyzeElement(element, documents, incidents, actors, jurisdiction, actorAppearances);
+    elementResults[element.id] = analyzeElement(element, documents, incidents, actors, jurisdiction, actorAppearances, incidentActors);
   }
 
   // Calculate alignment — use required elements if any, otherwise use all elements
@@ -547,7 +547,7 @@ function analyzePrecedent(precedent, documents, incidents, actors, jurisdiction 
 /**
  * Analyze single element
  */
-function analyzeElement(element, documents, incidents, actors, jurisdiction = 'both', actorAppearances = []) {
+function analyzeElement(element, documents, incidents, actors, jurisdiction = 'both', actorAppearances = [], incidentActors = []) {
   let satisfied = false;
   let evidence = [];
   let note = '';
@@ -649,10 +649,11 @@ function analyzeElement(element, documents, incidents, actors, jurisdiction = 'b
   }
 
   // Check actor relationship — harasser must be a supervisor (Vance standard)
-  // Per-incident: only count supervisors who appear on incident/adverse action documents
+  // Uses incident_actors (direct links) when available, falls back to document appearances
   if (element.checkType === 'actor_relationship') {
     const supervisorRolePattern = /\b(director|vp|svp|evp|chief|ceo|coo|cto|cfo)\b/i;
-    const supervisorRelationships = ['supervisor', 'executive', 'manager'];
+    const supervisorRelationships = ['supervisor', 'executive', 'manager',
+      'direct_supervisor', 'skip_level', 'senior_leadership'];
     const isSupervisor = (a) =>
       element.relationships.includes(a.relationship_to_self) ||
       supervisorRelationships.includes(a.relationship_to_self) ||
@@ -660,21 +661,29 @@ function analyzeElement(element, documents, incidents, actors, jurisdiction = 'b
       (a.role && supervisorRolePattern.test(a.role));
     const isBadActor = (a) => a.classification === 'bad_actor' || a.classification === 'enabler';
 
-    // Find documents that are incidents or adverse actions
+    // Primary path: use direct incident_actors links (perpetrator role)
+    const perpetratorIds = new Set(
+      (incidentActors || [])
+        .filter(ia => ia.role === 'perpetrator')
+        .map(ia => ia.actor_id)
+    );
+
+    // Fallback path: actors on incident/adverse action documents
     const incidentDocIds = new Set(
       documents
         .filter(d => ['INCIDENT', 'ADVERSE_ACTION'].includes(d.evidence_type))
         .map(d => d.id)
     );
-
-    // Build a set of actor IDs that appear on those incident/adverse action documents
-    const actorsOnIncidents = new Set(
+    const actorsOnIncidentDocs = new Set(
       actorAppearances
         .filter(aa => incidentDocIds.has(aa.document_id))
         .map(aa => aa.actor_id)
     );
 
-    // Only count actors who are a supervisor, at fault, AND linked to an incident document
+    // An actor counts if they're linked to an incident (direct or via documents)
+    const actorsOnIncidents = new Set([...perpetratorIds, ...actorsOnIncidentDocs]);
+
+    // Only count actors who are a supervisor, at fault, AND linked to an incident
     const supervisorHarassers = actors.filter(a =>
       isSupervisor(a) && isBadActor(a) && actorsOnIncidents.has(a.id)
     );

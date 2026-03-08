@@ -257,6 +257,9 @@ function detectIncidents(text, documentDate = null, documentId = null) {
           // Source
           sourceDocumentId: documentId,
 
+          // Suggested actor roles (populated later if registry available)
+          suggestedActors: [],
+
           // Status
           status: 'pending_review',
           needsReview: true
@@ -485,8 +488,50 @@ function computeSeverity(incident, caseContext = {}, jurisdiction = 'both') {
   };
 }
 
+/**
+ * Suggest actor roles for a detected incident by scanning the matched text
+ * against the actor registry.
+ *
+ * Returns array of { actorId, actorName, suggestedRole, confidence }
+ * where suggestedRole is 'perpetrator' | 'target' | 'witness' | 'bystander'.
+ *
+ * Heuristic:
+ *  - Actors whose classification is 'bad_actor' or 'enabler' → perpetrator
+ *  - Actors whose classification is 'self' → target
+ *  - Actors whose classification starts with 'witness' → witness
+ *  - Everyone else found in the text → bystander
+ */
+function suggestActorsForIncident(incidentText, actorRegistry) {
+  if (!actorRegistry || actorRegistry.actors.size === 0 || !incidentText) {
+    return [];
+  }
+
+  const matches = actorRegistry.findActorsInText(incidentText);
+  return matches.map(match => {
+    const actor = match.actor;
+    let suggestedRole = 'bystander';
+
+    if (actor.classification === 'bad_actor' || actor.classification === 'enabler') {
+      suggestedRole = 'perpetrator';
+    } else if (actor.classification === 'self') {
+      suggestedRole = 'target';
+    } else if (actor.classification && actor.classification.startsWith('witness')) {
+      suggestedRole = 'witness';
+    }
+
+    return {
+      actorId: actor.id,
+      actorName: actor.name,
+      suggestedRole,
+      confidence: match.confidence,
+      needsReview: true
+    };
+  });
+}
+
 module.exports = {
   detectIncidents,
   computeSeverity,
+  suggestActorsForIncident,
   INCIDENT_SIGNALS
 };
