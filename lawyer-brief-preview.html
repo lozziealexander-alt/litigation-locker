@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lawyer Brief — Litigation Locker</title>
+<style>
+:root{--bg:#FAFAF8;--surface:#fff;--border:#E5E7EB;--muted:#6B7280;--primary:#2563EB;--green:#16A34A;--amber:#F59E0B;--red:#DC2626}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:#1A1A1A;line-height:1.5}
+.hdr{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 18px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:10}
+.hdr h1{font-size:17px;font-weight:600}.hdr p{font-size:12px;color:var(--muted)}
+.tabs{display:flex;border-bottom:1px solid var(--border);background:var(--surface);overflow-x:auto;position:sticky;top:58px;z-index:9}
+.tab{padding:10px 14px;border:none;background:transparent;color:var(--muted);font-size:13px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+.tab.on{color:var(--primary);border-bottom-color:var(--primary)}
+.bdg{background:var(--red);color:#fff;font-size:10px;font-weight:700;border-radius:99px;padding:1px 5px;margin-left:3px}
+.pg{padding:18px;max-width:880px;margin:0 auto}
+.sec{display:none;flex-direction:column;gap:14px}.sec.on{display:flex}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.hero{display:flex;align-items:center;gap:18px}
+.score{font-size:52px;font-weight:800;line-height:1;letter-spacing:-2px}
+.score small{font-size:22px;font-weight:400;opacity:.6}
+.lbl{font-size:17px;font-weight:600}.sub{font-size:12px;color:var(--muted);margin-top:2px}
+.stats{display:flex;flex-wrap:wrap;gap:8px}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 13px;flex:1 1 95px}
+.stat.w{flex:2 1 190px}
+.sv{font-size:14px;font-weight:600}.sl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
+.bar{height:8px;background:var(--border);border-radius:99px;overflow:hidden}
+.fill{height:100%;border-radius:99px}
+.meta{font-size:12px;color:var(--muted)}
+.th{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:15px;display:flex;flex-direction:column;gap:9px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.th-hd{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px}
+.th-nm{font-size:15px;font-weight:600;display:flex;align-items:center;gap:7px}
+.dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.th-ct{font-size:12px;color:var(--muted)}
+.th-sc{font-size:15px;font-weight:700}
+.bsm{height:5px;background:var(--border);border-radius:99px;overflow:hidden}
+.el{display:flex;align-items:flex-start;gap:7px;font-size:13px}
+.ei{font-weight:700;flex-shrink:0}
+.ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}
+.prec{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.pl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.pb{padding:2px 7px;background:#F3F4F6;border-radius:4px;font-size:11px;color:var(--muted);border:1px solid var(--border)}
+.esl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:500}
+.er{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);margin-top:3px}
+.gt{font-size:13px;color:var(--amber)}
+.tspan{display:flex;align-items:center;gap:10px}
+.td{font-size:13px;color:var(--muted);flex-shrink:0}
+.tt{flex:1;height:2px;background:var(--border)}
+.gsum{padding:8px 12px;background:#FEF9C3;border-radius:8px;color:#854D0E;font-size:13px}
+.tm{display:flex;gap:11px;padding-bottom:14px}
+.tdot{width:9px;height:9px;border-radius:50%;background:var(--primary);flex-shrink:0;margin-top:4px}
+.tc{flex:1;padding-bottom:11px;border-bottom:1px solid #F3F4F6}
+.tmd{font-size:11px;color:var(--muted)}
+.tmt{font-size:14px;font-weight:500}
+.ttags{display:flex;flex-wrap:wrap;gap:3px;margin-top:3px}
+.tg{padding:1px 6px;background:#F3F4F6;border-radius:99px;font-size:10px;color:var(--muted);border:1px solid var(--border)}
+.gc{display:flex;gap:9px;align-items:flex-start;padding:11px;background:#FFF7ED;border-radius:8px;border:1px solid #FED7AA;margin-bottom:8px}
+.gl{font-weight:500;color:#9A3412;font-size:13px}
+.gs{color:#C2410C;font-size:11px;margin-top:2px}
+.ag h3{font-size:13px;font-weight:600;margin-bottom:7px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.ac{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:13px;display:flex;flex-direction:column;gap:7px;box-shadow:0 1px 3px rgba(0,0,0,.05);margin-bottom:7px}
+.ah{display:flex;align-items:center;gap:9px}
+.av{width:30px;height:30px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0}
+.an{font-weight:600;font-size:14px}.ar{font-size:12px;color:var(--muted)}
+.cb{margin-left:auto;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:500}
+.as{display:flex;flex-wrap:wrap;gap:9px;font-size:12px;color:var(--muted)}
+.fi{color:var(--muted);font-size:13px;padding:6px 0}
+.fl{background:var(--surface);border-left:4px solid var(--red);border-radius:0 8px 8px 0;padding:11px 15px;box-shadow:0 1px 3px rgba(0,0,0,.05);display:flex;flex-direction:column;gap:4px}
+.fl.m{border-left-color:var(--amber)}.fl.p{border-left-color:#6366F1}
+.fsh{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.flb{font-weight:500;font-size:14px}
+.fd{color:var(--muted);font-size:13px}
+h3.sh{font-size:14px;font-weight:600;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <span style="font-size:1.7em">📄</span>
+  <div><h1>Lawyer Brief</h1><p>Auto-generated case overview for attorney review</p></div>
+</div>
+<div class="tabs">
+  <button class="tab on" onclick="show('executive',this)">Executive Summary</button>
+  <button class="tab" onclick="show('threads',this)">Thread Breakdown</button>
+  <button class="tab" onclick="show('timeline',this)">Timeline</button>
+  <button class="tab" onclick="show('actors',this)">Key People</button>
+  <button class="tab" onclick="show('flags',this)">Red Flags<span class="bdg">2</span></button>
+</div>
+<div class="pg">
+
+<!-- EXECUTIVE -->
+<div class="sec on" id="executive">
+  <div class="card hero">
+    <div class="score" style="color:var(--green)">6.8<small>/10</small></div>
+    <div><div class="lbl" style="color:var(--green)">🟢 Strong Case</div><div class="sub">Overall strength score</div></div>
+  </div>
+  <div class="stats">
+    <div class="stat w"><div class="sv">Sexual Harassment + Retaliation + HR Failure to Act</div><div class="sl">Case Type</div></div>
+    <div class="stat"><div class="sv">14 Mar 2024 — 8 Jan 2026</div><div class="sl">Time Span</div></div>
+    <div class="stat"><div class="sv">665 days</div><div class="sl">Duration</div></div>
+    <div class="stat"><div class="sv">23</div><div class="sl">Documents</div></div>
+    <div class="stat"><div class="sv">47</div><div class="sl">Events</div></div>
+    <div class="stat"><div class="sv">9</div><div class="sl">Actors</div></div>
+    <div class="stat"><div class="sv">3</div><div class="sl">Active Claims</div></div>
+  </div>
+  <div class="bar"><div class="fill" style="width:68%;background:var(--green)"></div></div>
+  <p class="meta">Generated 9 Mar 2026</p>
+</div>
+
+<!-- THREADS -->
+<div class="sec" id="threads">
+  <div class="th">
+    <div class="th-hd">
+      <div class="th-nm"><div class="dot" style="background:#8B5CF6"></div>🧵 Sexual Harassment</div>
+      <div style="display:flex;gap:10px;align-items:center"><span class="th-ct">8 events · 5 docs</span><span class="th-sc" style="color:var(--green)">7.2/10</span></div>
+    </div>
+    <div class="bsm"><div class="fill" style="width:72%;background:#8B5CF6"></div></div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <div class="el"><span class="ei ok">✓</span>Unwelcome conduct</div>
+      <div class="el"><span class="ei ok">✓</span>Based on sex/gender</div>
+      <div class="el"><span class="ei ok">✓</span>Severe or pervasive</div>
+      <div class="el"><span class="ei ok">✓</span>Employer knew or should have known</div>
+    </div>
+    <div class="prec"><span class="pl">Precedents:</span><span class="pb">Harris v. Forklift Systems (1993)</span><span class="pb">Faragher v. Boca Raton (1998)</span></div>
+    <div class="esl">Key Evidence</div>
+    <div class="er"><span>email-complaint-to-hr-2024-05-18.pdf</span><span>18 May 2024</span></div>
+    <div class="er"><span>text-messages-march-2024.png</span><span>15 Mar 2024</span></div>
+    <div class="er"><span>witness-statement-jclarke.pdf</span><span>10 Apr 2024</span></div>
+  </div>
+  <div class="th">
+    <div class="th-hd">
+      <div class="th-nm"><div class="dot" style="background:#F59E0B"></div>🧵 Retaliation</div>
+      <div style="display:flex;gap:10px;align-items:center"><span class="th-ct">12 events · 7 docs</span><span class="th-sc" style="color:var(--green)">8.1/10</span></div>
+    </div>
+    <div class="bsm"><div class="fill" style="width:81%;background:#F59E0B"></div></div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <div class="el"><span class="ei ok">✓</span>Protected activity occurred</div>
+      <div class="el"><span class="ei ok">✓</span>Employer aware of protected activity</div>
+      <div class="el"><span class="ei ok">✓</span>Adverse employment action taken</div>
+      <div class="el"><span class="ei ok">✓</span>Causal connection (timing / nexus)</div>
+    </div>
+    <div class="prec"><span class="pl">Precedents:</span><span class="pb">Burlington Northern v. White (2006)</span><span class="pb">Vance v. Ball State (2013)</span></div>
+    <div class="esl">Key Evidence</div>
+    <div class="er"><span>performance-review-2024-11.pdf</span><span>15 Nov 2024</span></div>
+    <div class="er"><span>demotion-letter-2025-08.pdf</span><span>5 Aug 2025</span></div>
+    <div class="er"><span>project-removal-email.eml</span><span>22 Sep 2024</span></div>
+  </div>
+  <div class="th">
+    <div class="th-hd">
+      <div class="th-nm"><div class="dot" style="background:#A855F7"></div>🧵 HR Failure to Act</div>
+      <div style="display:flex;gap:10px;align-items:center"><span class="th-ct">5 events · 3 docs</span><span class="th-sc" style="color:var(--amber)">5.4/10</span></div>
+    </div>
+    <div class="bsm"><div class="fill" style="width:54%;background:#A855F7"></div></div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <div class="el"><span class="ei ok">✓</span>Complaint formally made to HR/mgmt</div>
+      <div class="el"><span class="ei warn">⚠</span>No adequate investigation taken</div>
+      <div class="el"><span class="ei ok">✓</span>No corrective action taken</div>
+    </div>
+    <div class="prec"><span class="pl">Precedents:</span><span class="pb">Faragher v. Boca Raton (1998)</span><span class="pb">Vance v. Ball State (2013)</span></div>
+    <div class="esl">Key Evidence</div>
+    <div class="er"><span>hr-response-email-june-2024.eml</span><span>1 Jun 2024</span></div>
+    <div class="esl" style="margin-top:6px">Gaps</div>
+    <div class="gt">⚠ No evidence for: No adequate investigation taken</div>
+  </div>
+</div>
+
+<!-- TIMELINE -->
+<div class="sec" id="timeline">
+  <div class="tspan"><span class="td">14 Mar 2024</span><div class="tt"></div><span class="td">8 Jan 2026</span></div>
+  <div class="gsum">⚠ 2 documentation gaps detected</div>
+  <div>
+    <div class="tm"><div class="tdot"></div><div class="tc"><div class="tmd">14 Mar 2024</div><div class="tmt">Inappropriate comment by manager at team meeting</div><div class="ttags"><span class="tg">sexual harassment</span><span class="tg">harassment</span></div></div></div>
+    <div class="tm"><div class="tdot"></div><div class="tc"><div class="tmd">2 Apr 2024</div><div class="tmt">Second incident — unwelcome physical contact in office</div><div class="ttags"><span class="tg">sexual harassment</span></div></div></div>
+    <div class="tm"><div class="tdot"></div><div class="tc"><div class="tmd">18 May 2024</div><div class="tmt">Formal complaint submitted to HR</div><div class="ttags"><span class="tg">help request</span><span class="tg">protected activity</span></div></div></div>
+    <div class="tm"><div class="tdot"></div><div class="tc"><div class="tmd">1 Jun 2024</div><div class="tmt">HR acknowledged complaint — no investigation opened</div><div class="ttags"><span class="tg">hr failure</span><span class="tg">ignored complaint</span></div></div></div>
+    <div class="gc"><span style="font-size:1.3em">🕳</span><div><div class="gl">104-day gap (10 Jun 2024 — 22 Sep 2024)</div><div class="gs">Missing 104 days of documentation</div></div></div>
+    <div class="tm"><div class="tdot"></div><div class="tc"><div class="tmd">22 Sep 2024</div><div class="tmt">Removed from key project without explanation</div><div class="ttags"><span class="tg">retaliation</span><span class="tg">adverse action</span></div></div></div>
+    <div class="tm"><div class="tdot"></div><div class="tc"><div class="tmd">15 Nov 2024</div><div class="tmt">Negative performance review — first in 4 years</div><div class="ttags"><span class="tg">retaliation</span><span class="tg">adverse action</span></div></div></div>
+    <div class="tm"><div class="tdot"></div><div class="tc"><div class="tmd">10 Jan 2025</div><div class="tmt">Excluded from team planning offsite</div><div class="ttags"><span class="tg">exclusion</span><span class="tg">isolation</span></div></div></div>
+    <div class="tm"><div class="tdot"></div><div class="tc"><div class="tmd">20 Mar 2025</div><div class="tmt">Second complaint to HR — still no action</div><div class="ttags"><span class="tg">help request</span><span class="tg">hr failure</span></div></div></div>
+    <div class="gc"><span style="font-size:1.3em">🕳</span><div><div class="gl">75-day gap (1 Apr 2025 — 15 Jun 2025)</div><div class="gs">Missing 75 days of documentation</div></div></div>
+    <div class="tm"><div class="tdot"></div><div class="tc"><div class="tmd">5 Aug 2025</div><div class="tmt">Demotion effective — title and pay reduced</div><div class="ttags"><span class="tg">adverse action</span><span class="tg">retaliation</span></div></div></div>
+    <div class="tm"><div class="tdot"></div><div class="tc"><div class="tmd">8 Jan 2026</div><div class="tmt">Constructive dismissal — resignation under duress</div><div class="ttags"><span class="tg">adverse action</span></div></div></div>
+  </div>
+</div>
+
+<!-- ACTORS -->
+<div class="sec" id="actors">
+  <div class="ag"><h3>Bad Actors</h3>
+    <div class="ac"><div class="ah"><div class="av">D</div><div><div class="an">David Morrison</div><div class="ar">Direct Manager</div></div><div class="cb" style="background:#DC262622;color:#DC2626">Bad Actor</div></div><div class="as"><span>📁 18 events</span><span>📄 8 docs</span><span style="color:var(--green)">✓ Still employed</span></div></div>
+  </div>
+  <div class="ag"><h3>Enablers</h3>
+    <div class="ac"><div class="ah"><div class="av">K</div><div><div class="an">Karen Walsh</div><div class="ar">HR Director</div></div><div class="cb" style="background:#F59E0B22;color:#F59E0B">Enabler</div></div><div class="as"><span>📁 6 events</span><span>📄 4 docs</span><span style="color:#DC2626">👎 Likely hostile</span><span style="color:var(--green)">✓ Still employed</span></div></div>
+  </div>
+  <div class="ag"><h3>Witnesses</h3>
+    <div class="ac"><div class="ah"><div class="av">J</div><div><div class="an">James Clarke</div><div class="ar">Colleague — same team</div></div><div class="cb" style="background:#16A34A22;color:#16A34A">Witness (Supportive)</div></div><div class="as"><span>📁 4 events</span><span>📄 2 docs</span><span>🔍 High (contemporaneous)</span><span style="color:var(--green)">👍 Likely helpful</span></div></div>
+    <div class="ac"><div class="ah"><div class="av">P</div><div><div class="an">Priya Nair</div><div class="ar">Colleague — adjacent team</div></div><div class="cb" style="background:#6B728022;color:#6B7280">Witness (Neutral)</div></div><div class="as"><span>📁 2 events</span><span>📄 1 doc</span><span>🔍 Moderate (statement exists)</span><span style="color:#DC2626">✗ No longer employed</span></div></div>
+  </div>
+  <div class="ag"><h3>Other People</h3>
+    <div class="ac"><div class="ah"><div class="av">T</div><div><div class="an">Tom Brewster</div><div class="ar">Senior Director</div></div><div class="cb" style="background:#9CA3AF22;color:#9CA3AF">Bystander</div></div><div class="as"><span>📁 1 event</span><span>📄 0 docs</span></div></div>
+  </div>
+</div>
+
+<!-- RED FLAGS -->
+<div class="sec" id="flags">
+  <div class="fi">2 issues identified that may weaken the case or need attention before filing.</div>
+  <div class="fl m"><div style="display:flex;align-items:center;gap:8px"><span class="fsh" style="color:var(--amber)">🟡 MEDIUM</span><span class="flb">2 timeline gaps identified</span></div><div class="fd">104-day gap (10 Jun 2024 — 22 Sep 2024); 75-day gap (1 Apr 2025 — 15 Jun 2025)</div></div>
+  <div class="fl"><div style="display:flex;align-items:center;gap:8px"><span class="fsh" style="color:var(--red)">🔴 HIGH</span><span class="flb">No HR investigation records found</span></div><div class="fd">If HR claims they investigated, request those records — their absence strengthens the HR Failure claim</div></div>
+  <h3 class="sh">Timeline Gaps</h3>
+  <div class="fl p"><div class="flb">104-day gap (10 Jun 2024 — 22 Sep 2024)</div><div class="fd">Significant gap — attorney will need explanation</div></div>
+  <div class="fl p"><div class="flb">75-day gap (1 Apr 2025 — 15 Jun 2025)</div><div class="fd">Significant gap — attorney will need explanation</div></div>
+</div>
+
+</div>
+<script>
+function show(id,btn){
+  document.querySelectorAll('.sec').forEach(s=>s.classList.remove('on'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+  document.getElementById(id).classList.add('on');
+  btn.classList.add('on');
+}
+</script>
+</body>
+</html>
