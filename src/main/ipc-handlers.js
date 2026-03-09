@@ -4027,6 +4027,101 @@ function registerIpcHandlers() {
     }
   });
 
+  // ==================== PRECEDENT CONNECTION INTELLIGENCE ====================
+
+  ipcMain.handle('connections:suggestFromPrecedents', async (event, caseId) => {
+    try {
+      console.log('[IPC] Running precedent connection analysis for case:', caseId);
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      const { PrecedentConnectionAnalyzer } = require('./analysis/precedent-connection-analyzer');
+      const suggestions = PrecedentConnectionAnalyzer.analyze(caseDb, caseId);
+
+      event.sender.send('case-changed', { caseId });
+
+      return { success: true, suggestions, count: suggestions.length };
+    } catch (err) {
+      console.error('[IPC] connections:suggestFromPrecedents failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('connections:listSuggested', async (event, caseId) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, suggestions: [] };
+
+      const suggestions = caseDb.prepare(`
+        SELECT
+          sc.*,
+          e1.title as source_title,
+          e1.date as source_date,
+          e2.title as target_title,
+          e2.date as target_date
+        FROM suggested_connections sc
+        LEFT JOIN events e1 ON e1.id = sc.source_id
+        LEFT JOIN events e2 ON e2.id = sc.target_id
+        WHERE sc.case_id = ?
+        ORDER BY sc.strength DESC, sc.days_between ASC
+      `).all(caseId || currentCaseId);
+
+      return { success: true, suggestions };
+    } catch (err) {
+      console.error('[IPC] connections:listSuggested failed:', err);
+      return { success: false, error: err.message, suggestions: [] };
+    }
+  });
+
+  ipcMain.handle('connections:approveSuggestion', async (event, caseId, suggestionId, edits) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      const { PrecedentConnectionAnalyzer } = require('./analysis/precedent-connection-analyzer');
+      const result = PrecedentConnectionAnalyzer.approveSuggestion(caseDb, caseId, suggestionId, edits || {});
+
+      event.sender.send('case-changed', { caseId });
+
+      return { success: true, ...result };
+    } catch (err) {
+      console.error('[IPC] connections:approveSuggestion failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('connections:dismissSuggestion', async (event, caseId, suggestionId) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      const { PrecedentConnectionAnalyzer } = require('./analysis/precedent-connection-analyzer');
+      PrecedentConnectionAnalyzer.dismissSuggestion(caseDb, caseId, suggestionId);
+
+      return { success: true };
+    } catch (err) {
+      console.error('[IPC] connections:dismissSuggestion failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('connections:bulkApprove', async (event, caseId, suggestionIds) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      const { PrecedentConnectionAnalyzer } = require('./analysis/precedent-connection-analyzer');
+      const results = PrecedentConnectionAnalyzer.bulkApprove(caseDb, caseId, suggestionIds);
+
+      event.sender.send('case-changed', { caseId });
+
+      return { success: true, results, count: results.length };
+    } catch (err) {
+      console.error('[IPC] connections:bulkApprove failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   // ==================== SESSION-9C: ENCRYPTED EXPORT ====================
 
   ipcMain.handle('export:generateHTML', async (event, passcode, expiryDays) => {

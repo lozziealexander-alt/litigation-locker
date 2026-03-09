@@ -839,6 +839,39 @@ function openCase(caseId) {
     }
   }
 
+  // SESSION-9F: Suggested connections table (precedent-aware connection intelligence)
+  {
+    const hasSuggestedConnections = caseDb.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='suggested_connections'"
+    ).get();
+    if (!hasSuggestedConnections) {
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS suggested_connections (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          source_type TEXT NOT NULL DEFAULT 'event',
+          target_id TEXT NOT NULL,
+          target_type TEXT NOT NULL DEFAULT 'event',
+          connection_type TEXT NOT NULL,
+          precedent_key TEXT NOT NULL,
+          legal_element TEXT NOT NULL,
+          strength REAL DEFAULT 0.5,
+          days_between INTEGER,
+          description TEXT,
+          reasoning TEXT,
+          status TEXT DEFAULT 'pending',
+          overlaps_connection_id TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          reviewed_at DATETIME
+        )
+      `);
+      caseDb.exec('CREATE INDEX IF NOT EXISTS idx_sc_case ON suggested_connections(case_id)');
+      caseDb.exec('CREATE INDEX IF NOT EXISTS idx_sc_status ON suggested_connections(case_id, status)');
+      console.log('[DB] SESSION-9F: Created suggested_connections table');
+    }
+  }
+
   // SESSION-9E: Lawyer briefs tables
   {
     const hasBriefs = caseDb.prepare(

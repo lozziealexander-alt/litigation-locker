@@ -165,7 +165,13 @@ contextBridge.exposeInMainWorld('api', {
     autoDetect: (caseId) => ipcRenderer.invoke('connections:autoDetect', caseId),
     create: (caseId, data) => ipcRenderer.invoke('connections:create', caseId, data),
     update: (caseId, id, data) => ipcRenderer.invoke('connections:update', caseId, id, data),
-    delete: (caseId, id) => ipcRenderer.invoke('connections:delete', caseId, id)
+    delete: (caseId, id) => ipcRenderer.invoke('connections:delete', caseId, id),
+    // Precedent intelligence
+    suggestFromPrecedents: (caseId) => ipcRenderer.invoke('connections:suggestFromPrecedents', caseId),
+    listSuggested: (caseId) => ipcRenderer.invoke('connections:listSuggested', caseId),
+    approveSuggestion: (caseId, id, edits) => ipcRenderer.invoke('connections:approveSuggestion', caseId, id, edits),
+    dismissSuggestion: (caseId, id) => ipcRenderer.invoke('connections:dismissSuggestion', caseId, id),
+    bulkApprove: (caseId, ids) => ipcRenderer.invoke('connections:bulkApprove', caseId, ids)
   },
 
   // Encrypted export (SESSION-9C)
