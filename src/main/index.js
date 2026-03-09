@@ -1,7 +1,22 @@
 const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
-const { registerIpcHandlers } = require('./ipc-handlers');
-const { terminateOcr } = require('./ingest/ocr-engine');
+
+let registerIpcHandlers;
+let terminateOcr = async () => {};
+try {
+  ({ registerIpcHandlers } = require('./ipc-handlers'));
+  ({ terminateOcr } = require('./ingest/ocr-engine'));
+} catch (err) {
+  // Native modules (better-sqlite3, argon2) may fail if not rebuilt for Electron.
+  // Run: npx electron-rebuild
+  const msg = `Failed to load modules: ${err.message}\n\nRun "npx electron-rebuild" then restart the app.`;
+  app.whenReady().then(() => {
+    dialog.showErrorBox('Native Module Error', msg);
+    app.quit();
+  });
+  console.error('[STARTUP] Module load failed:', err.message);
+  console.error('[STARTUP] Fix: npx electron-rebuild');
+}
 
 // Prevent EPIPE crashes from console.log when stdout pipe is broken
 process.stdout?.on?.('error', () => {});
@@ -40,15 +55,17 @@ function createWindow() {
 app.whenReady().then(() => {
   console.log('[STARTUP] userData:', app.getPath('userData'));
   console.log('[STARTUP] app name:', app.getName());
-  try {
-    registerIpcHandlers();
-    console.log('[STARTUP] IPC handlers registered successfully');
-  } catch (err) {
-    console.error('[STARTUP] FATAL: Failed to register IPC handlers:', err);
-    dialog.showErrorBox(
-      'Startup Error',
-      'Failed to register IPC handlers. The app may not work correctly.\n\n' + err.message
-    );
+  if (registerIpcHandlers) {
+    try {
+      registerIpcHandlers();
+      console.log('[STARTUP] IPC handlers registered successfully');
+    } catch (err) {
+      console.error('[STARTUP] FATAL: Failed to register IPC handlers:', err);
+      dialog.showErrorBox(
+        'Startup Error',
+        'Failed to register IPC handlers. The app may not work correctly.\n\n' + err.message
+      );
+    }
   }
   createWindow();
 });

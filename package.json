@@ -5,6 +5,7 @@
   "main": "src/main/index.js",
   "scripts": {
     "bundle": "esbuild src/renderer/index.jsx --bundle --outfile=src/renderer/bundle.js --platform=browser --target=chrome120 --define:process.env.NODE_ENV=\\\"production\\\"",
+    "postinstall": "electron-rebuild || echo 'electron-rebuild failed — native modules may not work in Electron'",
     "start": "npm run bundle && electron .",
     "dev": "npm run bundle && electron . --dev",
     "build": "npm run bundle && electron-builder"
