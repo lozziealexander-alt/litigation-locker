@@ -4,8 +4,9 @@ import Timeline from './pages/Timeline';
 import People from './pages/People';
 import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
+import Connections from './pages/Connections';
 import DocumentPanel from './components/DocumentPanel';
-import EventPanel from './components/EventPanel';
+import EditMomentModal from './components/EditMomentModal';
 import ActorDetail from './components/ActorDetail';
 import { useTheme } from './styles/ThemeContext';
 import { colors, shadows, spacing, typography, radius } from './styles/tokens';
@@ -184,6 +185,16 @@ export default function App() {
           <button
             style={{
               ...styles.caseButton,
+              ...(currentPage === 'connections' ? styles.navButtonActive : {})
+            }}
+            onClick={() => setCurrentPage('connections')}
+          >
+            <span style={styles.caseIcon}>⚡</span>
+            <span style={styles.caseName}>Connections</span>
+          </button>
+          <button
+            style={{
+              ...styles.caseButton,
               ...(currentPage === 'settings' ? styles.navButtonActive : {})
             }}
             onClick={() => setCurrentPage('settings')}
@@ -276,26 +287,28 @@ export default function App() {
             onSelectActor={setSelectedActor}
           />
         )}
+        {currentPage === 'connections' && (
+          <Connections />
+        )}
         {currentPage === 'settings' && (
           <Settings />
         )}
       </div>
 
-      {/* Event panel */}
       {selectedEvent && (
-        <EventPanel
-          event={selectedEvent}
+        <EditMomentModal
+          caseId={activeCase?.id}
+          momentId={selectedEvent.id}
           onClose={() => setSelectedEvent(null)}
-          onSelectDocument={setSelectedDocument}
-          onNavigate={setSelectedEvent}
-          onEventUpdated={() => {
+          onSave={() => {
             setTimelineKey(k => k + 1);
             setThreadsKey(k => k + 1);
+            setSelectedEvent(null);
           }}
         />
       )}
 
-      {/* Document panel — rendered AFTER EventPanel so it always appears on top */}
+      {/* Document panel */}
       {selectedDocument && (
         <DocumentPanel
           document={selectedDocument}

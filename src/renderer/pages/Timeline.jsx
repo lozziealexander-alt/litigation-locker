@@ -326,13 +326,16 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
         const allDocs = documentsResult?.success ? (documentsResult.documents || []) : (timelineResult.success ? (timelineResult.dated || []) : []);
         console.log('[Timeline] Loaded documents:', allDocs.length);
         const allItems = [
-          ...allDocs.map(d => ({
-            type: 'document',
-            id: d.id,
-            date: d.document_date,
-            dateConfidence: d.document_date_confidence || 'exact',
-            data: d
-          })),
+          ...allDocs.map(d => {
+            const date = d.document_date || d.date_received || d.created_at || d.uploaded_at;
+            return {
+              type: 'document',
+              id: d.id,
+              date: date,
+              dateConfidence: d.document_date_confidence || 'exact',
+              data: d
+            };
+          }),
           ...sortedEvents.map(e => ({
             type: 'moment',
             id: e.id,
@@ -404,6 +407,13 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
 
     setDeletingItem({ id: momentId, type: 'moment', data: moment.data });
     setDeleteImpact(impact);
+  }
+
+  async function handleViewDocument(documentId) {
+    const result = await window.api.documents.open(documentId);
+    if (!result.success) {
+      alert('Failed to open document: ' + (result.error || 'Unknown error'));
+    }
   }
 
   async function handleDeleteDocument(documentId) {
@@ -1037,18 +1047,18 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
                 const { data, documentCount, linkedDocuments } = item;
                 const itemTags = data.tags || [];
                 const threadColor = getThreadColor(itemTags);
-                const badgeSize = Math.min(2 + documentCount, 8);
                 return (
-                  <div key={`moment-${item.id}`} style={styles9b.unifiedItem}>
+                  <div key={`moment-${item.id}`} style={{
+                    ...styles9b.unifiedItem,
+                    borderLeft: `4px solid ${threadColor}`,
+                    background: colors.surface
+                  }}>
                     <div style={{
-                      ...styles9b.momentBadge,
-                      borderColor: threadColor,
-                      borderWidth: `${badgeSize}px`,
-                      opacity: Math.min(0.4 + documentCount * 0.1, 1),
-                      boxShadow: documentCount > 0 ? `0 0 ${documentCount * 3}px ${threadColor}55` : 'none'
-                    }}>
-                      <span style={{ fontSize: '22px' }}>⭕</span>
-                    </div>
+                      width: '40px', height: '40px', borderRadius: '50%',
+                      background: threadColor + '22', display: 'flex',
+                      alignItems: 'center', justifyContent: 'center',
+                      fontSize: '20px', flexShrink: 0
+                    }}>⭕</div>
                     <div style={styles9b.itemContent}>
                       <div style={styles9b.itemTitle}>{data.title}</div>
                       <div style={styles9b.itemDate}>
@@ -1068,7 +1078,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
                       )}
                       {documentCount > 0 ? (
                         <div style={styles9b.docCount}>
-                          📄 {documentCount} document{documentCount !== 1 ? 's' : ''}
+                          📎 {documentCount} document{documentCount !== 1 ? 's' : ''}
                           {(linkedDocuments || []).slice(0, 3).map(doc => (
                             <div key={doc.id} style={styles9b.linkedDoc}>• {doc.filename}</div>
                           ))}
@@ -1089,24 +1099,45 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
               } else {
                 const { data } = item;
                 return (
-                  <div key={`doc-${item.id}`} style={styles9b.unifiedItem}>
-                    <div style={styles9b.docBadge}>
-                      <span style={{ fontSize: '20px' }}>📄</span>
-                    </div>
+                  <div key={`doc-${item.id}`} style={{
+                    ...styles9b.unifiedItem,
+                    borderLeft: '4px solid #3B82F6',
+                    background: colors.bgSecondary
+                  }}>
+                    <div style={{
+                      width: '40px', height: '40px', borderRadius: '50%',
+                      background: '#3B82F620', display: 'flex',
+                      alignItems: 'center', justifyContent: 'center',
+                      fontSize: '20px', flexShrink: 0
+                    }}>📄</div>
                     <div style={styles9b.itemContent}>
                       <div style={{ ...styles9b.itemTitle, fontSize: '14px', fontWeight: 500 }}>{data.filename}</div>
                       <div style={styles9b.itemDate}>
-                        {formatTimelineDate(data.document_date)}
+                        {formatTimelineDate(item.date || data.document_date)}
                         {data.document_date_confidence && data.document_date_confidence !== 'exact' && (
                           <span style={styles9b.dateConfidence}> ({data.document_date_confidence})</span>
                         )}
                       </div>
-                      {data.evidence_type && (
-                        <div style={{ ...styles9b.tag, display: 'inline-block', marginBottom: '8px' }}>
-                          {data.evidence_type.replace(/_/g, ' ')}
-                        </div>
-                      )}
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '8px' }}>
+                        {data.evidence_type && (
+                          <span style={{ ...styles9b.tag, display: 'inline-block', borderColor: '#3B82F6', color: '#3B82F6' }}>
+                            {data.evidence_type.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                        {data.file_size && (
+                          <span style={{ fontSize: '11px', color: colors.textMuted }}>
+                            {(data.file_size / 1024).toFixed(0)} KB
+                          </span>
+                        )}
+                        {data.page_count && (
+                          <span style={{ fontSize: '11px', color: colors.textMuted }}>
+                            • {data.page_count} pages
+                          </span>
+                        )}
+                      </div>
                       <div style={styles9b.actionRow}>
+                        <button style={{ ...styles9b.actionBtn, background: '#3B82F6', color: '#fff', border: 'none' }}
+                          onClick={() => handleViewDocument(item.id)}>👁 View</button>
                         <button style={{ ...styles9b.actionBtn, ...styles9b.dangerBtn }} onClick={() => handleDeleteDocument(item.id)}>🗑️ Delete</button>
                       </div>
                     </div>
@@ -1138,8 +1169,8 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
         </div>
       )}
 
-      {/* Timeline visualization */}
-      {timeline.length > 0 && (
+      {/* Timeline visualization — removed (unified timeline above replaces this) */}
+      {false && (
         <div style={styles.timelineWrapper} ref={timelineRef}>
           <div style={styles.timeline} ref={timelineInnerRef}>
             {/* Connection lines SVG overlay — inside scrollable content */}
@@ -1221,11 +1252,12 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
                       : zoomLevel === 'month' ? (eventsByMonth[group.key] || [])
                       : (eventsByDate[group.key] || []);
                     return groupEvents.map(evt => {
-                      const evtColor = {
+                      const isCtx = !!evt.is_context_event;
+                      const evtColor = isCtx ? '#9CA3AF' : ({
                         'START': '#3B82F6', 'REPORTED': '#8B5CF6', 'HELP': '#F97316',
                         'ADVERSE_ACTION': '#DC2626', 'HARASSMENT': '#E11D48',
                         'END': '#1F2937'
-                      }[evt.event_type] || '#6B7280';
+                      }[evt.event_type] || '#6B7280');
                       const linkedDocs = evt.documents || [];
                       const isExpanded = expandedSpineEvent === evt.id;
                       return (
@@ -1233,21 +1265,29 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
                           marginBottom: '10px',
                           borderRadius: radius.md,
                           overflow: 'hidden',
-                          boxShadow: `0 2px 8px ${evtColor}35`
+                          boxShadow: `0 2px 8px ${evtColor}35`,
+                          opacity: isCtx ? 0.75 : 1
                         }}>
                           {/* Event header */}
                           <div style={{
                             padding: '10px 14px',
-                            background: evtColor + '22',
+                            background: isCtx ? '#F3F4F6' : evtColor + '22',
                             borderLeft: `5px solid ${evtColor}`,
                             borderRadius: `0 ${radius.md} ${radius.md} 0`,
                             cursor: 'pointer'
                           }} onClick={() => setExpandedSpineEvent(isExpanded ? null : evt.id)}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              {isCtx && (
+                                <span style={{
+                                  fontSize: '10px', fontWeight: 700, color: '#6B7280',
+                                  textTransform: 'uppercase', letterSpacing: '0.5px',
+                                  background: '#E5E7EB', padding: '2px 8px', borderRadius: radius.full
+                                }}>CONTEXT</span>
+                              )}
                               <span style={{
-                                fontSize: '10px', fontWeight: 800, color: '#fff',
+                                fontSize: '10px', fontWeight: 800, color: isCtx ? '#6B7280' : '#fff',
                                 textTransform: 'uppercase', letterSpacing: '0.5px',
-                                background: evtColor, padding: '2px 8px', borderRadius: radius.full
+                                background: isCtx ? '#D1D5DB' : evtColor, padding: '2px 8px', borderRadius: radius.full
                               }}>{evt.event_type?.replace('_', ' ')}</span>
                               <span style={{ fontWeight: 700, color: colors.textPrimary, fontSize: '13px' }}>{evt.title}</span>
                               {evt.event_weight === 'major' && <span style={{

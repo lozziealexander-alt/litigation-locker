@@ -1,4 +1,4 @@
-const { ipcMain, dialog } = require('electron');
+const { ipcMain, dialog, shell } = require('electron');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const keyManager = require('./crypto/key-derivation');
@@ -497,6 +497,30 @@ function registerIpcHandlers() {
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== OPEN DOCUMENT ====================
+
+  ipcMain.handle('documents:open', async (event, docId) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case is open' };
+      const row = currentCaseDb.prepare(
+        'SELECT encrypted_content, file_type, filename FROM documents WHERE id = ?'
+      ).get(docId);
+      if (!row) return { success: false, error: 'Document not found' };
+      const { decrypt } = require('./crypto/vault');
+      const caseKey = keyManager.deriveCaseKey(currentCaseId);
+      const decrypted = decrypt(row.encrypted_content, caseKey);
+      const os = require('os');
+      const path = require('path');
+      const ext = path.extname(row.filename) || '.bin';
+      const tmpPath = path.join(os.tmpdir(), `ll-doc-${docId}${ext}`);
+      fs.writeFileSync(tmpPath, decrypted);
+      await shell.openPath(tmpPath);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
     }
   });
 
@@ -3676,6 +3700,152 @@ function registerIpcHandlers() {
       return { success: true, documents };
     } catch (error) {
       return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== SESSION-9C: CONTEXT EVENTS ====================
+
+  ipcMain.handle('events:updateContextStatus', async (event, caseId, eventId, isContext, scope) => {
+    try {
+      const caseDb = currentCaseDb;
+      caseDb.prepare(`
+        UPDATE events
+        SET is_context_event = ?, context_scope = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(isContext ? 1 : 0, scope || null, eventId);
+      event.sender.send('case-changed', { caseId });
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ==================== SESSION-9C: COMPARATORS ====================
+
+  ipcMain.handle('comparators:list', async () => {
+    try {
+      const caseDb = currentCaseDb;
+      const comparators = caseDb.prepare(
+        'SELECT * FROM comparators ORDER BY relevance_score DESC, outcome_date DESC'
+      ).all();
+      return { success: true, comparators };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('comparators:create', async (event, data) => {
+    try {
+      const caseDb = currentCaseDb;
+      const id = uuidv4();
+      caseDb.prepare(`
+        INSERT INTO comparators (id, name, role, gender, race, outcome, outcome_date,
+          circumstances, evidence_similarity, relevance_score, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id, data.name, data.role || null, data.gender || null, data.race || null,
+        data.outcome || null, data.outcome_date || null, data.circumstances || null,
+        data.evidence_similarity || null, data.relevance_score != null ? data.relevance_score : 0.5,
+        data.notes || null
+      );
+      const comparator = caseDb.prepare('SELECT * FROM comparators WHERE id = ?').get(id);
+      return { success: true, comparator };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('comparators:update', async (event, comparatorId, data) => {
+    try {
+      const caseDb = currentCaseDb;
+      caseDb.prepare(`
+        UPDATE comparators SET
+          name = ?, role = ?, gender = ?, race = ?,
+          outcome = ?, outcome_date = ?, circumstances = ?,
+          evidence_similarity = ?, relevance_score = ?, notes = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        data.name, data.role || null, data.gender || null, data.race || null,
+        data.outcome || null, data.outcome_date || null, data.circumstances || null,
+        data.evidence_similarity || null, data.relevance_score != null ? data.relevance_score : 0.5,
+        data.notes || null, comparatorId
+      );
+      const comparator = caseDb.prepare('SELECT * FROM comparators WHERE id = ?').get(comparatorId);
+      return { success: true, comparator };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('comparators:delete', async (event, comparatorId) => {
+    try {
+      const caseDb = currentCaseDb;
+      caseDb.prepare('DELETE FROM comparators WHERE id = ?').run(comparatorId);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ==================== SESSION-9C: CONNECTIONS VIEW ====================
+
+  ipcMain.handle('connections:list', async () => {
+    try {
+      const caseDb = currentCaseDb;
+      const links = caseDb.prepare(`
+        SELECT el.*,
+          se.title as source_title, se.date as source_date, se.event_type as source_type,
+          te.title as target_title, te.date as target_date, te.event_type as target_type
+        FROM event_links el
+        JOIN events se ON se.id = el.source_event_id
+        JOIN events te ON te.id = el.target_event_id
+        ORDER BY se.date ASC
+      `).all();
+      const events = caseDb.prepare(
+        'SELECT id, title, date, event_type, is_context_event FROM events ORDER BY date ASC'
+      ).all();
+      return { success: true, links, events };
+    } catch (err) {
+      return { success: false, error: err.message, links: [], events: [] };
+    }
+  });
+
+  // ==================== SESSION-9C: ENCRYPTED EXPORT ====================
+
+  ipcMain.handle('export:generateHTML', async (event, passcode, expiryDays) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      const { generateEncryptedHTML } = require('./export/html-generator');
+      const { dialog } = require('electron');
+
+      const events = caseDb.prepare('SELECT * FROM events ORDER BY date ASC').all();
+      const documents = caseDb.prepare('SELECT * FROM documents ORDER BY document_date ASC').all();
+      const comparators = caseDb.prepare('SELECT * FROM comparators ORDER BY relevance_score DESC').all();
+      const links = caseDb.prepare('SELECT * FROM event_links').all();
+
+      const caseData = { events, documents, comparators, links };
+
+      const html = generateEncryptedHTML(caseData, passcode, parseInt(expiryDays) || 7);
+
+      const result = await dialog.showSaveDialog({
+        title: 'Save Encrypted Export',
+        defaultPath: 'litigation_export.html',
+        filters: [{ name: 'HTML', extensions: ['html'] }]
+      });
+
+      if (result.canceled || !result.filePath) {
+        return { success: false, error: 'Export cancelled' };
+      }
+
+      const fs = require('fs');
+      fs.writeFileSync(result.filePath, html, 'utf8');
+      return { success: true, path: result.filePath };
+    } catch (err) {
+      console.error('[Export] Failed:', err);
+      return { success: false, error: err.message };
     }
   });
 

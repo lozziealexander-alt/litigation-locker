@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "litigation-locker",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["preview-server.js"],
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "src/renderer", "--listen", "3847", "--no-clipboard"],
       "port": 3847
     }
   ]

@@ -6,6 +6,12 @@ export default function Settings() {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // C4: Encrypted export
+  const [exportPasscode, setExportPasscode] = useState('');
+  const [exportExpiry, setExportExpiry] = useState('7');
+  const [exportStatus, setExportStatus] = useState(null); // null | 'working' | 'done' | 'error'
+  const [exportMsg, setExportMsg] = useState('');
+
   useEffect(() => {
     window.api.settings.get('anthropic_api_key').then(r => {
       if (r.success && r.value) setApiKey(r.value);
@@ -18,6 +24,25 @@ export default function Settings() {
     if (r.success) {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    }
+  }
+
+  async function handleExport() {
+    if (!exportPasscode.trim()) {
+      setExportMsg('Please enter a passcode.');
+      setExportStatus('error');
+      return;
+    }
+    setExportStatus('working');
+    setExportMsg('');
+    const r = await window.api.export.generateHTML(exportPasscode, parseInt(exportExpiry) || 7);
+    if (r.success) {
+      setExportStatus('done');
+      setExportMsg('Saved to: ' + r.path);
+      setExportPasscode('');
+    } else {
+      setExportStatus('error');
+      setExportMsg(r.error || 'Export failed');
     }
   }
 
@@ -65,6 +90,58 @@ export default function Settings() {
           </div>
           <span style={s.hint}>
             Your key is stored in the encrypted vault database, never in localStorage or config files.
+          </span>
+        </div>
+      </div>
+
+      <div style={s.section}>
+        <h3 style={s.sectionTitle}>Encrypted Export</h3>
+        <p style={s.sectionDesc}>
+          Export your case as a self-contained, password-protected HTML file you can share with
+          your attorney. The file decrypts in any browser using AES-256 and automatically expires
+          after the chosen number of days.
+        </p>
+
+        <div style={s.field}>
+          <label style={s.label}>Export Passcode</label>
+          <div style={s.inputRow}>
+            <input
+              style={s.input}
+              type="password"
+              value={exportPasscode}
+              onChange={e => { setExportPasscode(e.target.value); setExportStatus(null); }}
+              placeholder="Choose a strong passcode"
+            />
+            <select
+              style={{ ...s.input, flex: '0 0 auto', width: 'auto', cursor: 'pointer' }}
+              value={exportExpiry}
+              onChange={e => setExportExpiry(e.target.value)}
+            >
+              <option value="3">3 days</option>
+              <option value="7">7 days</option>
+              <option value="14">14 days</option>
+              <option value="30">30 days</option>
+            </select>
+            <button
+              style={{ ...s.saveBtn, opacity: exportStatus === 'working' ? 0.6 : 1 }}
+              onClick={handleExport}
+              disabled={exportStatus === 'working'}
+            >
+              {exportStatus === 'working' ? 'Generating...' : 'Export'}
+            </button>
+          </div>
+          {exportStatus === 'done' && (
+            <span style={{ ...s.hint, color: '#16A34A' }}>
+              ✓ {exportMsg}
+            </span>
+          )}
+          {exportStatus === 'error' && (
+            <span style={{ ...s.hint, color: '#DC2626' }}>
+              {exportMsg}
+            </span>
+          )}
+          <span style={s.hint}>
+            Share the .html file with your attorney. Do NOT share the passcode in the same message.
           </span>
         </div>
       </div>

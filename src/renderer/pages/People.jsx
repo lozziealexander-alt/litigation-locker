@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { colors, shadows, spacing, typography, radius } from '../styles/tokens';
 import ActorApproval from '../components/ActorApproval';
+import ComparatorFormModal from '../components/ComparatorFormModal';
 
 const CLASSIFICATION_OPTIONS = [
   { value: '', label: 'All' },
@@ -61,10 +62,17 @@ export default function People({ onSelectActor }) {
   const [showMergePanel, setShowMergePanel] = useState(false);
   const [checkingDupes, setCheckingDupes] = useState(false);
 
+  // Comparators state
+  const [comparators, setComparators] = useState([]);
+  const [showComparatorForm, setShowComparatorForm] = useState(false);
+  const [editingComparator, setEditingComparator] = useState(null);
+  const [peopleTab, setPeopleTab] = useState('actors'); // 'actors' | 'comparators'
+
   const styles = getStyles();
 
   useEffect(() => {
     loadActors();
+    loadComparators();
   }, []);
 
   async function loadActors() {
@@ -72,6 +80,28 @@ export default function People({ onSelectActor }) {
     if (result.success) {
       setActors(result.actors);
     }
+  }
+
+  async function loadComparators() {
+    const result = await window.api.comparators.list();
+    if (result.success) setComparators(result.comparators);
+  }
+
+  async function handleSaveComparator(data) {
+    if (editingComparator) {
+      await window.api.comparators.update(editingComparator.id, data);
+    } else {
+      await window.api.comparators.create(data);
+    }
+    setShowComparatorForm(false);
+    setEditingComparator(null);
+    loadComparators();
+  }
+
+  async function handleDeleteComparator(id) {
+    if (!confirm('Delete this comparator? This cannot be undone.')) return;
+    await window.api.comparators.delete(id);
+    loadComparators();
   }
 
   async function handleAddActor() {
@@ -167,35 +197,136 @@ export default function People({ onSelectActor }) {
     return true;
   });
 
+  const OUTCOME_LABELS = {
+    forced_out: 'Forced Out', resigned_under_pressure: 'Resigned Under Pressure',
+    demoted: 'Demoted', underpaid: 'Underpaid', passed_over: 'Passed Over',
+    pip: 'Put on PIP', excluded: 'Excluded'
+  };
+
   return (
     <div style={styles.container}>
       {/* Header */}
       <div style={styles.header}>
         <div>
           <h1 style={styles.title}>People</h1>
-          <p style={styles.subtitle}>{actors.length} people in this case</p>
+          <p style={styles.subtitle}>
+            {peopleTab === 'actors' ? `${actors.length} people in this case` : `${comparators.length} comparators tracked`}
+          </p>
         </div>
         <div style={styles.headerActions}>
-          <button
-            style={styles.secondaryButton}
-            onClick={handleCheckDuplicates}
-            disabled={checkingDupes}
-          >
-            {checkingDupes ? 'Checking...' : 'Find Duplicates'}
-          </button>
-          <button
-            style={styles.secondaryButton}
-            onClick={handleRescan}
-            disabled={scanning}
-          >
-            {scanning ? 'Scanning...' : 'Rescan Documents'}
-          </button>
-          <button style={styles.addButton} onClick={() => setShowAddForm(true)}>
-            + Add Person
-          </button>
+          {/* Tab switcher */}
+          <div style={{ display: 'flex', border: `1px solid ${colors.border}`, borderRadius: radius.md, overflow: 'hidden' }}>
+            <button
+              style={{ ...styles.tabBtn, ...(peopleTab === 'actors' ? styles.tabBtnActive : {}) }}
+              onClick={() => setPeopleTab('actors')}
+            >Actors</button>
+            <button
+              style={{ ...styles.tabBtn, ...(peopleTab === 'comparators' ? styles.tabBtnActive : {}) }}
+              onClick={() => setPeopleTab('comparators')}
+            >Comparators {comparators.length > 0 ? `(${comparators.length})` : ''}</button>
+          </div>
+          {peopleTab === 'actors' ? (
+            <>
+              <button style={styles.secondaryButton} onClick={handleCheckDuplicates} disabled={checkingDupes}>
+                {checkingDupes ? 'Checking...' : 'Find Duplicates'}
+              </button>
+              <button style={styles.secondaryButton} onClick={handleRescan} disabled={scanning}>
+                {scanning ? 'Scanning...' : 'Rescan Documents'}
+              </button>
+              <button style={styles.addButton} onClick={() => setShowAddForm(true)}>+ Add Person</button>
+            </>
+          ) : (
+            <button style={styles.addButton} onClick={() => { setEditingComparator(null); setShowComparatorForm(true); }}>
+              + Add Comparator
+            </button>
+          )}
         </div>
       </div>
 
+      {/* ===== COMPARATORS TAB ===== */}
+      {peopleTab === 'comparators' && (
+        <div style={{ flex: 1, overflowY: 'auto', padding: spacing.xl }}>
+          <p style={{ color: colors.textMuted, fontSize: typography.fontSize.sm, marginBottom: spacing.lg }}>
+            Other people affected similarly — pattern evidence for disparate treatment claims
+          </p>
+          {comparators.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: spacing.xxl, color: colors.textMuted }}>
+              No comparators yet. Add people who were treated similarly to build pattern evidence.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.md }}>
+              {comparators.map(comp => (
+                <div key={comp.id} style={{
+                  border: `1px solid ${colors.border}`, borderRadius: radius.lg,
+                  padding: spacing.lg, background: colors.surface
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: typography.fontSize.base, fontWeight: typography.fontWeight.semibold, color: colors.textPrimary }}>
+                          {comp.name}
+                        </span>
+                        {comp.gender && <span style={{ fontSize: typography.fontSize.xs, color: colors.textMuted }}>{comp.gender}</span>}
+                        {comp.race && <span style={{ fontSize: typography.fontSize.xs, color: colors.textMuted }}>· {comp.race}</span>}
+                        {comp.role && <span style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary }}>· {comp.role}</span>}
+                      </div>
+                      <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: spacing.sm }}>
+                        <span style={{
+                          fontSize: typography.fontSize.xs, fontWeight: typography.fontWeight.semibold,
+                          background: '#FEE2E2', color: '#DC2626', padding: '2px 8px', borderRadius: radius.full
+                        }}>
+                          {OUTCOME_LABELS[comp.outcome] || comp.outcome?.replace(/_/g, ' ')}
+                        </span>
+                        {comp.outcome_date && (
+                          <span style={{ fontSize: typography.fontSize.xs, color: colors.textMuted }}>
+                            {new Date(comp.outcome_date).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
+                      {comp.circumstances && (
+                        <p style={{ margin: '8px 0 0 0', fontSize: typography.fontSize.sm, color: colors.textSecondary, lineHeight: 1.5 }}>
+                          {comp.circumstances}
+                        </p>
+                      )}
+                      {comp.evidence_similarity && (
+                        <p style={{ margin: '6px 0 0 0', fontSize: typography.fontSize.xs, color: colors.textMuted, fontStyle: 'italic' }}>
+                          Similar to your case: {comp.evidence_similarity}
+                        </p>
+                      )}
+                      {comp.relevance_score != null && (
+                        <div style={{ marginTop: '10px' }}>
+                          <div style={{ fontSize: typography.fontSize.xs, color: colors.textMuted, marginBottom: '4px' }}>
+                            Similarity: {Math.round(comp.relevance_score * 100)}%
+                          </div>
+                          <div style={{ width: '200px', height: '5px', background: colors.border, borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{
+                              width: `${comp.relevance_score * 100}%`, height: '100%',
+                              background: comp.relevance_score >= 0.7 ? '#16A34A' : comp.relevance_score >= 0.4 ? '#F59E0B' : '#9CA3AF'
+                            }} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: spacing.sm, flexShrink: 0, marginLeft: spacing.md }}>
+                      <button
+                        style={styles.secondaryButton}
+                        onClick={() => { setEditingComparator(comp); setShowComparatorForm(true); }}
+                      >Edit</button>
+                      <button
+                        style={{ ...styles.secondaryButton, color: '#DC2626', borderColor: '#FECACA' }}
+                        onClick={() => handleDeleteComparator(comp.id)}
+                      >Delete</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ===== ACTORS TAB ===== */}
+      {peopleTab === 'actors' && <>
       {/* Filters */}
       <div style={styles.filterBar}>
         <input
@@ -312,6 +443,7 @@ export default function People({ onSelectActor }) {
           </div>
         )}
       </div>
+      </>}
 
       {/* Actor approval modal (from rescan) */}
       {showActorApproval && pendingActors.length > 0 && (
@@ -386,6 +518,15 @@ export default function People({ onSelectActor }) {
           </div>
         </div>
       )}
+
+      {/* Comparator form modal */}
+      {(showComparatorForm || editingComparator) && (
+        <ComparatorFormModal
+          comparator={editingComparator}
+          onSave={handleSaveComparator}
+          onClose={() => { setShowComparatorForm(false); setEditingComparator(null); }}
+        />
+      )}
     </div>
   );
 }
@@ -420,6 +561,19 @@ function getStyles() {
       display: 'flex',
       gap: spacing.sm,
       alignItems: 'center'
+    },
+    tabBtn: {
+      padding: `${spacing.xs} ${spacing.md}`,
+      background: 'transparent',
+      border: 'none',
+      fontSize: typography.fontSize.sm,
+      color: colors.textSecondary,
+      cursor: 'pointer'
+    },
+    tabBtnActive: {
+      background: colors.primary,
+      color: colors.textInverse,
+      fontWeight: typography.fontWeight.medium
     },
     addButton: {
       padding: `${spacing.sm} ${spacing.lg}`,

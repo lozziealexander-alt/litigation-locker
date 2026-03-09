@@ -48,7 +48,8 @@ contextBridge.exposeInMainWorld('api', {
     updateRecapStatus: (docId, isRecap, responseReceived) => ipcRenderer.invoke('documents:updateRecapStatus', docId, isRecap, responseReceived),
     updateDocumentSubtype: (docId, subtype) => ipcRenderer.invoke('documents:updateDocumentSubtype', docId, subtype),
     delete: (docId) => ipcRenderer.invoke('documents:delete', docId),
-    copy: (docId) => ipcRenderer.invoke('documents:copy', docId)
+    copy: (docId) => ipcRenderer.invoke('documents:copy', docId),
+    open: (docId) => ipcRenderer.invoke('documents:open', docId)
   },
 
   // Group operations (document linking)
@@ -144,7 +145,27 @@ contextBridge.exposeInMainWorld('api', {
     get: (caseId, eventId) => ipcRenderer.invoke('events:get', caseId, eventId),
     getTags: (caseId, eventId) => ipcRenderer.invoke('events:getTags', caseId, eventId),
     updateTags: (caseId, eventId, tags) => ipcRenderer.invoke('events:updateTags', caseId, eventId, tags),
-    getLinkedDocuments: (caseId, eventId) => ipcRenderer.invoke('events:getLinkedDocuments', caseId, eventId)
+    getLinkedDocuments: (caseId, eventId) => ipcRenderer.invoke('events:getLinkedDocuments', caseId, eventId),
+    updateContextStatus: (caseId, eventId, isContext, scope) =>
+      ipcRenderer.invoke('events:updateContextStatus', caseId, eventId, isContext, scope)
+  },
+
+  // Comparators (SESSION-9C)
+  comparators: {
+    list: () => ipcRenderer.invoke('comparators:list'),
+    create: (data) => ipcRenderer.invoke('comparators:create', data),
+    update: (id, data) => ipcRenderer.invoke('comparators:update', id, data),
+    delete: (id) => ipcRenderer.invoke('comparators:delete', id)
+  },
+
+  // Connections view (SESSION-9C)
+  connections: {
+    list: () => ipcRenderer.invoke('connections:list')
+  },
+
+  // Encrypted export (SESSION-9C)
+  export: {
+    generateHTML: (passcode, expiryDays) => ipcRenderer.invoke('export:generateHTML', passcode, expiryDays)
   },
 
   // Event Tags

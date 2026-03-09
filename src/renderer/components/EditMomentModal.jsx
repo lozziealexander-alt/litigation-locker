@@ -30,6 +30,8 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
   const [date, setDate] = useState('');
   const [dateConfidence, setDateConfidence] = useState('exact');
   const [tags, setTags] = useState([]);
+  const [isContextEvent, setIsContextEvent] = useState(false);
+  const [contextScope, setContextScope] = useState('company-wide');
 
   useEffect(() => {
     loadMoment();
@@ -51,6 +53,8 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
         setDescription(result.event.description || '');
         setDate(result.event.date || '');
         setDateConfidence(result.event.date_confidence || 'exact');
+        setIsContextEvent(!!result.event.is_context_event);
+        setContextScope(result.event.context_scope || 'company-wide');
 
         const tagsResult = await window.api.events.getTags(caseId, momentId);
         if (tagsResult.success) {
@@ -93,6 +97,7 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
       if (result.success) {
         const savedId = momentId || result.id;
         await window.api.events.updateTags(caseId, savedId, tags);
+        await window.api.events.updateContextStatus(caseId, savedId, isContextEvent, contextScope);
         onSave?.();
         onClose();
       } else {
@@ -198,6 +203,32 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div style={{ ...styles.field, background: isContextEvent ? '#F9FAFB' : 'transparent', padding: '12px', borderRadius: '8px', border: '1px solid #E5E7EB' }}>
+            <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: 0 }}>
+              <input
+                type="checkbox"
+                checked={isContextEvent}
+                onChange={e => setIsContextEvent(e.target.checked)}
+                style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+              />
+              <span>Mark as Context Event</span>
+            </label>
+            <p style={{ margin: '6px 0 0 24px', fontSize: '12px', color: '#6B7280' }}>
+              Background context (VRP, layoffs, policy changes) — excluded from claim strength
+            </p>
+            {isContextEvent && (
+              <select
+                value={contextScope}
+                onChange={e => setContextScope(e.target.value)}
+                style={{ ...styles.select, marginTop: '10px', marginLeft: '24px', width: 'calc(100% - 24px)' }}
+              >
+                <option value="company-wide">Company-wide</option>
+                <option value="department">Department-specific</option>
+                <option value="industry">Industry-wide</option>
+              </select>
+            )}
           </div>
         </div>
 

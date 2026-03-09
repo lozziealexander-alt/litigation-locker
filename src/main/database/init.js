@@ -754,17 +754,38 @@ function openCase(caseId) {
   if (!evtCols9.includes('edit_history')) {
     caseDb.exec("ALTER TABLE events ADD COLUMN edit_history TEXT DEFAULT '[]'");
   }
+  // SESSION-9C: context_scope for context events
+  const evtCols9c = caseDb.prepare("PRAGMA table_info(events)").all().map(c => c.name);
+  if (!evtCols9c.includes('context_scope')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN context_scope TEXT");
+  }
 
+  // SESSION-9C: Enhance comparators table with full fields
   if (!caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='comparators'").get()) {
     caseDb.exec(`CREATE TABLE IF NOT EXISTS comparators (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       role TEXT,
+      gender TEXT,
+      race TEXT,
       outcome TEXT,
+      outcome_date TEXT,
       circumstances TEXT,
-      relevance TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      evidence_similarity TEXT,
+      relevance_score REAL DEFAULT 0.5,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
+  } else {
+    const compCols = caseDb.prepare("PRAGMA table_info(comparators)").all().map(c => c.name);
+    if (!compCols.includes('gender')) caseDb.exec("ALTER TABLE comparators ADD COLUMN gender TEXT");
+    if (!compCols.includes('race')) caseDb.exec("ALTER TABLE comparators ADD COLUMN race TEXT");
+    if (!compCols.includes('outcome_date')) caseDb.exec("ALTER TABLE comparators ADD COLUMN outcome_date TEXT");
+    if (!compCols.includes('evidence_similarity')) caseDb.exec("ALTER TABLE comparators ADD COLUMN evidence_similarity TEXT");
+    if (!compCols.includes('relevance_score')) caseDb.exec("ALTER TABLE comparators ADD COLUMN relevance_score REAL DEFAULT 0.5");
+    if (!compCols.includes('notes')) caseDb.exec("ALTER TABLE comparators ADD COLUMN notes TEXT");
+    if (!compCols.includes('updated_at')) caseDb.exec("ALTER TABLE comparators ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP");
   }
 
   if (!caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='context_events'").get()) {
