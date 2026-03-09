@@ -51,18 +51,27 @@ function textSimilarity(textA, textB) {
   return union === 0 ? 0 : intersection / union;
 }
 
+// Wrapper that logs but continues if a single handler fails to register
+function safeHandle(channel, handler) {
+  try {
+    safeHandle(channel, handler);
+  } catch (err) {
+    console.error(`[IPC] Failed to register handler '${channel}':`, err.message);
+  }
+}
+
 function registerIpcHandlers() {
   console.log('[IPC] Registering handlers...');
 
   // ==================== VAULT ====================
 
-  ipcMain.handle('vault:exists', async () => {
+  safeHandle('vault:exists', async () => {
     const exists = db.vaultExists();
     console.log('[IPC] vault:exists =>', exists);
     return exists;
   });
 
-  ipcMain.handle('vault:setup', async (event, passphrase) => {
+  safeHandle('vault:setup', async (event, passphrase) => {
     try {
       const salt = keyManager.generateSalt();
       await keyManager.unlock(passphrase, salt);
@@ -74,7 +83,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('vault:unlock', async (event, passphrase) => {
+  safeHandle('vault:unlock', async (event, passphrase) => {
     try {
       const salt = db.getSalt();
       if (!salt) {
@@ -91,32 +100,32 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('vault:lock', async () => {
+  safeHandle('vault:lock', async () => {
     closeCurrentCase();
     keyManager.lock();
     db.closeMasterDb();
     return { success: true };
   });
 
-  ipcMain.handle('vault:isUnlocked', async () => {
+  safeHandle('vault:isUnlocked', async () => {
     return keyManager.isUnlocked();
   });
 
   // ==================== BURN ====================
 
-  ipcMain.handle('burn:execute', async (event, scope) => {
+  safeHandle('burn:execute', async (event, scope) => {
     closeCurrentCase();
     db.closeMasterDb();
     return await burn(scope);
   });
 
-  ipcMain.handle('burn:verify', async () => {
+  safeHandle('burn:verify', async () => {
     return verifyBurn();
   });
 
   // ==================== CASES ====================
 
-  ipcMain.handle('cases:list', async () => {
+  safeHandle('cases:list', async () => {
     try {
       const cases = db.listCases();
       console.log('[IPC] cases:list =>', cases.length, 'cases', cases.map(c => c.name));
@@ -127,7 +136,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('cases:rename', async (event, caseId, newName) => {
+  safeHandle('cases:rename', async (event, caseId, newName) => {
     try {
       const result = db.renameCase(caseId, newName);
       return { success: true, case: result };
@@ -136,7 +145,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('cases:create', async (event, name) => {
+  safeHandle('cases:create', async (event, name) => {
     try {
       const caseData = db.createCase(name);
       return { success: true, case: caseData };
@@ -145,7 +154,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('cases:open', async (event, caseId) => {
+  safeHandle('cases:open', async (event, caseId) => {
     try {
       closeCurrentCase();
       currentCaseDb = db.openCase(caseId);
@@ -169,13 +178,13 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('cases:current', async () => {
+  safeHandle('cases:current', async () => {
     return { caseId: currentCaseId };
   });
 
   // ==================== DOCUMENTS ====================
 
-  ipcMain.handle('documents:ingest', async (event, filePaths) => {
+  safeHandle('documents:ingest', async (event, filePaths) => {
     console.log('[IPC] documents:ingest called, paths:', filePaths);
     console.log('[IPC] currentCaseId:', currentCaseId, 'hasDb:', !!currentCaseDb);
     try {
@@ -333,7 +342,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:list', async () => {
+  safeHandle('documents:list', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -355,7 +364,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:get', async (event, docId) => {
+  safeHandle('documents:get', async (event, docId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -381,7 +390,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:updateContext', async (event, docId, context) => {
+  safeHandle('documents:updateContext', async (event, docId, context) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -397,7 +406,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:updateDate', async (event, docId, date, confidence) => {
+  safeHandle('documents:updateDate', async (event, docId, date, confidence) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -413,7 +422,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:rename', async (event, docId, newFilename) => {
+  safeHandle('documents:rename', async (event, docId, newFilename) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -429,7 +438,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:getContent', async (event, docId) => {
+  safeHandle('documents:getContent', async (event, docId) => {
     try {
       if (!currentCaseDb || !currentCaseId) {
         return { success: false, error: 'No case is open' };
@@ -459,7 +468,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:updateType', async (event, docId, evidenceType) => {
+  safeHandle('documents:updateType', async (event, docId, evidenceType) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -477,7 +486,7 @@ function registerIpcHandlers() {
 
   // ==================== DELETE DOCUMENT ====================
 
-  ipcMain.handle('documents:delete', async (event, docId) => {
+  safeHandle('documents:delete', async (event, docId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -504,7 +513,7 @@ function registerIpcHandlers() {
 
   // ==================== OPEN DOCUMENT ====================
 
-  ipcMain.handle('documents:open', async (event, docId) => {
+  safeHandle('documents:open', async (event, docId) => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case is open' };
       const row = currentCaseDb.prepare(
@@ -528,7 +537,7 @@ function registerIpcHandlers() {
 
   // ==================== RECLASSIFY ====================
 
-  ipcMain.handle('documents:reclassify', async () => {
+  safeHandle('documents:reclassify', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -587,7 +596,7 @@ function registerIpcHandlers() {
   });
 
   // Update recap status on a document (legacy, kept for compat)
-  ipcMain.handle('documents:updateRecapStatus', async (event, docId, isRecap, responseReceived) => {
+  safeHandle('documents:updateRecapStatus', async (event, docId, isRecap, responseReceived) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -608,7 +617,7 @@ function registerIpcHandlers() {
   });
 
   // Update document subtype classification (replaces recap toggle)
-  ipcMain.handle('documents:updateDocumentSubtype', async (event, docId, subtype) => {
+  safeHandle('documents:updateDocumentSubtype', async (event, docId, subtype) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -631,7 +640,7 @@ function registerIpcHandlers() {
 
   // ==================== FILE DIALOG ====================
 
-  ipcMain.handle('dialog:openFiles', async () => {
+  safeHandle('dialog:openFiles', async () => {
     try {
       console.log('[IPC] dialog:openFiles called');
       const result = await dialog.showOpenDialog({
@@ -658,7 +667,7 @@ function registerIpcHandlers() {
 
   // ==================== TIMELINE ====================
 
-  ipcMain.handle('timeline:get', async () => {
+  safeHandle('timeline:get', async () => {
     try {
       if (!currentCaseDb) {
         console.log('[IPC] timeline:get - no case DB open');
@@ -706,7 +715,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('timeline:getConnections', async () => {
+  safeHandle('timeline:getConnections', async () => {
     try {
       if (!currentCaseDb) {
         return { success: true, connections: [], escalation: null };
@@ -733,7 +742,7 @@ function registerIpcHandlers() {
 
   // ==================== PRECEDENTS ====================
 
-  ipcMain.handle('precedents:analyze', async (event, jurisdictionOverride) => {
+  safeHandle('precedents:analyze', async (event, jurisdictionOverride) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -807,7 +816,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('precedents:getDocumentBadges', async (event, documentId) => {
+  safeHandle('precedents:getDocumentBadges', async (event, documentId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -854,7 +863,7 @@ function registerIpcHandlers() {
 
   // ==================== DATE ENTRIES (multi-date timeline) ====================
 
-  ipcMain.handle('documents:addDateEntry', async (event, docId, date, label, confidence) => {
+  safeHandle('documents:addDateEntry', async (event, docId, date, label, confidence) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -872,7 +881,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:removeDateEntry', async (event, entryId) => {
+  safeHandle('documents:removeDateEntry', async (event, entryId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -885,7 +894,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:getDateEntries', async (event, docId) => {
+  safeHandle('documents:getDateEntries', async (event, docId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -906,7 +915,7 @@ function registerIpcHandlers() {
 
   // ==================== GROUPS (document linking) ====================
 
-  ipcMain.handle('groups:create', async (event, name, description, color) => {
+  safeHandle('groups:create', async (event, name, description, color) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -925,7 +934,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('groups:list', async () => {
+  safeHandle('groups:list', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -946,7 +955,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('groups:delete', async (event, groupId) => {
+  safeHandle('groups:delete', async (event, groupId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -963,7 +972,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('groups:getMembers', async (event, groupId) => {
+  safeHandle('groups:getMembers', async (event, groupId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -983,7 +992,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:setGroup', async (event, docId, groupId) => {
+  safeHandle('documents:setGroup', async (event, docId, groupId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -999,7 +1008,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('documents:removeGroup', async (event, docId) => {
+  safeHandle('documents:removeGroup', async (event, docId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1017,7 +1026,7 @@ function registerIpcHandlers() {
 
   // ==================== INCIDENTS ====================
 
-  ipcMain.handle('incidents:list', async () => {
+  safeHandle('incidents:list', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1053,7 +1062,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('incidents:create', async (event, incidentData) => {
+  safeHandle('incidents:create', async (event, incidentData) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1132,7 +1141,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('incidents:update', async (event, incidentId, updates) => {
+  safeHandle('incidents:update', async (event, incidentId, updates) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1176,7 +1185,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('incidents:delete', async (event, incidentId) => {
+  safeHandle('incidents:delete', async (event, incidentId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1195,7 +1204,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('incidents:reclassify', async () => {
+  safeHandle('incidents:reclassify', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1239,7 +1248,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('incidents:suggest', async () => {
+  safeHandle('incidents:suggest', async () => {
     try {
       const caseDb = currentCaseDb;
       const events = caseDb.prepare('SELECT * FROM events WHERE date IS NOT NULL ORDER BY date').all().map(evt => {
@@ -1256,7 +1265,7 @@ function registerIpcHandlers() {
 
   // ── Incident ↔ Actor linking ──────────────────────────────────────────────
 
-  ipcMain.handle('incidents:linkActor', async (event, incidentId, actorId, role) => {
+  safeHandle('incidents:linkActor', async (event, incidentId, actorId, role) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1275,7 +1284,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('incidents:unlinkActor', async (event, incidentId, actorId) => {
+  safeHandle('incidents:unlinkActor', async (event, incidentId, actorId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1289,7 +1298,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('incidents:getActors', async (event, incidentId) => {
+  safeHandle('incidents:getActors', async (event, incidentId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1315,7 +1324,7 @@ function registerIpcHandlers() {
 
   // ==================== JURISDICTION ====================
 
-  ipcMain.handle('jurisdiction:get', async () => {
+  safeHandle('jurisdiction:get', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1329,7 +1338,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('jurisdiction:set', async (event, jurisdiction) => {
+  safeHandle('jurisdiction:set', async (event, jurisdiction) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1357,7 +1366,7 @@ function registerIpcHandlers() {
 
   // ==================== ACTORS ====================
 
-  ipcMain.handle('actors:list', async () => {
+  safeHandle('actors:list', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1387,7 +1396,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('actors:create', async (event, actorData) => {
+  safeHandle('actors:create', async (event, actorData) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1460,7 +1469,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('actors:update', async (event, actorId, updates) => {
+  safeHandle('actors:update', async (event, actorId, updates) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1538,7 +1547,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('actors:delete', async (event, actorId) => {
+  safeHandle('actors:delete', async (event, actorId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1557,7 +1566,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('actors:merge', async (event, keepActorId, mergeActorId) => {
+  safeHandle('actors:merge', async (event, keepActorId, mergeActorId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1611,7 +1620,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('actors:getAppearances', async (event, actorId) => {
+  safeHandle('actors:getAppearances', async (event, actorId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1634,7 +1643,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('actors:setSelf', async (event, actorId) => {
+  safeHandle('actors:setSelf', async (event, actorId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1652,7 +1661,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('actors:checkDuplicates', async () => {
+  safeHandle('actors:checkDuplicates', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1666,7 +1675,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('actors:rescan', async () => {
+  safeHandle('actors:rescan', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1705,7 +1714,7 @@ function registerIpcHandlers() {
 
   // ==================== DOCUMENT ACTORS ====================
 
-  ipcMain.handle('actors:getForDocument', async (event, documentId) => {
+  safeHandle('actors:getForDocument', async (event, documentId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1726,7 +1735,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('actors:addToDocument', async (event, actorId, documentId, roleInDocument) => {
+  safeHandle('actors:addToDocument', async (event, actorId, documentId, roleInDocument) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1752,7 +1761,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('actors:removeFromDocument', async (event, actorId, documentId) => {
+  safeHandle('actors:removeFromDocument', async (event, actorId, documentId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1771,12 +1780,12 @@ function registerIpcHandlers() {
   // ==================== ACTOR REGISTRY ====================
 
   /** Get relationship type taxonomy */
-  ipcMain.handle('actors:getRelationshipTypes', async () => {
+  safeHandle('actors:getRelationshipTypes', async () => {
     return { success: true, types: RELATIONSHIP_TYPES };
   });
 
   /** Resolve harasser role from text using known actors */
-  ipcMain.handle('actors:resolveFromText', async (event, text, confirmedActorIds) => {
+  safeHandle('actors:resolveFromText', async (event, text, confirmedActorIds) => {
     try {
       if (!actorRegistry) {
         return { success: true, role: 'unknown', inChain: false, actor: null, pending: [] };
@@ -1802,7 +1811,7 @@ function registerIpcHandlers() {
   });
 
   /** Find all known actors mentioned in text */
-  ipcMain.handle('actors:findInText', async (event, text) => {
+  safeHandle('actors:findInText', async (event, text) => {
     try {
       if (!actorRegistry) {
         return { success: true, matches: [] };
@@ -1829,7 +1838,7 @@ function registerIpcHandlers() {
   });
 
   /** Get actors in the reporting chain */
-  ipcMain.handle('actors:getChain', async () => {
+  safeHandle('actors:getChain', async () => {
     try {
       if (!actorRegistry) {
         return { success: true, actors: [] };
@@ -1852,7 +1861,7 @@ function registerIpcHandlers() {
   });
 
   /** Get summary of all actors for assessment prompts */
-  ipcMain.handle('actors:getSummary', async () => {
+  safeHandle('actors:getSummary', async () => {
     try {
       if (!actorRegistry) {
         return { success: true, summary: 'No actors defined.' };
@@ -1865,7 +1874,7 @@ function registerIpcHandlers() {
 
   // ==================== PAY RECORDS ====================
 
-  ipcMain.handle('payRecords:list', async () => {
+  safeHandle('payRecords:list', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1886,7 +1895,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('payRecords:create', async (event, data) => {
+  safeHandle('payRecords:create', async (event, data) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1916,7 +1925,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('payRecords:update', async (event, recordId, updates) => {
+  safeHandle('payRecords:update', async (event, recordId, updates) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1955,7 +1964,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('payRecords:delete', async (event, recordId) => {
+  safeHandle('payRecords:delete', async (event, recordId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1968,7 +1977,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('payRecords:getForActor', async (event, actorId) => {
+  safeHandle('payRecords:getForActor', async (event, actorId) => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -1990,7 +1999,7 @@ function registerIpcHandlers() {
 
   // ==================== DEBUG ====================
 
-  ipcMain.handle('debug:testIngest', async () => {
+  safeHandle('debug:testIngest', async () => {
     console.log('[DEBUG] testIngest called');
     console.log('[DEBUG] currentCaseId:', currentCaseId, 'hasDb:', !!currentCaseDb);
     try {
@@ -2069,7 +2078,7 @@ function registerIpcHandlers() {
 
   // ==================== EVENTS ====================
 
-  ipcMain.handle('events:list', async (event, caseId) => {
+  safeHandle('events:list', async (event, caseId) => {
     try {
       const caseDb = currentCaseDb;
 
@@ -2123,7 +2132,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:generate', async (event, caseId) => {
+  safeHandle('events:generate', async (event, caseId) => {
     try {
       const caseDb = currentCaseDb;
 
@@ -2296,7 +2305,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:create', async (event, caseId, data) => {
+  safeHandle('events:create', async (event, caseId, data) => {
     try {
       if (data.date) {
         const d = new Date(data.date);
@@ -2352,7 +2361,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:update', async (event, caseId, eventId, updates) => {
+  safeHandle('events:update', async (event, caseId, eventId, updates) => {
     try {
       if (updates.date) {
         const d = new Date(updates.date);
@@ -2459,7 +2468,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:delete', async (event, caseId, eventId) => {
+  safeHandle('events:delete', async (event, caseId, eventId) => {
     try {
       const caseDb = currentCaseDb;
 
@@ -2478,7 +2487,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:linkEvidence', async (event, caseId, eventId, documentId) => {
+  safeHandle('events:linkEvidence', async (event, caseId, eventId, documentId) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('INSERT INTO event_documents (id, event_id, document_id, relevance) VALUES (?, ?, ?, ?)').run(
@@ -2490,7 +2499,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:unlinkEvidence', async (event, caseId, eventId, documentId) => {
+  safeHandle('events:unlinkEvidence', async (event, caseId, eventId, documentId) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM event_documents WHERE event_id = ? AND document_id = ?').run(eventId, documentId);
@@ -2500,7 +2509,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:getRelatedEvidence', async (event, caseId, eventId) => {
+  safeHandle('events:getRelatedEvidence', async (event, caseId, eventId) => {
     try {
       const caseDb = currentCaseDb;
 
@@ -2594,7 +2603,7 @@ function registerIpcHandlers() {
 
   // ==================== EVENT EXTENDED OPERATIONS ====================
 
-  ipcMain.handle('events:clone', async (event, caseId, eventId) => {
+  safeHandle('events:clone', async (event, caseId, eventId) => {
     try {
       const caseDb = currentCaseDb;
 
@@ -2666,11 +2675,11 @@ function registerIpcHandlers() {
   });
 
   // events:reorder — no-op (sort_order removed from schema, events sorted by date)
-  ipcMain.handle('events:reorder', async () => {
+  safeHandle('events:reorder', async () => {
     return { success: true };
   });
 
-  ipcMain.handle('events:linkPrecedent', async (event, caseId, eventId, precedentId, relevanceNote) => {
+  safeHandle('events:linkPrecedent', async (event, caseId, eventId, precedentId, relevanceNote) => {
     try {
       const caseDb = currentCaseDb;
       const existing = caseDb.prepare('SELECT id FROM event_precedents WHERE event_id = ? AND precedent_id = ?').get(eventId, precedentId);
@@ -2687,7 +2696,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:unlinkPrecedent', async (event, caseId, eventId, precedentId) => {
+  safeHandle('events:unlinkPrecedent', async (event, caseId, eventId, precedentId) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM event_precedents WHERE event_id = ? AND precedent_id = ?').run(eventId, precedentId);
@@ -2697,7 +2706,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:getPrecedents', async (event, caseId, eventId) => {
+  safeHandle('events:getPrecedents', async (event, caseId, eventId) => {
     try {
       const caseDb = currentCaseDb;
       const precedents = caseDb.prepare('SELECT * FROM event_precedents WHERE event_id = ?').all(eventId);
@@ -2707,7 +2716,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:breakApart', async (event, caseId, eventId) => {
+  safeHandle('events:breakApart', async (event, caseId, eventId) => {
     try {
       const caseDb = currentCaseDb;
 
@@ -2771,7 +2780,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:linkIncident', async (event, caseId, eventId, incidentId, eventRole) => {
+  safeHandle('events:linkIncident', async (event, caseId, eventId, incidentId, eventRole) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('INSERT INTO incident_events (id, incident_id, event_id, event_role) VALUES (?, ?, ?, ?)').run(
@@ -2783,7 +2792,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:unlinkIncident', async (event, caseId, eventId, incidentId) => {
+  safeHandle('events:unlinkIncident', async (event, caseId, eventId, incidentId) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM incident_events WHERE event_id = ? AND incident_id = ?').run(eventId, incidentId);
@@ -2793,7 +2802,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:linkActor', async (event, caseId, eventId, actorId, role) => {
+  safeHandle('events:linkActor', async (event, caseId, eventId, actorId, role) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('INSERT INTO event_actors (id, event_id, actor_id, role) VALUES (?, ?, ?, ?)').run(
@@ -2805,7 +2814,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:unlinkActor', async (event, caseId, eventId, actorId) => {
+  safeHandle('events:unlinkActor', async (event, caseId, eventId, actorId) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM event_actors WHERE event_id = ? AND actor_id = ?').run(eventId, actorId);
@@ -2815,7 +2824,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:linkDocumentV2', async (event, caseId, eventId, documentId, relevanceV2) => {
+  safeHandle('events:linkDocumentV2', async (event, caseId, eventId, documentId, relevanceV2) => {
     try {
       const caseDb = currentCaseDb;
       const relevance = Array.isArray(relevanceV2) ? relevanceV2[0] : (relevanceV2 || 'context');
@@ -2834,7 +2843,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:setDocumentWeight', async (event, caseId, eventId, documentId, weight) => {
+  safeHandle('events:setDocumentWeight', async (event, caseId, eventId, documentId, weight) => {
     try {
       const caseDb = currentCaseDb;
       const w = Math.max(1, Math.min(5, parseInt(weight) || 3));
@@ -2847,7 +2856,7 @@ function registerIpcHandlers() {
 
   // ==================== DOCUMENT-EVENT LINK SUGGESTIONS ====================
 
-  ipcMain.handle('events:suggestLinks', async (event, caseId, documentId) => {
+  safeHandle('events:suggestLinks', async (event, caseId, documentId) => {
     try {
       console.log('[suggestLinks] called with documentId:', documentId, 'caseId:', caseId);
       const caseDb = currentCaseDb;
@@ -2927,7 +2936,7 @@ function registerIpcHandlers() {
 
   // ==================== EVENT TAGS ====================
 
-  ipcMain.handle('eventTags:set', async (event, eventId, tags) => {
+  safeHandle('eventTags:set', async (event, eventId, tags) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId);
@@ -2941,7 +2950,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('eventTags:listAll', async () => {
+  safeHandle('eventTags:listAll', async () => {
     try {
       const caseDb = currentCaseDb;
       const tags = caseDb.prepare('SELECT DISTINCT tag FROM event_tags ORDER BY tag').all().map(r => r.tag);
@@ -2953,7 +2962,7 @@ function registerIpcHandlers() {
 
   // ==================== EVENT LINKS (CAUSALITY) ====================
 
-  ipcMain.handle('eventLinks:list', async () => {
+  safeHandle('eventLinks:list', async () => {
     try {
       const caseDb = currentCaseDb;
       const links = caseDb.prepare(`
@@ -2970,7 +2979,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('eventLinks:create', async (event, data) => {
+  safeHandle('eventLinks:create', async (event, data) => {
     try {
       const caseDb = currentCaseDb;
       const id = uuidv4();
@@ -2995,7 +3004,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('eventLinks:delete', async (event, linkId) => {
+  safeHandle('eventLinks:delete', async (event, linkId) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM event_links WHERE id = ?').run(linkId);
@@ -3005,7 +3014,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('eventLinks:suggest', async () => {
+  safeHandle('eventLinks:suggest', async () => {
     try {
       const caseDb = currentCaseDb;
       // Load all events with tags and actors
@@ -3024,7 +3033,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('eventTags:suggest', async (event, eventId) => {
+  safeHandle('eventTags:suggest', async (event, eventId) => {
     try {
       const caseDb = currentCaseDb;
       const evt = caseDb.prepare('SELECT title, description, what_happened FROM events WHERE id = ?').get(eventId);
@@ -3038,7 +3047,7 @@ function registerIpcHandlers() {
 
   // ==================== INCIDENT EVENTS ====================
 
-  ipcMain.handle('incidentEvents:list', async (event, incidentId) => {
+  safeHandle('incidentEvents:list', async (event, incidentId) => {
     try {
       const caseDb = currentCaseDb;
       const items = caseDb.prepare(`
@@ -3062,7 +3071,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('incidentEvents:link', async (event, incidentId, eventId, eventRole) => {
+  safeHandle('incidentEvents:link', async (event, incidentId, eventId, eventRole) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('INSERT INTO incident_events (id, incident_id, event_id, event_role) VALUES (?, ?, ?, ?)').run(
@@ -3074,7 +3083,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('incidentEvents:unlink', async (event, incidentId, eventId) => {
+  safeHandle('incidentEvents:unlink', async (event, incidentId, eventId) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM incident_events WHERE incident_id = ? AND event_id = ?').run(incidentId, eventId);
@@ -3086,7 +3095,7 @@ function registerIpcHandlers() {
 
   // ==================== DOCUMENT COPY ====================
 
-  ipcMain.handle('documents:copy', async (event, docId) => {
+  safeHandle('documents:copy', async (event, docId) => {
     try {
       const caseDb = currentCaseDb;
 
@@ -3127,7 +3136,7 @@ function registerIpcHandlers() {
 
   // ==================== DAMAGES ====================
 
-  ipcMain.handle('damages:list', async () => {
+  safeHandle('damages:list', async () => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: false, error: 'No case open' };
@@ -3139,7 +3148,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('damages:create', async (event, data) => {
+  safeHandle('damages:create', async (event, data) => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: false, error: 'No case open' };
@@ -3159,7 +3168,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('damages:update', async (event, id, updates) => {
+  safeHandle('damages:update', async (event, id, updates) => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: false, error: 'No case open' };
@@ -3196,7 +3205,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('damages:delete', async (event, id) => {
+  safeHandle('damages:delete', async (event, id) => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: false, error: 'No case open' };
@@ -3210,7 +3219,7 @@ function registerIpcHandlers() {
 
   // ==================== CASE CONTEXT ====================
 
-  ipcMain.handle('context:get', async (event, caseId) => {
+  safeHandle('context:get', async (event, caseId) => {
     try {
       const caseDb = currentCaseDb;
 
@@ -3238,7 +3247,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('context:update', async (event, caseId, updates) => {
+  safeHandle('context:update', async (event, caseId, updates) => {
     try {
       const caseDb = currentCaseDb;
 
@@ -3290,7 +3299,7 @@ function registerIpcHandlers() {
   });
   // ==================== CATEGORIZER ====================
 
-  ipcMain.handle('categorizer:categorize', async (event, text, isPrimary) => {
+  safeHandle('categorizer:categorize', async (event, text, isPrimary) => {
     try {
       const result = categorize(text, isPrimary || false);
       return { success: true, result };
@@ -3299,7 +3308,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('categorizer:buildChain', async (event, entries) => {
+  safeHandle('categorizer:buildChain', async (event, entries) => {
     try {
       const result = categorizeAndBuildChain(entries);
       return { success: true, ...result };
@@ -3308,7 +3317,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('categorizer:analyzeDocuments', async () => {
+  safeHandle('categorizer:analyzeDocuments', async () => {
     try {
       if (!currentCaseDb) {
         return { success: false, error: 'No case is open' };
@@ -3379,7 +3388,7 @@ function registerIpcHandlers() {
 
   // ==================== CONTEXT DOCUMENTS ====================
 
-  ipcMain.handle('contextDocs:list', async () => {
+  safeHandle('contextDocs:list', async () => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
       const docs = contextStore.listContextDocuments(currentCaseDb);
@@ -3389,7 +3398,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('contextDocs:ingest', async (event, { text, filename, docType, displayName, dateEffective, notes }) => {
+  safeHandle('contextDocs:ingest', async (event, { text, filename, docType, displayName, dateEffective, notes }) => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
       const result = contextStore.ingestContextDocument(currentCaseDb, {
@@ -3401,7 +3410,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('contextDocs:ingestFile', async (event, { filePath, docType, displayName, dateEffective, notes }) => {
+  safeHandle('contextDocs:ingestFile', async (event, { filePath, docType, displayName, dateEffective, notes }) => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
       const path = require('path');
@@ -3461,7 +3470,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('contextDocs:delete', async (event, docId) => {
+  safeHandle('contextDocs:delete', async (event, docId) => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
       contextStore.deleteContextDocument(currentCaseDb, docId);
@@ -3471,7 +3480,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('contextDocs:toggleActive', async (event, docId, isActive) => {
+  safeHandle('contextDocs:toggleActive', async (event, docId, isActive) => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
       contextStore.toggleContextDocumentActive(currentCaseDb, docId, isActive);
@@ -3481,7 +3490,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('contextDocs:get', async (event, docId) => {
+  safeHandle('contextDocs:get', async (event, docId) => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
       const doc = contextStore.getContextDocument(currentCaseDb, docId);
@@ -3491,7 +3500,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('contextDocs:search', async (event, query) => {
+  safeHandle('contextDocs:search', async (event, query) => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
       const results = contextStore.searchContextDocuments(currentCaseDb, query);
@@ -3501,7 +3510,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('contextDocs:signalsSummary', async () => {
+  safeHandle('contextDocs:signalsSummary', async () => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
       const summary = contextStore.activeSignalsSummary(currentCaseDb);
@@ -3511,13 +3520,13 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('contextDocs:types', async () => {
+  safeHandle('contextDocs:types', async () => {
     return { success: true, types: contextStore.DOCUMENT_TYPES };
   });
 
   // ==================== SETTINGS ====================
 
-  ipcMain.handle('settings:get', async (event, key) => {
+  safeHandle('settings:get', async (event, key) => {
     try {
       const value = db.getSetting(key);
       return { success: true, value };
@@ -3526,7 +3535,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('settings:set', async (event, key, value) => {
+  safeHandle('settings:set', async (event, key, value) => {
     try {
       db.setSetting(key, value);
       return { success: true };
@@ -3538,7 +3547,7 @@ function registerIpcHandlers() {
   // ==================== ASSESSOR ====================
   console.log('[IPC] Registering assessor handlers...');
 
-  ipcMain.handle('assessor:assess', async (event, { inputText, docType }) => {
+  safeHandle('assessor:assess', async (event, { inputText, docType }) => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
 
@@ -3585,7 +3594,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('assessor:expandFlag', async (event, { flag, inputText }) => {
+  safeHandle('assessor:expandFlag', async (event, { flag, inputText }) => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
       const apiKey = db.getSetting('anthropic_api_key');
@@ -3617,7 +3626,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('assessor:deepAnalysis', async (event, { result, inputText }) => {
+  safeHandle('assessor:deepAnalysis', async (event, { result, inputText }) => {
     try {
       if (!currentCaseDb) return { success: false, error: 'No case open' };
       const apiKey = db.getSetting('anthropic_api_key');
@@ -3649,13 +3658,13 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('assessor:inputTypes', async () => {
+  safeHandle('assessor:inputTypes', async () => {
     return { success: true, types: DOCUMENT_INPUT_TYPES };
   });
 
   // ==================== SESSION-9B: CRUD HELPERS ====================
 
-  ipcMain.handle('events:get', async (event, caseId, eventId) => {
+  safeHandle('events:get', async (event, caseId, eventId) => {
     try {
       const caseDb = currentCaseDb;
       const evt = caseDb.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
@@ -3666,7 +3675,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:getTags', async (event, caseId, eventId) => {
+  safeHandle('events:getTags', async (event, caseId, eventId) => {
     try {
       const caseDb = currentCaseDb;
       const tags = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(eventId).map(r => r.tag);
@@ -3676,7 +3685,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:updateTags', async (event, caseId, eventId, tags) => {
+  safeHandle('events:updateTags', async (event, caseId, eventId, tags) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId);
@@ -3690,7 +3699,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:getLinkedDocuments', async (event, caseId, eventId) => {
+  safeHandle('events:getLinkedDocuments', async (event, caseId, eventId) => {
     try {
       const caseDb = currentCaseDb;
       const documents = caseDb.prepare(`
@@ -3705,7 +3714,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('events:getForDocument', async (event, caseId, docId) => {
+  safeHandle('events:getForDocument', async (event, caseId, docId) => {
     try {
       const caseDb = currentCaseDb;
       const events = caseDb.prepare(`
@@ -3722,7 +3731,7 @@ function registerIpcHandlers() {
 
   // ==================== SESSION-9C: CONTEXT EVENTS ====================
 
-  ipcMain.handle('events:updateContextStatus', async (event, caseId, eventId, isContext, scope) => {
+  safeHandle('events:updateContextStatus', async (event, caseId, eventId, isContext, scope) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare(`
@@ -3739,7 +3748,7 @@ function registerIpcHandlers() {
 
   // ==================== SESSION-9C: COMPARATORS ====================
 
-  ipcMain.handle('comparators:list', async () => {
+  safeHandle('comparators:list', async () => {
     try {
       const caseDb = currentCaseDb;
       const comparators = caseDb.prepare(
@@ -3751,7 +3760,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('comparators:create', async (event, data) => {
+  safeHandle('comparators:create', async (event, data) => {
     try {
       const caseDb = currentCaseDb;
       const id = uuidv4();
@@ -3772,7 +3781,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('comparators:update', async (event, comparatorId, data) => {
+  safeHandle('comparators:update', async (event, comparatorId, data) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare(`
@@ -3795,7 +3804,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('comparators:delete', async (event, comparatorId) => {
+  safeHandle('comparators:delete', async (event, comparatorId) => {
     try {
       const caseDb = currentCaseDb;
       caseDb.prepare('DELETE FROM comparators WHERE id = ?').run(comparatorId);
@@ -3807,7 +3816,7 @@ function registerIpcHandlers() {
 
   // ==================== SESSION-9C: CONNECTIONS VIEW ====================
 
-  ipcMain.handle('connections:list', async (event, caseId) => {
+  safeHandle('connections:list', async (event, caseId) => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: false, error: 'No case open', connections: [] };
@@ -3833,7 +3842,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('connections:autoDetect', async (event, caseId) => {
+  safeHandle('connections:autoDetect', async (event, caseId) => {
     try {
       console.log('[IPC] Auto-detecting connections for case:', caseId);
       const caseDb = currentCaseDb;
@@ -3850,7 +3859,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('connections:create', async (event, caseId, data) => {
+  safeHandle('connections:create', async (event, caseId, data) => {
     try {
       const id = uuidv4();
       const caseDb = currentCaseDb;
@@ -3874,7 +3883,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('connections:update', async (event, caseId, connectionId, data) => {
+  safeHandle('connections:update', async (event, caseId, connectionId, data) => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: false, error: 'No case open' };
@@ -3896,7 +3905,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('connections:delete', async (event, caseId, connectionId) => {
+  safeHandle('connections:delete', async (event, caseId, connectionId) => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: false, error: 'No case open' };
@@ -3911,7 +3920,7 @@ function registerIpcHandlers() {
 
   // ==================== SESSION-9C: ENCRYPTED EXPORT ====================
 
-  ipcMain.handle('export:generateHTML', async (event, passcode, expiryDays) => {
+  safeHandle('export:generateHTML', async (event, passcode, expiryDays) => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: false, error: 'No case open' };
@@ -3949,7 +3958,7 @@ function registerIpcHandlers() {
 
   // ==================== LAWYER BRIEFS (SESSION-9E) ====================
 
-  ipcMain.handle('brief:generate', async () => {
+  safeHandle('brief:generate', async () => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: false, error: 'No case open' };
@@ -4008,7 +4017,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('brief:latest', async () => {
+  safeHandle('brief:latest', async () => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: true, brief: null };
@@ -4020,7 +4029,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('brief:markStale', async () => {
+  safeHandle('brief:markStale', async () => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: true };
@@ -4031,7 +4040,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('brief:versions', async () => {
+  safeHandle('brief:versions', async () => {
     try {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: true, versions: [] };
@@ -4042,7 +4051,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('brief:exportMarkdown', async (event, brief) => {
+  safeHandle('brief:exportMarkdown', async (event, brief) => {
     try {
       const md = buildMarkdownExport(brief);
       const result = await dialog.showSaveDialog({
@@ -4058,7 +4067,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('brief:exportHTML', async (event, brief) => {
+  safeHandle('brief:exportHTML', async (event, brief) => {
     try {
       const html = buildHTMLExport(brief);
       const result = await dialog.showSaveDialog({

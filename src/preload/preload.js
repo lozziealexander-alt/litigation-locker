@@ -1,217 +1,229 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+// Wrap ipcRenderer.invoke so unregistered-handler errors are caught and
+// logged instead of throwing an uncaught promise rejection in every caller.
+function safeInvoke(channel, ...args) {
+  return safeInvoke(channel, ...args).catch(err => {
+    if (err && err.message && err.message.includes('No handler registered')) {
+      console.error(`[IPC] No handler registered for '${channel}'. Ensure all handlers loaded.`);
+      return { success: false, error: `No handler registered for '${channel}'` };
+    }
+    throw err;
+  });
+}
+
 // Expose protected APIs to renderer
 contextBridge.exposeInMainWorld('api', {
   // Vault operations
   vault: {
-    exists: () => ipcRenderer.invoke('vault:exists'),
-    setup: (passphrase) => ipcRenderer.invoke('vault:setup', passphrase),
-    unlock: (passphrase) => ipcRenderer.invoke('vault:unlock', passphrase),
-    lock: () => ipcRenderer.invoke('vault:lock'),
-    isUnlocked: () => ipcRenderer.invoke('vault:isUnlocked')
+    exists: () => safeInvoke('vault:exists'),
+    setup: (passphrase) => safeInvoke('vault:setup', passphrase),
+    unlock: (passphrase) => safeInvoke('vault:unlock', passphrase),
+    lock: () => safeInvoke('vault:lock'),
+    isUnlocked: () => safeInvoke('vault:isUnlocked')
   },
 
   // Kill switch
   burn: {
-    execute: (scope) => ipcRenderer.invoke('burn:execute', scope),
-    verify: () => ipcRenderer.invoke('burn:verify')
+    execute: (scope) => safeInvoke('burn:execute', scope),
+    verify: () => safeInvoke('burn:verify')
   },
 
   // Case operations
   cases: {
-    list: () => ipcRenderer.invoke('cases:list'),
-    create: (name) => ipcRenderer.invoke('cases:create', name),
-    open: (caseId) => ipcRenderer.invoke('cases:open', caseId),
-    current: () => ipcRenderer.invoke('cases:current'),
-    rename: (caseId, newName) => ipcRenderer.invoke('cases:rename', caseId, newName)
+    list: () => safeInvoke('cases:list'),
+    create: (name) => safeInvoke('cases:create', name),
+    open: (caseId) => safeInvoke('cases:open', caseId),
+    current: () => safeInvoke('cases:current'),
+    rename: (caseId, newName) => safeInvoke('cases:rename', caseId, newName)
   },
 
   // Document operations
   documents: {
-    ingest: (filePaths) => ipcRenderer.invoke('documents:ingest', filePaths),
-    list: () => ipcRenderer.invoke('documents:list'),
-    get: (docId) => ipcRenderer.invoke('documents:get', docId),
-    updateContext: (docId, context) => ipcRenderer.invoke('documents:updateContext', docId, context),
-    updateDate: (docId, date, confidence) => ipcRenderer.invoke('documents:updateDate', docId, date, confidence),
-    updateType: (docId, evidenceType) => ipcRenderer.invoke('documents:updateType', docId, evidenceType),
-    rename: (docId, newFilename) => ipcRenderer.invoke('documents:rename', docId, newFilename),
-    getContent: (docId) => ipcRenderer.invoke('documents:getContent', docId),
-    reclassify: () => ipcRenderer.invoke('documents:reclassify'),
+    ingest: (filePaths) => safeInvoke('documents:ingest', filePaths),
+    list: () => safeInvoke('documents:list'),
+    get: (docId) => safeInvoke('documents:get', docId),
+    updateContext: (docId, context) => safeInvoke('documents:updateContext', docId, context),
+    updateDate: (docId, date, confidence) => safeInvoke('documents:updateDate', docId, date, confidence),
+    updateType: (docId, evidenceType) => safeInvoke('documents:updateType', docId, evidenceType),
+    rename: (docId, newFilename) => safeInvoke('documents:rename', docId, newFilename),
+    getContent: (docId) => safeInvoke('documents:getContent', docId),
+    reclassify: () => safeInvoke('documents:reclassify'),
     // Date entries (multi-date timeline)
-    addDateEntry: (docId, date, label, confidence) => ipcRenderer.invoke('documents:addDateEntry', docId, date, label, confidence),
-    removeDateEntry: (entryId) => ipcRenderer.invoke('documents:removeDateEntry', entryId),
-    getDateEntries: (docId) => ipcRenderer.invoke('documents:getDateEntries', docId),
+    addDateEntry: (docId, date, label, confidence) => safeInvoke('documents:addDateEntry', docId, date, label, confidence),
+    removeDateEntry: (entryId) => safeInvoke('documents:removeDateEntry', entryId),
+    getDateEntries: (docId) => safeInvoke('documents:getDateEntries', docId),
     // Group linking
-    setGroup: (docId, groupId) => ipcRenderer.invoke('documents:setGroup', docId, groupId),
-    removeGroup: (docId) => ipcRenderer.invoke('documents:removeGroup', docId),
+    setGroup: (docId, groupId) => safeInvoke('documents:setGroup', docId, groupId),
+    removeGroup: (docId) => safeInvoke('documents:removeGroup', docId),
     // Recap status
-    updateRecapStatus: (docId, isRecap, responseReceived) => ipcRenderer.invoke('documents:updateRecapStatus', docId, isRecap, responseReceived),
-    updateDocumentSubtype: (docId, subtype) => ipcRenderer.invoke('documents:updateDocumentSubtype', docId, subtype),
-    delete: (docId) => ipcRenderer.invoke('documents:delete', docId),
-    copy: (docId) => ipcRenderer.invoke('documents:copy', docId),
-    open: (docId) => ipcRenderer.invoke('documents:open', docId)
+    updateRecapStatus: (docId, isRecap, responseReceived) => safeInvoke('documents:updateRecapStatus', docId, isRecap, responseReceived),
+    updateDocumentSubtype: (docId, subtype) => safeInvoke('documents:updateDocumentSubtype', docId, subtype),
+    delete: (docId) => safeInvoke('documents:delete', docId),
+    copy: (docId) => safeInvoke('documents:copy', docId),
+    open: (docId) => safeInvoke('documents:open', docId)
   },
 
   // Group operations (document linking)
   groups: {
-    create: (name, description, color) => ipcRenderer.invoke('groups:create', name, description, color),
-    list: () => ipcRenderer.invoke('groups:list'),
-    delete: (groupId) => ipcRenderer.invoke('groups:delete', groupId),
-    getMembers: (groupId) => ipcRenderer.invoke('groups:getMembers', groupId)
+    create: (name, description, color) => safeInvoke('groups:create', name, description, color),
+    list: () => safeInvoke('groups:list'),
+    delete: (groupId) => safeInvoke('groups:delete', groupId),
+    getMembers: (groupId) => safeInvoke('groups:getMembers', groupId)
   },
 
   // Jurisdiction
   jurisdiction: {
-    get: () => ipcRenderer.invoke('jurisdiction:get'),
-    set: (value) => ipcRenderer.invoke('jurisdiction:set', value)
+    get: () => safeInvoke('jurisdiction:get'),
+    set: (value) => safeInvoke('jurisdiction:set', value)
   },
 
   // Incident operations
   incidents: {
-    list: () => ipcRenderer.invoke('incidents:list'),
-    create: (data) => ipcRenderer.invoke('incidents:create', data),
-    update: (id, updates) => ipcRenderer.invoke('incidents:update', id, updates),
-    delete: (id) => ipcRenderer.invoke('incidents:delete', id),
-    suggest: () => ipcRenderer.invoke('incidents:suggest'),
-    reclassify: () => ipcRenderer.invoke('incidents:reclassify')
+    list: () => safeInvoke('incidents:list'),
+    create: (data) => safeInvoke('incidents:create', data),
+    update: (id, updates) => safeInvoke('incidents:update', id, updates),
+    delete: (id) => safeInvoke('incidents:delete', id),
+    suggest: () => safeInvoke('incidents:suggest'),
+    reclassify: () => safeInvoke('incidents:reclassify')
   },
 
   // Actor operations
   actors: {
-    list: () => ipcRenderer.invoke('actors:list'),
-    create: (data) => ipcRenderer.invoke('actors:create', data),
-    update: (id, updates) => ipcRenderer.invoke('actors:update', id, updates),
-    delete: (id) => ipcRenderer.invoke('actors:delete', id),
-    merge: (keepId, mergeId) => ipcRenderer.invoke('actors:merge', keepId, mergeId),
-    getAppearances: (id) => ipcRenderer.invoke('actors:getAppearances', id),
-    setSelf: (id) => ipcRenderer.invoke('actors:setSelf', id),
-    checkDuplicates: () => ipcRenderer.invoke('actors:checkDuplicates'),
-    rescan: () => ipcRenderer.invoke('actors:rescan'),
-    getForDocument: (docId) => ipcRenderer.invoke('actors:getForDocument', docId),
-    addToDocument: (actorId, docId, role) => ipcRenderer.invoke('actors:addToDocument', actorId, docId, role),
-    removeFromDocument: (actorId, docId) => ipcRenderer.invoke('actors:removeFromDocument', actorId, docId),
+    list: () => safeInvoke('actors:list'),
+    create: (data) => safeInvoke('actors:create', data),
+    update: (id, updates) => safeInvoke('actors:update', id, updates),
+    delete: (id) => safeInvoke('actors:delete', id),
+    merge: (keepId, mergeId) => safeInvoke('actors:merge', keepId, mergeId),
+    getAppearances: (id) => safeInvoke('actors:getAppearances', id),
+    setSelf: (id) => safeInvoke('actors:setSelf', id),
+    checkDuplicates: () => safeInvoke('actors:checkDuplicates'),
+    rescan: () => safeInvoke('actors:rescan'),
+    getForDocument: (docId) => safeInvoke('actors:getForDocument', docId),
+    addToDocument: (actorId, docId, role) => safeInvoke('actors:addToDocument', actorId, docId, role),
+    removeFromDocument: (actorId, docId) => safeInvoke('actors:removeFromDocument', actorId, docId),
     // Actor registry methods
-    getRelationshipTypes: () => ipcRenderer.invoke('actors:getRelationshipTypes'),
-    resolveFromText: (text, confirmedIds) => ipcRenderer.invoke('actors:resolveFromText', text, confirmedIds),
-    findInText: (text) => ipcRenderer.invoke('actors:findInText', text),
-    getChain: () => ipcRenderer.invoke('actors:getChain'),
-    getSummary: () => ipcRenderer.invoke('actors:getSummary')
+    getRelationshipTypes: () => safeInvoke('actors:getRelationshipTypes'),
+    resolveFromText: (text, confirmedIds) => safeInvoke('actors:resolveFromText', text, confirmedIds),
+    findInText: (text) => safeInvoke('actors:findInText', text),
+    getChain: () => safeInvoke('actors:getChain'),
+    getSummary: () => safeInvoke('actors:getSummary')
   },
 
   // Pay record operations
   payRecords: {
-    list: () => ipcRenderer.invoke('payRecords:list'),
-    create: (data) => ipcRenderer.invoke('payRecords:create', data),
-    update: (id, updates) => ipcRenderer.invoke('payRecords:update', id, updates),
-    delete: (id) => ipcRenderer.invoke('payRecords:delete', id),
-    getForActor: (actorId) => ipcRenderer.invoke('payRecords:getForActor', actorId)
+    list: () => safeInvoke('payRecords:list'),
+    create: (data) => safeInvoke('payRecords:create', data),
+    update: (id, updates) => safeInvoke('payRecords:update', id, updates),
+    delete: (id) => safeInvoke('payRecords:delete', id),
+    getForActor: (actorId) => safeInvoke('payRecords:getForActor', actorId)
   },
 
   // Timeline operations
   timeline: {
-    get: () => ipcRenderer.invoke('timeline:get'),
-    getConnections: () => ipcRenderer.invoke('timeline:getConnections')
+    get: () => safeInvoke('timeline:get'),
+    getConnections: () => safeInvoke('timeline:getConnections')
   },
 
   // Precedent analysis
   precedents: {
-    analyze: (jurisdiction) => ipcRenderer.invoke('precedents:analyze', jurisdiction),
-    getDocumentBadges: (docId) => ipcRenderer.invoke('precedents:getDocumentBadges', docId)
+    analyze: (jurisdiction) => safeInvoke('precedents:analyze', jurisdiction),
+    getDocumentBadges: (docId) => safeInvoke('precedents:getDocumentBadges', docId)
   },
 
   // Events
   events: {
-    list: (caseId) => ipcRenderer.invoke('events:list', caseId),
-    generate: (caseId) => ipcRenderer.invoke('events:generate', caseId),
-    create: (caseId, data) => ipcRenderer.invoke('events:create', caseId, data),
-    update: (caseId, id, updates) => ipcRenderer.invoke('events:update', caseId, id, updates),
-    delete: (caseId, id) => ipcRenderer.invoke('events:delete', caseId, id),
-    linkEvidence: (caseId, eventId, docId) => ipcRenderer.invoke('events:linkEvidence', caseId, eventId, docId),
-    unlinkEvidence: (caseId, eventId, docId) => ipcRenderer.invoke('events:unlinkEvidence', caseId, eventId, docId),
-    getRelatedEvidence: (caseId, eventId) => ipcRenderer.invoke('events:getRelatedEvidence', caseId, eventId),
-    clone: (caseId, eventId) => ipcRenderer.invoke('events:clone', caseId, eventId),
-    reorder: (caseId, orderedIds) => ipcRenderer.invoke('events:reorder', caseId, orderedIds),
-    linkPrecedent: (caseId, eventId, precedentId, note) => ipcRenderer.invoke('events:linkPrecedent', caseId, eventId, precedentId, note),
-    unlinkPrecedent: (caseId, eventId, precedentId) => ipcRenderer.invoke('events:unlinkPrecedent', caseId, eventId, precedentId),
-    getPrecedents: (caseId, eventId) => ipcRenderer.invoke('events:getPrecedents', caseId, eventId),
-    breakApart: (caseId, eventId) => ipcRenderer.invoke('events:breakApart', caseId, eventId),
-    linkIncident: (caseId, eventId, incidentId, eventRole) => ipcRenderer.invoke('events:linkIncident', caseId, eventId, incidentId, eventRole),
-    unlinkIncident: (caseId, eventId, incidentId) => ipcRenderer.invoke('events:unlinkIncident', caseId, eventId, incidentId),
-    linkActor: (caseId, eventId, actorId, role) => ipcRenderer.invoke('events:linkActor', caseId, eventId, actorId, role),
-    unlinkActor: (caseId, eventId, actorId) => ipcRenderer.invoke('events:unlinkActor', caseId, eventId, actorId),
-    suggestLinks: (caseId, documentId) => ipcRenderer.invoke('events:suggestLinks', caseId, documentId),
-    linkDocumentV2: (caseId, eventId, docId, relevanceV2) => ipcRenderer.invoke('events:linkDocumentV2', caseId, eventId, docId, relevanceV2),
-    setDocumentWeight: (caseId, eventId, docId, weight) => ipcRenderer.invoke('events:setDocumentWeight', caseId, eventId, docId, weight),
-    get: (caseId, eventId) => ipcRenderer.invoke('events:get', caseId, eventId),
-    getTags: (caseId, eventId) => ipcRenderer.invoke('events:getTags', caseId, eventId),
-    updateTags: (caseId, eventId, tags) => ipcRenderer.invoke('events:updateTags', caseId, eventId, tags),
-    getLinkedDocuments: (caseId, eventId) => ipcRenderer.invoke('events:getLinkedDocuments', caseId, eventId),
-    getForDocument: (caseId, docId) => ipcRenderer.invoke('events:getForDocument', caseId, docId),
+    list: (caseId) => safeInvoke('events:list', caseId),
+    generate: (caseId) => safeInvoke('events:generate', caseId),
+    create: (caseId, data) => safeInvoke('events:create', caseId, data),
+    update: (caseId, id, updates) => safeInvoke('events:update', caseId, id, updates),
+    delete: (caseId, id) => safeInvoke('events:delete', caseId, id),
+    linkEvidence: (caseId, eventId, docId) => safeInvoke('events:linkEvidence', caseId, eventId, docId),
+    unlinkEvidence: (caseId, eventId, docId) => safeInvoke('events:unlinkEvidence', caseId, eventId, docId),
+    getRelatedEvidence: (caseId, eventId) => safeInvoke('events:getRelatedEvidence', caseId, eventId),
+    clone: (caseId, eventId) => safeInvoke('events:clone', caseId, eventId),
+    reorder: (caseId, orderedIds) => safeInvoke('events:reorder', caseId, orderedIds),
+    linkPrecedent: (caseId, eventId, precedentId, note) => safeInvoke('events:linkPrecedent', caseId, eventId, precedentId, note),
+    unlinkPrecedent: (caseId, eventId, precedentId) => safeInvoke('events:unlinkPrecedent', caseId, eventId, precedentId),
+    getPrecedents: (caseId, eventId) => safeInvoke('events:getPrecedents', caseId, eventId),
+    breakApart: (caseId, eventId) => safeInvoke('events:breakApart', caseId, eventId),
+    linkIncident: (caseId, eventId, incidentId, eventRole) => safeInvoke('events:linkIncident', caseId, eventId, incidentId, eventRole),
+    unlinkIncident: (caseId, eventId, incidentId) => safeInvoke('events:unlinkIncident', caseId, eventId, incidentId),
+    linkActor: (caseId, eventId, actorId, role) => safeInvoke('events:linkActor', caseId, eventId, actorId, role),
+    unlinkActor: (caseId, eventId, actorId) => safeInvoke('events:unlinkActor', caseId, eventId, actorId),
+    suggestLinks: (caseId, documentId) => safeInvoke('events:suggestLinks', caseId, documentId),
+    linkDocumentV2: (caseId, eventId, docId, relevanceV2) => safeInvoke('events:linkDocumentV2', caseId, eventId, docId, relevanceV2),
+    setDocumentWeight: (caseId, eventId, docId, weight) => safeInvoke('events:setDocumentWeight', caseId, eventId, docId, weight),
+    get: (caseId, eventId) => safeInvoke('events:get', caseId, eventId),
+    getTags: (caseId, eventId) => safeInvoke('events:getTags', caseId, eventId),
+    updateTags: (caseId, eventId, tags) => safeInvoke('events:updateTags', caseId, eventId, tags),
+    getLinkedDocuments: (caseId, eventId) => safeInvoke('events:getLinkedDocuments', caseId, eventId),
+    getForDocument: (caseId, docId) => safeInvoke('events:getForDocument', caseId, docId),
     updateContextStatus: (caseId, eventId, isContext, scope) =>
-      ipcRenderer.invoke('events:updateContextStatus', caseId, eventId, isContext, scope)
+      safeInvoke('events:updateContextStatus', caseId, eventId, isContext, scope)
   },
 
   // Comparators (SESSION-9C)
   comparators: {
-    list: () => ipcRenderer.invoke('comparators:list'),
-    create: (data) => ipcRenderer.invoke('comparators:create', data),
-    update: (id, data) => ipcRenderer.invoke('comparators:update', id, data),
-    delete: (id) => ipcRenderer.invoke('comparators:delete', id)
+    list: () => safeInvoke('comparators:list'),
+    create: (data) => safeInvoke('comparators:create', data),
+    update: (id, data) => safeInvoke('comparators:update', id, data),
+    delete: (id) => safeInvoke('comparators:delete', id)
   },
 
   // Connections (SESSION-9D)
   connections: {
-    list: (caseId) => ipcRenderer.invoke('connections:list', caseId),
-    autoDetect: (caseId) => ipcRenderer.invoke('connections:autoDetect', caseId),
-    create: (caseId, data) => ipcRenderer.invoke('connections:create', caseId, data),
-    update: (caseId, id, data) => ipcRenderer.invoke('connections:update', caseId, id, data),
-    delete: (caseId, id) => ipcRenderer.invoke('connections:delete', caseId, id)
+    list: (caseId) => safeInvoke('connections:list', caseId),
+    autoDetect: (caseId) => safeInvoke('connections:autoDetect', caseId),
+    create: (caseId, data) => safeInvoke('connections:create', caseId, data),
+    update: (caseId, id, data) => safeInvoke('connections:update', caseId, id, data),
+    delete: (caseId, id) => safeInvoke('connections:delete', caseId, id)
   },
 
   // Encrypted export (SESSION-9C)
   export: {
-    generateHTML: (passcode, expiryDays) => ipcRenderer.invoke('export:generateHTML', passcode, expiryDays)
+    generateHTML: (passcode, expiryDays) => safeInvoke('export:generateHTML', passcode, expiryDays)
   },
 
   // Event Tags
   eventTags: {
-    set: (eventId, tags) => ipcRenderer.invoke('eventTags:set', eventId, tags),
-    listAll: () => ipcRenderer.invoke('eventTags:listAll'),
-    suggest: (eventId) => ipcRenderer.invoke('eventTags:suggest', eventId)
+    set: (eventId, tags) => safeInvoke('eventTags:set', eventId, tags),
+    listAll: () => safeInvoke('eventTags:listAll'),
+    suggest: (eventId) => safeInvoke('eventTags:suggest', eventId)
   },
 
   // Event Links (Causality)
   eventLinks: {
-    list: () => ipcRenderer.invoke('eventLinks:list'),
-    create: (data) => ipcRenderer.invoke('eventLinks:create', data),
-    delete: (linkId) => ipcRenderer.invoke('eventLinks:delete', linkId),
-    suggest: () => ipcRenderer.invoke('eventLinks:suggest')
+    list: () => safeInvoke('eventLinks:list'),
+    create: (data) => safeInvoke('eventLinks:create', data),
+    delete: (linkId) => safeInvoke('eventLinks:delete', linkId),
+    suggest: () => safeInvoke('eventLinks:suggest')
   },
 
   // Incident Events
   incidentEvents: {
-    list: (incidentId) => ipcRenderer.invoke('incidentEvents:list', incidentId),
-    link: (incidentId, eventId, eventRole) => ipcRenderer.invoke('incidentEvents:link', incidentId, eventId, eventRole),
-    unlink: (incidentId, eventId) => ipcRenderer.invoke('incidentEvents:unlink', incidentId, eventId)
+    list: (incidentId) => safeInvoke('incidentEvents:list', incidentId),
+    link: (incidentId, eventId, eventRole) => safeInvoke('incidentEvents:link', incidentId, eventId, eventRole),
+    unlink: (incidentId, eventId) => safeInvoke('incidentEvents:unlink', incidentId, eventId)
   },
 
   // Damages
   damages: {
-    list: () => ipcRenderer.invoke('damages:list'),
-    create: (data) => ipcRenderer.invoke('damages:create', data),
-    update: (id, updates) => ipcRenderer.invoke('damages:update', id, updates),
-    delete: (id) => ipcRenderer.invoke('damages:delete', id)
+    list: () => safeInvoke('damages:list'),
+    create: (data) => safeInvoke('damages:create', data),
+    update: (id, updates) => safeInvoke('damages:update', id, updates),
+    delete: (id) => safeInvoke('damages:delete', id)
   },
 
   // Case context
   context: {
-    get: (caseId) => ipcRenderer.invoke('context:get', caseId),
-    update: (caseId, updates) => ipcRenderer.invoke('context:update', caseId, updates)
+    get: (caseId) => safeInvoke('context:get', caseId),
+    update: (caseId, updates) => safeInvoke('context:update', caseId, updates)
   },
 
   // File dialog
   dialog: {
-    openFiles: () => ipcRenderer.invoke('dialog:openFiles')
+    openFiles: () => safeInvoke('dialog:openFiles')
   },
 
   // File utilities (Electron 22+ requires webUtils for drag-and-drop file paths)
@@ -219,51 +231,51 @@ contextBridge.exposeInMainWorld('api', {
 
   // Categorizer (incident chain analysis)
   categorizer: {
-    categorize: (text, isPrimary) => ipcRenderer.invoke('categorizer:categorize', text, isPrimary),
-    buildChain: (entries) => ipcRenderer.invoke('categorizer:buildChain', entries),
-    analyzeDocuments: () => ipcRenderer.invoke('categorizer:analyzeDocuments')
+    categorize: (text, isPrimary) => safeInvoke('categorizer:categorize', text, isPrimary),
+    buildChain: (entries) => safeInvoke('categorizer:buildChain', entries),
+    analyzeDocuments: () => safeInvoke('categorizer:analyzeDocuments')
   },
 
   // Settings (secure backend storage)
   settings: {
-    get: (key) => ipcRenderer.invoke('settings:get', key),
-    set: (key, value) => ipcRenderer.invoke('settings:set', key, value)
+    get: (key) => safeInvoke('settings:get', key),
+    set: (key, value) => safeInvoke('settings:set', key, value)
   },
 
   // Context Documents (policy library)
   contextDocs: {
-    list: () => ipcRenderer.invoke('contextDocs:list'),
-    ingest: (data) => ipcRenderer.invoke('contextDocs:ingest', data),
-    ingestFile: (data) => ipcRenderer.invoke('contextDocs:ingestFile', data),
-    delete: (docId) => ipcRenderer.invoke('contextDocs:delete', docId),
-    toggleActive: (docId, isActive) => ipcRenderer.invoke('contextDocs:toggleActive', docId, isActive),
-    get: (docId) => ipcRenderer.invoke('contextDocs:get', docId),
-    search: (query) => ipcRenderer.invoke('contextDocs:search', query),
-    signalsSummary: () => ipcRenderer.invoke('contextDocs:signalsSummary'),
-    types: () => ipcRenderer.invoke('contextDocs:types')
+    list: () => safeInvoke('contextDocs:list'),
+    ingest: (data) => safeInvoke('contextDocs:ingest', data),
+    ingestFile: (data) => safeInvoke('contextDocs:ingestFile', data),
+    delete: (docId) => safeInvoke('contextDocs:delete', docId),
+    toggleActive: (docId, isActive) => safeInvoke('contextDocs:toggleActive', docId, isActive),
+    get: (docId) => safeInvoke('contextDocs:get', docId),
+    search: (query) => safeInvoke('contextDocs:search', query),
+    signalsSummary: () => safeInvoke('contextDocs:signalsSummary'),
+    types: () => safeInvoke('contextDocs:types')
   },
 
   // Assessor (document assessment engine)
   assessor: {
-    assess: (data) => ipcRenderer.invoke('assessor:assess', data),
-    expandFlag: (data) => ipcRenderer.invoke('assessor:expandFlag', data),
-    deepAnalysis: (data) => ipcRenderer.invoke('assessor:deepAnalysis', data),
-    inputTypes: () => ipcRenderer.invoke('assessor:inputTypes')
+    assess: (data) => safeInvoke('assessor:assess', data),
+    expandFlag: (data) => safeInvoke('assessor:expandFlag', data),
+    deepAnalysis: (data) => safeInvoke('assessor:deepAnalysis', data),
+    inputTypes: () => safeInvoke('assessor:inputTypes')
   },
 
   // Lawyer Briefs (SESSION-9E)
   brief: {
-    generate:       ()          => ipcRenderer.invoke('brief:generate'),
-    latest:         ()          => ipcRenderer.invoke('brief:latest'),
-    markStale:      ()          => ipcRenderer.invoke('brief:markStale'),
-    versions:       ()          => ipcRenderer.invoke('brief:versions'),
-    exportMarkdown: (brief)     => ipcRenderer.invoke('brief:exportMarkdown', brief),
-    exportHTML:     (brief)     => ipcRenderer.invoke('brief:exportHTML', brief)
+    generate:       ()          => safeInvoke('brief:generate'),
+    latest:         ()          => safeInvoke('brief:latest'),
+    markStale:      ()          => safeInvoke('brief:markStale'),
+    versions:       ()          => safeInvoke('brief:versions'),
+    exportMarkdown: (brief)     => safeInvoke('brief:exportMarkdown', brief),
+    exportHTML:     (brief)     => safeInvoke('brief:exportHTML', brief)
   },
 
   // Debug
   debug: {
-    testIngest: () => ipcRenderer.invoke('debug:testIngest')
+    testIngest: () => safeInvoke('debug:testIngest')
   },
 
   // Event bridge (SESSION-9B: case-change listener)
