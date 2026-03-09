@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { colors, shadows, spacing, typography, radius, getEvidenceColor, getSeverityColor } from '../styles/tokens';
 import DocumentLinkModal from '../components/DocumentLinkModal';
 import IncidentBuilder from '../components/IncidentBuilder';
+import NotifyModal, { NotifySummary } from '../components/NotifyModal';
 
 // ===== Constants =====
 
@@ -151,6 +152,9 @@ export default function Events({ caseId, onSelectEvent, onSelectDocument }) {
   const [showIncidentBuilder, setShowIncidentBuilder] = useState(false);
   const [expandedIncidentId, setExpandedIncidentId] = useState(null);
   const [expandedIncidentEvents, setExpandedIncidentEvents] = useState([]);
+  // Notification modal for incidents
+  const [notifyIncidentId, setNotifyIncidentId] = useState(null);
+  const [incidentNotifications, setIncidentNotifications] = useState({}); // { incidentId: [actors] }
 
   async function handleExpandIncident(incidentId) {
     if (expandedIncidentId === incidentId) {
@@ -160,9 +164,17 @@ export default function Events({ caseId, onSelectEvent, onSelectDocument }) {
     }
     setExpandedIncidentId(incidentId);
     try {
-      const result = await window.api.incidentEvents.list(incidentId);
-      if (result.success) {
-        setExpandedIncidentEvents(result.events || []);
+      const [evtResult, notifResult] = await Promise.all([
+        window.api.incidentEvents.list(incidentId),
+        window.api.notifications?.getForTarget('incident', incidentId)
+          .catch(() => ({ success: false }))
+          || Promise.resolve({ success: false })
+      ]);
+      if (evtResult.success) {
+        setExpandedIncidentEvents(evtResult.events || []);
+      }
+      if (notifResult?.success && notifResult.notifications) {
+        setIncidentNotifications(prev => ({ ...prev, [incidentId]: notifResult.notifications }));
       }
     } catch (e) {
       console.error('[Events] expand incident error:', e);
@@ -841,6 +853,26 @@ export default function Events({ caseId, onSelectEvent, onSelectDocument }) {
                             ))}
                           </div>
                         )}
+                        {/* Notifications */}
+                        <div style={{ marginTop: '8px' }}>
+                          {(incidentNotifications[inc.id] || []).length > 0 ? (
+                            <NotifySummary
+                              actors={incidentNotifications[inc.id]}
+                              onClick={() => setNotifyIncidentId(inc.id)}
+                            />
+                          ) : (
+                            <button
+                              style={{
+                                background: 'none', border: `1px dashed ${colors.border}`,
+                                borderRadius: '6px', padding: '4px 10px', fontSize: '11px',
+                                color: colors.textSecondary, cursor: 'pointer'
+                              }}
+                              onClick={() => setNotifyIncidentId(inc.id)}
+                            >
+                              {'\uD83D\uDD14'} Notify People
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1077,6 +1109,19 @@ export default function Events({ caseId, onSelectEvent, onSelectDocument }) {
           onClose={() => setShowIncidentBuilder(false)}
           onIncidentCreated={() => { loadData(); setShowIncidentBuilder(false); }}
           onSelectDocument={onSelectDocument}
+        />
+      )}
+
+      {/* Notify modal for incidents */}
+      {notifyIncidentId && (
+        <NotifyModal
+          targetType="incident"
+          targetId={notifyIncidentId}
+          onClose={() => setNotifyIncidentId(null)}
+          onNotified={(actors) => {
+            setIncidentNotifications(prev => ({ ...prev, [notifyIncidentId]: actors }));
+            setNotifyIncidentId(null);
+          }}
         />
       )}
     </div>

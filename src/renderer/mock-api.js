@@ -435,6 +435,23 @@ window.api = {
     openFiles: () => Promise.resolve({ canceled: true, filePaths: [] })
   },
 
+  // Notifications (multi-select people notified about documents/events/incidents)
+  notifications: {
+    _store: {},
+    getForTarget: function(targetType, targetId) {
+      const key = `${targetType}:${targetId}`;
+      return Promise.resolve({ success: true, notifications: this._store[key] || [] });
+    },
+    setForTarget: function(targetType, targetId, actorIds) {
+      const key = `${targetType}:${targetId}`;
+      this._store[key] = actorIds.map(id => {
+        const actor = _mockActors.find(a => a.id === id);
+        return actor ? { actor_id: id, name: actor.name, role: actor.role, classification: actor.classification, relationship_to_self: actor.relationship_to_self } : { actor_id: id, name: 'Unknown' };
+      });
+      return Promise.resolve({ success: true });
+    }
+  },
+
   // Electron webUtils mock for drag-and-drop file paths
   getPathForFile: (file) => file.name || 'unknown-file'
 };

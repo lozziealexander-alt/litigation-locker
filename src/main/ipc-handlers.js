@@ -3208,6 +3208,74 @@ function registerIpcHandlers() {
     }
   });
 
+  // ==================== NOTIFICATIONS ====================
+
+  ipcMain.handle('notifications:getForTarget', async (event, targetType, targetId) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      // Ensure table exists for older databases
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id TEXT PRIMARY KEY,
+          target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(target_type, target_id, actor_id)
+        )
+      `);
+
+      const notifications = caseDb.prepare(`
+        SELECT n.*, a.name, a.role, a.classification, a.relationship_to_self
+        FROM notifications n
+        JOIN actors a ON a.id = n.actor_id
+        WHERE n.target_type = ? AND n.target_id = ?
+        ORDER BY a.name
+      `).all(targetType, targetId);
+
+      return { success: true, notifications };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('notifications:setForTarget', async (event, targetType, targetId, actorIds) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      // Ensure table exists for older databases
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id TEXT PRIMARY KEY,
+          target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(target_type, target_id, actor_id)
+        )
+      `);
+
+      // Replace all notifications for this target
+      const deleteStmt = caseDb.prepare('DELETE FROM notifications WHERE target_type = ? AND target_id = ?');
+      const insertStmt = caseDb.prepare('INSERT INTO notifications (id, target_type, target_id, actor_id) VALUES (?, ?, ?, ?)');
+
+      const txn = caseDb.transaction(() => {
+        deleteStmt.run(targetType, targetId);
+        for (const actorId of actorIds) {
+          insertStmt.run(uuidv4(), targetType, targetId, actorId);
+        }
+      });
+      txn();
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // ==================== CASE CONTEXT ====================
 
   ipcMain.handle('context:get', async (event, caseId) => {

@@ -384,6 +384,17 @@ CREATE TABLE IF NOT EXISTS brief_versions (
   strength_score REAL
 );
 
+-- Notifications (who was notified about a document/event/incident)
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  target_type TEXT NOT NULL CHECK(target_type IN ('document', 'event', 'incident')),
+  target_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(target_type, target_id, actor_id)
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_target ON notifications(target_type, target_id);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_documents_date ON documents(document_date);
 CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(evidence_type);

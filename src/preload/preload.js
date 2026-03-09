@@ -261,6 +261,12 @@ contextBridge.exposeInMainWorld('api', {
     exportHTML:     (brief)     => ipcRenderer.invoke('brief:exportHTML', brief)
   },
 
+  // Notifications (multi-select people notified about documents/events/incidents)
+  notifications: {
+    getForTarget: (targetType, targetId) => ipcRenderer.invoke('notifications:getForTarget', targetType, targetId),
+    setForTarget: (targetType, targetId, actorIds) => ipcRenderer.invoke('notifications:setForTarget', targetType, targetId, actorIds)
+  },
+
   // Debug
   debug: {
     testIngest: () => ipcRenderer.invoke('debug:testIngest')
