@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 // Wrap ipcRenderer.invoke so unregistered-handler errors are caught and
 // logged instead of throwing an uncaught promise rejection in every caller.
 function safeInvoke(channel, ...args) {
-  return safeInvoke(channel, ...args).catch(err => {
+  return ipcRenderer.invoke(channel, ...args).catch(err => {
     if (err && err.message && err.message.includes('No handler registered')) {
       console.error(`[IPC] No handler registered for '${channel}'. Ensure all handlers loaded.`);
       return { success: false, error: `No handler registered for '${channel}'` };
