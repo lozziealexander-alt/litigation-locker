@@ -738,10 +738,57 @@ function openCase(caseId) {
       "SELECT id FROM events WHERE event_type = 'milestone'"
     ).all();
     if (milestoneEvents.length > 0) {
-      const updateStmt = caseDb.prepare("UPDATE events SET event_type = 'reported' WHERE event_type = 'milestone'");
-      updateStmt.run();
+      caseDb.prepare("UPDATE events SET event_type = 'reported' WHERE event_type = 'milestone'").run();
       console.log(`[DB] Session 8c: converted ${milestoneEvents.length} milestone events to reported`);
     }
+  }
+
+  // SESSION-9 A2: Schema for full CRUD (date_confidence, comparators, context_events, audit_log)
+  const evtCols9 = caseDb.prepare("PRAGMA table_info(events)").all().map(c => c.name);
+  if (!evtCols9.includes('date_confidence')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN date_confidence TEXT DEFAULT 'exact'");
+  }
+  if (!evtCols9.includes('is_context_event')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN is_context_event INTEGER DEFAULT 0");
+  }
+  if (!evtCols9.includes('edit_history')) {
+    caseDb.exec("ALTER TABLE events ADD COLUMN edit_history TEXT DEFAULT '[]'");
+  }
+
+  if (!caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='comparators'").get()) {
+    caseDb.exec(`CREATE TABLE IF NOT EXISTS comparators (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      role TEXT,
+      outcome TEXT,
+      circumstances TEXT,
+      relevance TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  }
+
+  if (!caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='context_events'").get()) {
+    caseDb.exec(`CREATE TABLE IF NOT EXISTS context_events (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      date_start DATE,
+      date_end DATE,
+      scope TEXT,
+      impact_on_case TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  }
+
+  if (!caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='audit_log'").get()) {
+    caseDb.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      action TEXT,
+      changes_json TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
   }
 
   return caseDb;
