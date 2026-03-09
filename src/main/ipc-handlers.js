@@ -159,6 +159,7 @@ function registerIpcHandlers() {
       }
 
       console.log('[IPC] cases:open success, caseId:', caseId, 'db:', !!currentCaseDb);
+      event.sender.send('case-changed', { caseId });
       return { success: true };
     } catch (error) {
       console.error('[IPC] cases:open error:', error.message);
@@ -2362,7 +2363,8 @@ function registerIpcHandlers() {
         responseDate: 'response_date',
         response_date: 'response_date',
         responseAdequate: 'response_adequate',
-        response_adequate: 'response_adequate'
+        response_adequate: 'response_adequate',
+        date_confidence: 'date_confidence'
       };
 
       const booleanFields = new Set(['employerNotified', 'responseAdequate', 'employer_notified', 'response_adequate']);
@@ -2374,6 +2376,18 @@ function registerIpcHandlers() {
           values.push(val);
         }
       }
+
+      // Track edit history before saving
+      try {
+        const current = caseDb.prepare('SELECT title, date, date_confidence, description FROM events WHERE id = ?').get(eventId);
+        if (current) {
+          const historyRaw = caseDb.prepare('SELECT edit_history FROM events WHERE id = ?').get(eventId)?.edit_history;
+          const history = JSON.parse(historyRaw || '[]');
+          history.push({ ...current, saved_at: new Date().toISOString() });
+          fields.push('edit_history = ?');
+          values.push(JSON.stringify(history));
+        }
+      } catch (e) { /* edit_history column may not exist on older DBs */ }
 
       fields.push("updated_at = datetime('now')");
       values.push(eventId);
@@ -3611,6 +3625,58 @@ function registerIpcHandlers() {
 
   ipcMain.handle('assessor:inputTypes', async () => {
     return { success: true, types: DOCUMENT_INPUT_TYPES };
+  });
+
+  // ==================== SESSION-9B: CRUD HELPERS ====================
+
+  ipcMain.handle('events:get', async (event, caseId, eventId) => {
+    try {
+      const caseDb = currentCaseDb;
+      const evt = caseDb.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
+      if (!evt) return { success: false, error: 'Event not found' };
+      return { success: true, event: evt };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('events:getTags', async (event, caseId, eventId) => {
+    try {
+      const caseDb = currentCaseDb;
+      const tags = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(eventId).map(r => r.tag);
+      return { success: true, tags };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('events:updateTags', async (event, caseId, eventId, tags) => {
+    try {
+      const caseDb = currentCaseDb;
+      caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId);
+      const stmt = caseDb.prepare('INSERT INTO event_tags (id, event_id, tag) VALUES (?, ?, ?)');
+      for (const tag of (tags || [])) {
+        stmt.run(uuidv4(), eventId, tag);
+      }
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('events:getLinkedDocuments', async (event, caseId, eventId) => {
+    try {
+      const caseDb = currentCaseDb;
+      const documents = caseDb.prepare(`
+        SELECT d.* FROM documents d
+        JOIN event_documents ed ON ed.document_id = d.id
+        WHERE ed.event_id = ?
+        ORDER BY d.document_date DESC
+      `).all(eventId);
+      return { success: true, documents };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   });
 
   console.log('[IPC] All handlers registered successfully');

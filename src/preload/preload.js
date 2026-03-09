@@ -140,7 +140,11 @@ contextBridge.exposeInMainWorld('api', {
     unlinkActor: (caseId, eventId, actorId) => ipcRenderer.invoke('events:unlinkActor', caseId, eventId, actorId),
     suggestLinks: (caseId, documentId) => ipcRenderer.invoke('events:suggestLinks', caseId, documentId),
     linkDocumentV2: (caseId, eventId, docId, relevanceV2) => ipcRenderer.invoke('events:linkDocumentV2', caseId, eventId, docId, relevanceV2),
-    setDocumentWeight: (caseId, eventId, docId, weight) => ipcRenderer.invoke('events:setDocumentWeight', caseId, eventId, docId, weight)
+    setDocumentWeight: (caseId, eventId, docId, weight) => ipcRenderer.invoke('events:setDocumentWeight', caseId, eventId, docId, weight),
+    get: (caseId, eventId) => ipcRenderer.invoke('events:get', caseId, eventId),
+    getTags: (caseId, eventId) => ipcRenderer.invoke('events:getTags', caseId, eventId),
+    updateTags: (caseId, eventId, tags) => ipcRenderer.invoke('events:updateTags', caseId, eventId, tags),
+    getLinkedDocuments: (caseId, eventId) => ipcRenderer.invoke('events:getLinkedDocuments', caseId, eventId)
   },
 
   // Event Tags
@@ -224,5 +228,19 @@ contextBridge.exposeInMainWorld('api', {
   // Debug
   debug: {
     testIngest: () => ipcRenderer.invoke('debug:testIngest')
+  },
+
+  // Event bridge (SESSION-9B: case-change listener)
+  on: (channel, callback) => {
+    const allowed = ['case-changed'];
+    if (allowed.includes(channel)) {
+      ipcRenderer.on(channel, (event, data) => callback(data));
+    }
+  },
+  off: (channel, callback) => {
+    const allowed = ['case-changed'];
+    if (allowed.includes(channel)) {
+      ipcRenderer.removeListener(channel, callback);
+    }
   }
 });

@@ -4,6 +4,8 @@ import { colors, shadows, spacing, typography, radius, getEvidenceColor, getSeve
 import CaseStrength from '../components/CaseStrength';
 import IncidentApproval from '../components/IncidentApproval';
 import ActorApproval from '../components/ActorApproval';
+import EditMomentModal from '../components/EditMomentModal';
+import DeleteConfirmModal from '../components/DeleteConfirmModal';
 
 // Evidence type icons
 const EVIDENCE_ICONS = {
@@ -80,6 +82,11 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
   const [showEventSpine, setShowEventSpine] = useState(true);
   const [expandedSpineEvent, setExpandedSpineEvent] = useState(null);
   const [eventLinks, setEventLinks] = useState([]);
+  // Unified timeline (B4)
+  const [timelineItems, setTimelineItems] = useState([]);
+  const [editingMoment, setEditingMoment] = useState(null);
+  const [deletingItem, setDeletingItem] = useState(null);
+  const [deleteImpact, setDeleteImpact] = useState(null);
   const [focusedItemIndex, setFocusedItemIndex] = useState(-1);
   const focusedItemRef = useRef(null);
   const caseIdRef = useRef(null);
@@ -241,6 +248,16 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
 
   useEffect(() => {
     loadTimeline();
+
+    // Re-load when case changes (SESSION-9B)
+    const handleCaseChange = () => {
+      console.log('[Timeline] Case changed, reloading timeline');
+      loadTimeline();
+    };
+    window.api.on?.('case-changed', handleCaseChange);
+    return () => {
+      window.api.off?.('case-changed', handleCaseChange);
+    };
   }, []);
 
   async function loadTimeline() {
@@ -249,14 +266,15 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
       const currentCase = await window.api.cases.current();
       const caseId = currentCase?.caseId;
       caseIdRef.current = caseId;
-      const [timelineResult, connectionsResult, precedentResult, incidentsResult, jurisdictionResult, actorsResult, eventsResult] = await Promise.all([
+      const [timelineResult, connectionsResult, precedentResult, incidentsResult, jurisdictionResult, actorsResult, eventsResult, documentsResult] = await Promise.all([
         window.api.timeline.get(),
         window.api.timeline.getConnections(),
         window.api.precedents.analyze(),
         window.api.incidents.list(),
         window.api.jurisdiction.get(),
         window.api.actors.list(),
-        caseId ? window.api.events.list(caseId) : Promise.resolve({ success: false })
+        window.api.events.list(caseId),
+        window.api.documents.list()
       ]);
 
       if (timelineResult.success) {
@@ -294,12 +312,43 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
         setActors(actorsResult.actors || []);
       }
       if (eventsResult.success) {
-        setEvents((eventsResult.events || []).sort((a, b) => {
+        const sortedEvents = (eventsResult.events || []).sort((a, b) => {
           if (a.date && b.date) return a.date.localeCompare(b.date);
           if (a.date) return -1;
           if (b.date) return 1;
           return 0;
-        }));
+        });
+        setEvents(sortedEvents);
+        console.log('[Timeline] Loaded events:', sortedEvents.length);
+
+        // Build unified timeline items (moments + documents merged)
+        // Use documents.list() to get ALL docs (dated + undated), not just timeline.dated
+        const allDocs = documentsResult?.success ? (documentsResult.documents || []) : (timelineResult.success ? (timelineResult.dated || []) : []);
+        console.log('[Timeline] Loaded documents:', allDocs.length);
+        const allItems = [
+          ...allDocs.map(d => ({
+            type: 'document',
+            id: d.id,
+            date: d.document_date,
+            dateConfidence: d.document_date_confidence || 'exact',
+            data: d
+          })),
+          ...sortedEvents.map(e => ({
+            type: 'moment',
+            id: e.id,
+            date: e.date,
+            dateConfidence: e.date_confidence || 'exact',
+            data: e,
+            documentCount: (e.documents || []).length,
+            linkedDocuments: e.documents || []
+          }))
+        ].sort((a, b) => {
+          if (!a.date) return 1;
+          if (!b.date) return -1;
+          return new Date(a.date) - new Date(b.date);
+        });
+        console.log('[Timeline] Merged timeline items:', allItems.length);
+        setTimelineItems(allItems);
       }
       // Load causality links
       try {
@@ -310,6 +359,90 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
       console.error('[Timeline] loadTimeline error:', err);
     }
     setLoading(false);
+  }
+
+  // ---- Unified timeline CRUD handlers (B7) ----
+
+  function getThreadColor(tags) {
+    if (!tags || tags.length === 0) return '#6B7280';
+    const tagColorMap = {
+      'protected_activity': '#8B5CF6',
+      'adverse_action': '#DC2626',
+      'sexual_harassment': '#DC2626',
+      'gender_harassment': '#F97316',
+      'retaliation': '#F59E0B',
+      'exclusion': '#10B981',
+      'pay_discrimination': '#3B82F6',
+      'hostile_environment': '#6366F1',
+      'help_request': '#A855F7'
+    };
+    for (const tag of tags) {
+      if (tagColorMap[tag]) return tagColorMap[tag];
+    }
+    return '#6B7280';
+  }
+
+  function formatTimelineDate(dateStr) {
+    if (!dateStr) return 'No date';
+    const date = new Date(dateStr + 'T00:00:00');
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  function handleEditMoment(momentId) {
+    setEditingMoment(momentId);
+  }
+
+  async function handleDeleteMoment(momentId) {
+    const moment = timelineItems.find(item => item.id === momentId && item.type === 'moment');
+    if (!moment) return;
+
+    const impact = [];
+    if (moment.documentCount > 0) {
+      impact.push(`${moment.documentCount} linked document${moment.documentCount !== 1 ? 's' : ''} will become standalone`);
+    }
+    impact.push('Thread strengths will recalculate');
+
+    setDeletingItem({ id: momentId, type: 'moment', data: moment.data });
+    setDeleteImpact(impact);
+  }
+
+  async function handleDeleteDocument(documentId) {
+    const doc = timelineItems.find(item => item.id === documentId && item.type === 'document');
+    if (!doc) return;
+
+    const impact = ['File will be permanently deleted'];
+    const linkedMoments = timelineItems.filter(item =>
+      item.type === 'moment' &&
+      (item.linkedDocuments || []).some(d => d.id === documentId)
+    );
+    if (linkedMoments.length > 0) {
+      impact.push(`Will be unlinked from ${linkedMoments.length} moment${linkedMoments.length !== 1 ? 's' : ''}`);
+      impact.push('Thread strengths will recalculate');
+    }
+
+    setDeletingItem({ id: documentId, type: 'document', data: doc.data });
+    setDeleteImpact(impact);
+  }
+
+  async function confirmDelete() {
+    if (!deletingItem) return;
+    try {
+      let result;
+      if (deletingItem.type === 'moment') {
+        result = await window.api.events.delete(caseIdRef.current, deletingItem.id);
+      } else if (deletingItem.type === 'document') {
+        result = await window.api.documents.delete(deletingItem.id);
+      }
+      if (result?.success) {
+        setDeletingItem(null);
+        setDeleteImpact(null);
+        await loadTimeline();
+      } else {
+        alert('Delete failed: ' + (result?.error || 'Unknown error'));
+      }
+    } catch (err) {
+      alert('Delete error: ' + err.message);
+    }
   }
 
   // ---- Filter dated/undated by hidden types and recap/subtype toggle ----
@@ -732,101 +865,12 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
         </div>
       )}
 
-      {/* Header */}
+      {/* Header (SESSION-9B cleanup) */}
       <div style={styles.header}>
         <div style={styles.headerLeft}>
           <h1 style={styles.title}>Timeline</h1>
-          <span style={styles.dateRange}>{dateRangeText}</span>
-          {spanDays > 1 && (
-            <span style={styles.spanBadge}>{spanDays} days</span>
-          )}
         </div>
-
         <div style={styles.headerRight}>
-          {escalation?.hasEscalation && (
-            <div style={styles.escalationBadge}>
-              <span style={styles.escalationIcon}>{'\u2197'}</span>
-              Escalating Pattern
-            </div>
-          )}
-
-          {precedentAnalysis && (
-            <button
-              style={styles.caseStrengthBtn}
-              onClick={() => setShowCaseStrength(true)}
-            >
-              <span style={styles.caseStrengthIcon}>{'\u2696\uFE0F'}</span>
-              Case: {precedentAnalysis.caseStrength}%
-            </button>
-          )}
-
-          {/* Jurisdiction toggle */}
-          <div style={styles.jurisdictionToggle}>
-            {['federal', 'state', 'both'].map(j => (
-              <button
-                key={j}
-                style={{
-                  ...styles.jurisdictionBtn,
-                  ...(jurisdiction === j ? styles.jurisdictionBtnActive : {})
-                }}
-                onClick={() => handleJurisdictionChange(j)}
-                title={
-                  j === 'federal' ? 'Federal law only (Title VII, EEOC 300-day)' :
-                  j === 'state' ? 'Florida / 11th Circuit (FCRA, FCHR 365-day)' :
-                  'Both federal and state standards'
-                }
-              >
-                {j === 'federal' ? 'Federal' : j === 'state' ? 'State' : 'Both'}
-              </button>
-            ))}
-          </div>
-
-          {/* Semantic zoom controls */}
-          {timeline.length > 0 && (
-            <div style={styles.zoomControls}>
-              <button
-                style={{
-                  ...styles.zoomButton,
-                  ...(canZoomOut ? {} : styles.zoomButtonDisabled)
-                }}
-                onClick={zoomOut}
-                disabled={!canZoomOut}
-                title="Zoom out"
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M3 7H11" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                </svg>
-              </button>
-              <span style={styles.zoomLabel}>
-                {ZOOM_LABELS[zoomLevel]}
-              </span>
-              <button
-                style={{
-                  ...styles.zoomButton,
-                  ...(canZoomIn ? {} : styles.zoomButtonDisabled)
-                }}
-                onClick={zoomIn}
-                disabled={!canZoomIn}
-                title="Zoom in"
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M7 3V11M3 7H11" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                </svg>
-              </button>
-            </div>
-          )}
-
-          {totalDocs > 0 && (
-            <button
-              style={styles.reclassifyBtn}
-              onClick={handleReclassify}
-              disabled={isIngesting}
-              title="Re-run inference-based classification on all documents"
-            >
-              {'\uD83E\uDDE0'} Re-classify
-            </button>
-          )}
-
           <button
             style={{
               ...styles.importButton,
@@ -837,27 +881,15 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
           >
             {isIngesting ? 'Importing...' : '+ Import Files'}
           </button>
-          <span style={styles.docCount}>
-            {totalDocs} document{totalDocs !== 1 ? 's' : ''}
-            {undated.length > 0 && ` \u00B7 ${undated.length} undated`}
-          </span>
         </div>
       </div>
 
-      {/* Evidence type legend — clickable filters */}
-      {activeTypes.length > 0 && (
+      {/* Evidence type legend removed (SESSION-9B: unified timeline replaces filter bar) */}
+      {false && (
         <div style={styles.legend}>
           <div style={styles.legendControls}>
-            <button
-              style={styles.legendControlBtn}
-              onClick={() => setHiddenTypes(new Set())}
-              title="Show all evidence types"
-            >Show All</button>
-            <button
-              style={styles.legendControlBtn}
-              onClick={() => setHiddenTypes(new Set(activeTypes))}
-              title="Hide all evidence types"
-            >Hide All</button>
+            <button style={styles.legendControlBtn}>Show All</button>
+            <button style={styles.legendControlBtn}>Hide All</button>
           </div>
           <div style={styles.legendPills}>
             {activeTypes.map(type => {
@@ -990,142 +1022,99 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
         </div>
       )}
 
-      {/* Events Spine + Arrow Navigation */}
-      {events.length > 0 && (
-        <div style={styles.eventSpineSection}>
-          <div style={styles.eventSpineHeader}>
-            <button style={styles.eventSpineToggle} onClick={() => setShowEventSpine(!showEventSpine)}>
-              {showEventSpine ? '\u25BC' : '\u25B6'} Events ({events.length})
-            </button>
-            {focusedItemIndex >= 0 && (
-              <div style={styles.arrowNav}>
-                <button style={styles.arrowBtn} onClick={() => setFocusedItemIndex(i => Math.max(i - 1, 0))}
-                  disabled={focusedItemIndex <= 0}>{'\u25C0'}</button>
-                <span style={styles.arrowLabel}>{focusedItemIndex + 1} / {navigableItems.length}</span>
-                <button style={styles.arrowBtn} onClick={() => setFocusedItemIndex(i => Math.min(i + 1, navigableItems.length - 1))}
-                  disabled={focusedItemIndex >= navigableItems.length - 1}>{'\u25B6'}</button>
-                <button style={styles.arrowDismiss} onClick={() => setFocusedItemIndex(-1)}>{'\u00D7'}</button>
-              </div>
-            )}
-            {focusedItemIndex < 0 && navigableItems.length > 0 && (
-              <button style={styles.startNavBtn} onClick={() => setFocusedItemIndex(0)}>
-                {'\u2194\uFE0F'} Navigate (or use arrow keys)
-              </button>
-            )}
+      {/* Events Spine removed (SESSION-9B cleanup) */}
+
+      {/* Unified Timeline (B4) — chronological view of moments + documents with edit/delete */}
+      {timelineItems.length > 0 && (
+        <div style={styles9b.unifiedSection}>
+          <div style={styles9b.unifiedHeader}>
+            <span style={styles9b.unifiedTitle}>🗓 Unified Timeline ({timelineItems.length} items)</span>
+            <span style={styles9b.unifiedHint}>Moments ⭕ and documents 📄 in chronological order</span>
           </div>
-          {showEventSpine && (
-            <div style={styles.eventSpineList}>
-              {events.map((evt, i) => {
-                const isFocused = focusedItemIndex >= 0 && navigableItems[focusedItemIndex]?.id === evt.id;
-                const eventColor = {
-                  'start': '#3B82F6', 'reported': '#8B5CF6', 'help': '#F97316',
-                  'adverse_action': '#DC2626', 'harassment': '#E11D48',
-                  'end': '#1F2937'
-                }[evt.event_type] || '#6B7280';
+          <div style={styles9b.unifiedList}>
+            {timelineItems.map(item => {
+              if (item.type === 'moment') {
+                const { data, documentCount, linkedDocuments } = item;
+                const itemTags = data.tags || [];
+                const threadColor = getThreadColor(itemTags);
+                const badgeSize = Math.min(2 + documentCount, 8);
                 return (
-                  <div key={evt.id} data-nav-id={evt.id} style={{
-                    ...styles.spineNode,
-                    borderLeftColor: eventColor,
-                    borderLeftWidth: '4px',
-                    background: expandedSpineEvent === evt.id ? eventColor + '18' : eventColor + '0C',
-                    ...(isFocused ? { background: eventColor + '20', boxShadow: `0 0 0 2px ${eventColor}` } : {})
-                  }} onClick={() => setExpandedSpineEvent(expandedSpineEvent === evt.id ? null : evt.id)}>
-                    <div style={styles.spineNodeHeader}>
-                      <span style={{
-                        ...styles.spineTypeBadge,
-                        background: eventColor, color: '#fff',
-                        padding: '2px 8px', borderRadius: radius.full, fontWeight: 700
-                      }}>
-                        {evt.event_type?.replace('_', ' ')}
-                      </span>
-                      <span style={{ ...styles.spineTitle, fontWeight: 700 }}>{evt.title}</span>
+                  <div key={`moment-${item.id}`} style={styles9b.unifiedItem}>
+                    <div style={{
+                      ...styles9b.momentBadge,
+                      borderColor: threadColor,
+                      borderWidth: `${badgeSize}px`,
+                      opacity: Math.min(0.4 + documentCount * 0.1, 1),
+                      boxShadow: documentCount > 0 ? `0 0 ${documentCount * 3}px ${threadColor}55` : 'none'
+                    }}>
+                      <span style={{ fontSize: '22px' }}>⭕</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
-                      {evt.date && (
-                        <span style={{ ...styles.spineDate, fontWeight: 600 }}>
-                          {new Date(evt.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                        </span>
-                      )}
-                      {evt.event_weight === 'major' && (
-                        <span style={{
-                          fontSize: '9px', fontWeight: 700, color: '#fff',
-                          background: '#DC2626', padding: '1px 6px', borderRadius: radius.full
-                        }}>MAJOR</span>
-                      )}
-                      {evt.event_weight === 'minor' && (
-                        <span style={{
-                          fontSize: '9px', fontWeight: 600, color: '#16A34A',
-                          background: '#16A34A18', padding: '1px 6px', borderRadius: radius.full
-                        }}>minor</span>
-                      )}
-                      <span style={{ marginLeft: 'auto', display: 'flex', gap: '4px', alignItems: 'center' }}>
-                        {onSelectEvent && (
-                          <button
-                            style={{
-                              background: eventColor + '15', border: `1px solid ${eventColor}30`,
-                              cursor: 'pointer', fontSize: '10px', padding: '2px 8px',
-                              color: eventColor, borderRadius: radius.sm, fontWeight: 600
-                            }}
-                            onClick={e => { e.stopPropagation(); onSelectEvent(evt); }}
-                            title="Open event panel"
-                          >Open</button>
+                    <div style={styles9b.itemContent}>
+                      <div style={styles9b.itemTitle}>{data.title}</div>
+                      <div style={styles9b.itemDate}>
+                        {formatTimelineDate(data.date)}
+                        {data.date_confidence && data.date_confidence !== 'exact' && (
+                          <span style={styles9b.dateConfidence}> ({data.date_confidence})</span>
                         )}
-                        <span style={{ fontSize: '10px', color: colors.textMuted }}>
-                          {expandedSpineEvent === evt.id ? '\u25B2' : '\u25BC'}
-                        </span>
-                      </span>
-                    </div>
-                    {expandedSpineEvent === evt.id && evt.description && (
-                      <div style={styles.spineExpanded}>
-                        <p style={{ fontSize: '12px', color: colors.textSecondary, margin: '4px 0 0 0', lineHeight: 1.5 }}>
-                          {evt.description.slice(0, 200)}{evt.description.length > 200 ? '...' : ''}
-                        </p>
                       </div>
-                    )}
+                      {itemTags.length > 0 && (
+                        <div style={styles9b.tagRow}>
+                          {itemTags.map(tag => (
+                            <span key={tag} style={{ ...styles9b.tag, borderColor: getThreadColor([tag]), color: getThreadColor([tag]) }}>
+                              {tag.replace(/_/g, ' ')}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {documentCount > 0 ? (
+                        <div style={styles9b.docCount}>
+                          📄 {documentCount} document{documentCount !== 1 ? 's' : ''}
+                          {(linkedDocuments || []).slice(0, 3).map(doc => (
+                            <div key={doc.id} style={styles9b.linkedDoc}>• {doc.filename}</div>
+                          ))}
+                          {(linkedDocuments || []).length > 3 && (
+                            <div style={styles9b.linkedDoc}>... and {linkedDocuments.length - 3} more</div>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={styles9b.noDocsWarning}>⚠️ No documents yet</div>
+                      )}
+                      <div style={styles9b.actionRow}>
+                        <button style={styles9b.actionBtn} onClick={() => handleEditMoment(item.id)}>✏️ Edit</button>
+                        <button style={{ ...styles9b.actionBtn, ...styles9b.dangerBtn }} onClick={() => handleDeleteMoment(item.id)}>🗑️ Delete</button>
+                      </div>
+                    </div>
                   </div>
                 );
-              })}
-              {/* Causality links between events */}
-              {eventLinks.length > 0 && (
-                <div style={{ marginTop: spacing.sm, borderTop: `1px solid ${colors.border}`, paddingTop: spacing.sm }}>
-                  <div style={{ fontSize: '10px', fontWeight: 700, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
-                    Causality Links ({eventLinks.length})
-                  </div>
-                  {eventLinks.map(link => {
-                    const sourceEvt = events.find(e => e.id === link.source_event_id);
-                    const targetEvt = events.find(e => e.id === link.target_event_id);
-                    if (!sourceEvt || !targetEvt) return null;
-                    const linkColor = link.link_type === 'caused' ? '#DC2626' : link.link_type === 'followed_by' ? '#F97316' : '#6B7280';
-                    return (
-                      <div key={link.id} style={{
-                        display: 'flex', alignItems: 'center', gap: '6px',
-                        padding: '3px 8px', marginBottom: '3px',
-                        borderRadius: radius.sm, fontSize: '11px',
-                        background: linkColor + '0A', borderLeft: `2px solid ${linkColor}`
-                      }}>
-                        <span style={{ fontWeight: 600, color: linkColor }}>
-                          {link.link_type === 'caused' ? '\u{1F525}' : '\u{1F517}'} {link.link_type}
-                        </span>
-                        <span style={{ color: colors.textSecondary, flex: 1 }}>
-                          {sourceEvt.title?.slice(0, 25)} {'\u2192'} {targetEvt.title?.slice(0, 25)}
-                        </span>
-                        {link.days_between != null && (
-                          <span style={{ fontSize: '10px', color: colors.textMuted }}>{link.days_between}d</span>
+              } else {
+                const { data } = item;
+                return (
+                  <div key={`doc-${item.id}`} style={styles9b.unifiedItem}>
+                    <div style={styles9b.docBadge}>
+                      <span style={{ fontSize: '20px' }}>📄</span>
+                    </div>
+                    <div style={styles9b.itemContent}>
+                      <div style={{ ...styles9b.itemTitle, fontSize: '14px', fontWeight: 500 }}>{data.filename}</div>
+                      <div style={styles9b.itemDate}>
+                        {formatTimelineDate(data.document_date)}
+                        {data.document_date_confidence && data.document_date_confidence !== 'exact' && (
+                          <span style={styles9b.dateConfidence}> ({data.document_date_confidence})</span>
                         )}
-                        <span style={{
-                          fontSize: '9px', fontWeight: 700, padding: '1px 4px',
-                          borderRadius: radius.full, color: '#fff',
-                          background: link.confidence >= 0.9 ? '#DC2626' : link.confidence >= 0.8 ? '#F97316' : '#EAB308'
-                        }}>
-                          {Math.round((link.confidence || 0) * 100)}%
-                        </span>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+                      {data.evidence_type && (
+                        <div style={{ ...styles9b.tag, display: 'inline-block', marginBottom: '8px' }}>
+                          {data.evidence_type.replace(/_/g, ' ')}
+                        </div>
+                      )}
+                      <div style={styles9b.actionRow}>
+                        <button style={{ ...styles9b.actionBtn, ...styles9b.dangerBtn }} onClick={() => handleDeleteDocument(item.id)}>🗑️ Delete</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+            })}
+          </div>
         </div>
       )}
 
@@ -1813,6 +1802,27 @@ export default function Timeline({ onSelectDocument, onSelectEvent, highlightDoc
             </div>
           </div>
         </div>
+      )}
+
+      {/* Edit Moment Modal (B5/B7) */}
+      {editingMoment !== null && (
+        <EditMomentModal
+          caseId={caseIdRef.current}
+          momentId={editingMoment}
+          onClose={() => setEditingMoment(null)}
+          onSave={() => { loadTimeline(); setEditingMoment(null); }}
+        />
+      )}
+
+      {/* Delete Confirm Modal (B6/B7) */}
+      {deletingItem && (
+        <DeleteConfirmModal
+          item={deletingItem.data}
+          itemType={deletingItem.type}
+          impact={deleteImpact}
+          onConfirm={confirmDelete}
+          onCancel={() => { setDeletingItem(null); setDeleteImpact(null); }}
+        />
       )}
     </div>
   );
@@ -3072,3 +3082,131 @@ styleSheet.textContent = `
   }
 `;
 document.head.appendChild(styleSheet);
+
+// SESSION-9B: Unified timeline styles
+const styles9b = {
+  unifiedSection: {
+    margin: '16px 0',
+    border: '1px solid #E5E7EB',
+    borderRadius: '12px',
+    overflow: 'hidden',
+    backgroundColor: '#FAFAFA'
+  },
+  unifiedHeader: {
+    padding: '12px 16px',
+    backgroundColor: '#F3F4F6',
+    borderBottom: '1px solid #E5E7EB',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+  },
+  unifiedTitle: {
+    fontSize: '14px',
+    fontWeight: 700,
+    color: '#374151'
+  },
+  unifiedHint: {
+    fontSize: '12px',
+    color: '#9CA3AF'
+  },
+  unifiedList: {
+    padding: '8px 0',
+    overflowY: 'auto',
+    maxHeight: 'calc(100vh - 350px)',
+    paddingRight: '10px'
+  },
+  unifiedItem: {
+    display: 'flex',
+    gap: '14px',
+    padding: '12px 16px',
+    alignItems: 'flex-start',
+    borderBottom: '1px solid #F3F4F6'
+  },
+  momentBadge: {
+    width: '56px',
+    height: '56px',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderStyle: 'solid',
+    backgroundColor: 'white',
+    flexShrink: 0,
+    transition: 'all 0.2s ease'
+  },
+  docBadge: {
+    width: '44px',
+    height: '44px',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3F4F6',
+    flexShrink: 0
+  },
+  itemContent: {
+    flex: 1,
+    minWidth: 0
+  },
+  itemTitle: {
+    fontSize: '15px',
+    fontWeight: 600,
+    marginBottom: '3px',
+    color: '#111827'
+  },
+  itemDate: {
+    fontSize: '13px',
+    color: '#6B7280',
+    marginBottom: '6px'
+  },
+  dateConfidence: {
+    fontSize: '11px',
+    color: '#9CA3AF'
+  },
+  tagRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '5px',
+    marginBottom: '8px'
+  },
+  tag: {
+    padding: '2px 8px',
+    fontSize: '11px',
+    borderRadius: '4px',
+    border: '1px solid currentColor',
+    textTransform: 'capitalize',
+    color: '#6B7280'
+  },
+  docCount: {
+    fontSize: '12px',
+    color: '#6B7280',
+    marginBottom: '8px'
+  },
+  linkedDoc: {
+    fontSize: '11px',
+    color: '#9CA3AF',
+    paddingLeft: '12px',
+    marginTop: '2px'
+  },
+  noDocsWarning: {
+    fontSize: '12px',
+    color: '#F59E0B',
+    marginBottom: '8px'
+  },
+  actionRow: {
+    display: 'flex',
+    gap: '8px'
+  },
+  actionBtn: {
+    padding: '4px 10px',
+    fontSize: '12px',
+    border: '1px solid #D1D5DB',
+    borderRadius: '4px',
+    backgroundColor: 'white',
+    cursor: 'pointer'
+  },
+  dangerBtn: {
+    borderColor: '#FCA5A5',
+    color: '#DC2626'
+  }
+};

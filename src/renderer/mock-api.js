@@ -275,7 +275,32 @@ window.api = {
     unlinkIncident: () => Promise.resolve({ success: true }),
     linkActor: () => Promise.resolve({ success: true }),
     unlinkActor: () => Promise.resolve({ success: true }),
-    linkDocumentV2: () => Promise.resolve({ success: true })
+    linkDocumentV2: () => Promise.resolve({ success: true }),
+    get: (caseId, eventId) => {
+      const allEvents = [
+        { id: 'anc-1', title: 'Employment Started', date: '2023-06-15', date_confidence: 'exact', description: 'Started working at Acme Corp', edit_history: '[]' },
+        { id: 'anc-2', title: 'Reported Discrimination to HR', date: '2024-01-10', date_confidence: 'exact', description: 'Filed formal complaint', edit_history: '[]' },
+        { id: 'anc-6', title: 'Excluded from Key Meetings', date: '2024-01-20', date_confidence: 'exact', description: 'Excluded after reporting', edit_history: '[]' },
+        { id: 'anc-7', title: 'Gendered Language Used', date: null, date_confidence: 'exact', description: 'Manager used gendered language', edit_history: '[]' },
+        { id: 'anc-3', title: 'Written Warning Issued', date: '2024-02-15', date_confidence: 'exact', description: 'Written warning 36 days after complaint', edit_history: '[]' },
+        { id: 'anc-8', title: 'Told to Stop Documenting', date: '2024-02-20', date_confidence: 'exact', description: 'Manager told to stop documenting', edit_history: '[]' },
+        { id: 'anc-4', title: 'EEOC Charge Filed', date: '2024-03-01', date_confidence: 'exact', description: 'Filed formal EEOC charge', edit_history: '[]' },
+        { id: 'anc-5', title: 'Employment Terminated', date: '2024-03-15', date_confidence: 'exact', description: 'Terminated 14 days after EEOC filing', edit_history: '[]' }
+      ];
+      const evt = allEvents.find(e => e.id === eventId) || allEvents[0];
+      return Promise.resolve({ success: true, event: evt });
+    },
+    getTags: (caseId, eventId) => {
+      const tagMap = {
+        'anc-1': ['employment_start'], 'anc-2': ['protected_activity'],
+        'anc-6': ['adverse_action', 'exclusion'], 'anc-7': ['gender_harassment', 'hostile_environment'],
+        'anc-3': ['adverse_action', 'retaliation'], 'anc-8': ['adverse_action', 'retaliation'],
+        'anc-4': ['protected_activity'], 'anc-5': ['adverse_action', 'retaliation']
+      };
+      return Promise.resolve({ success: true, tags: tagMap[eventId] || [] });
+    },
+    updateTags: () => Promise.resolve({ success: true }),
+    getLinkedDocuments: (caseId, eventId) => Promise.resolve({ success: true, documents: [] })
   },
   eventTags: {
     set: (eventId, tags) => Promise.resolve({ success: true }),
