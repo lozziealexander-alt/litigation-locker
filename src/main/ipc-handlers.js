@@ -54,7 +54,7 @@ function textSimilarity(textA, textB) {
 // Wrapper that logs but continues if a single handler fails to register
 function safeHandle(channel, handler) {
   try {
-    safeHandle(channel, handler);
+    ipcMain.handle(channel, handler);
   } catch (err) {
     console.error(`[IPC] Failed to register handler '${channel}':`, err.message);
   }
