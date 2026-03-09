@@ -7,13 +7,18 @@ const { PRECEDENTS } = require('./precedent-matcher');
  * Finds legally-significant connections between events by analyzing
  * through the lens of EEOC claim types and case precedents.
  *
- * Runs 6 analysis passes:
+ * Runs 11 analysis passes:
  * 1. Retaliation causal links (Burlington Northern, Thomas v. Cooper)
  * 2. Hostile environment patterns (Harris v. Forklift, National Railroad)
  * 3. Employer notice chains (Faragher-Ellerth)
  * 4. Escalation with legal threshold (Muldrow)
  * 5. Convincing mosaic links (Lewis v. Union City)
  * 6. Whistleblower retaliation (Sierminski, Gessner)
+ * 7. Sexual harassment chains (quid pro quo, severe single incident)
+ * 8. Pay discrimination patterns (Lilly Ledbetter, disparate pay)
+ * 9. Supervisor liability (Vance v. Ball State)
+ * 10. Retaliatory harassment (Monaghan — no severe/pervasive required)
+ * 11. FCRA discrimination (Harper v. Blockbuster — McDonnell Douglas)
  */
 class PrecedentConnectionAnalyzer {
 
@@ -36,6 +41,11 @@ class PrecedentConnectionAnalyzer {
     suggestions.push(...this.analyzeEscalationThreshold(events));
     suggestions.push(...this.analyzeConvincingMosaic(events, actors));
     suggestions.push(...this.analyzeWhistleblowerRetaliation(events));
+    suggestions.push(...this.analyzeSexualHarassmentChains(events, actors));
+    suggestions.push(...this.analyzePayDiscrimination(events));
+    suggestions.push(...this.analyzeSupervisorLiability(events, actors, caseDb, caseId));
+    suggestions.push(...this.analyzeRetaliatoryHarassment(events));
+    suggestions.push(...this.analyzeFCRADiscrimination(events, actors));
 
     console.log(`[PrecedentAnalyzer] Raw suggestions: ${suggestions.length}`);
 
@@ -448,6 +458,408 @@ class PrecedentConnectionAnalyzer {
           days_between: days,
           description: `Protected disclosure followed by adverse action within ${days} days`,
           reasoning: `Sierminski v. Transouth Financial: FL Whistleblower Act (Fla. Stat. 448.102) requires protected activity and adverse action be "not completely unrelated." ${days}-day proximity supports causal link. Note: Under Gessner v. Gulf Power (2024), FL requires proof of an ACTUAL violation, not just reasonable belief.`
+        });
+      }
+    }
+
+    return suggestions;
+  }
+
+  // ─── Pass 7: Sexual Harassment Chains ─────────────────────────
+
+  static analyzeSexualHarassmentChains(events, actors) {
+    const suggestions = [];
+    const shTags = ['SEXUAL_HARASSMENT'];
+    const adverseTags = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION', 'PAY_CUT'];
+
+    const shEvents = events.filter(e => this.hasTags(e, shTags));
+    const adverseEvents = events.filter(e => this.hasTags(e, adverseTags));
+
+    if (shEvents.length === 0) return suggestions;
+
+    // Quid pro quo: sexual harassment followed by adverse action (supervisor retaliation)
+    for (const sh of shEvents) {
+      for (const ae of adverseEvents) {
+        const days = this.getDaysBetween(sh.date, ae.date);
+        if (days === null || days < 0 || days > 120) continue;
+
+        const strength = days <= 14 ? 0.95 : days <= 30 ? 0.90 : days <= 60 ? 0.80 : 0.65;
+
+        suggestions.push({
+          id: uuidv4(),
+          source_id: sh.id,
+          source_type: 'event',
+          target_id: ae.id,
+          target_type: 'event',
+          connection_type: 'quid_pro_quo',
+          precedent_key: 'harris',
+          legal_element: 'unwelcome_conduct',
+          strength,
+          days_between: days,
+          description: `Sexual harassment followed by adverse action within ${days} days — potential quid pro quo`,
+          reasoning: `Under Title VII and Harris v. Forklift, quid pro quo harassment occurs when submission to or rejection of unwelcome sexual conduct is used as the basis for employment decisions. The ${days}-day link between sexual harassment and adverse action suggests a tangible employment action tied to the harassment. Under Vance v. Ball State, if the harasser is a supervisor, the employer is strictly liable.`
+        });
+      }
+    }
+
+    // Severe single incident: sexual harassment can be "severe" enough on its own
+    for (const sh of shEvents) {
+      // Check if there are subsequent hostile environment events
+      const subsequentHostile = events.filter(e => {
+        if (e.id === sh.id) return false;
+        const days = this.getDaysBetween(sh.date, e.date);
+        return days !== null && days >= 0 && days <= 90 &&
+          this.hasTags(e, ['HOSTILE_ENVIRONMENT', 'HARASSMENT', 'EXCLUSION', 'RETALIATION']);
+      });
+
+      if (subsequentHostile.length > 0) {
+        const last = subsequentHostile[subsequentHostile.length - 1];
+        const days = this.getDaysBetween(sh.date, last.date);
+
+        suggestions.push({
+          id: uuidv4(),
+          source_id: sh.id,
+          source_type: 'event',
+          target_id: last.id,
+          target_type: 'event',
+          connection_type: 'sexual_harassment_pattern',
+          precedent_key: 'harris',
+          legal_element: 'severe_or_pervasive',
+          strength: Math.min(0.95, 0.7 + (subsequentHostile.length * 0.08)),
+          days_between: days,
+          description: `Sexual harassment + ${subsequentHostile.length} subsequent hostile event(s) over ${days} days`,
+          reasoning: `Harris v. Forklift: Sexual harassment that is either "severe" (a single egregious act) or "pervasive" (repeated conduct) creates an actionable hostile environment. This pattern shows sexual harassment followed by ${subsequentHostile.length} additional hostile event(s), strengthening the pervasiveness element. No requirement to prove psychological injury.`
+        });
+      }
+    }
+
+    return suggestions;
+  }
+
+  // ─── Pass 8: Pay Discrimination ──────────────────────────────
+
+  static analyzePayDiscrimination(events) {
+    const suggestions = [];
+    const payTags = ['PAY_DISCRIMINATION', 'PAY_CUT'];
+    const adverseTags = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION'];
+    const protectedTags = ['PROTECTED_ACTIVITY', 'COMPLAINT', 'HELP_REQUEST'];
+
+    const payEvents = events.filter(e => this.hasTags(e, payTags));
+
+    if (payEvents.length === 0) return suggestions;
+
+    // Pay discrimination as ongoing violation (Lilly Ledbetter Act)
+    // Each paycheck restarts the filing clock
+    if (payEvents.length >= 2) {
+      const first = payEvents[0];
+      const last = payEvents[payEvents.length - 1];
+      const days = this.getDaysBetween(first.date, last.date);
+
+      if (days !== null && days > 0) {
+        suggestions.push({
+          id: uuidv4(),
+          source_id: first.id,
+          source_type: 'event',
+          target_id: last.id,
+          target_type: 'event',
+          connection_type: 'pay_discrimination',
+          precedent_key: 'morgan',
+          legal_element: 'pattern_of_conduct',
+          strength: Math.min(0.95, 0.6 + (payEvents.length * 0.1)),
+          days_between: days,
+          description: `${payEvents.length} pay discrimination events over ${days} days — continuing violation`,
+          reasoning: `Under the Lilly Ledbetter Fair Pay Act (2009) and National Railroad v. Morgan, each discriminatory paycheck constitutes a new violation, resetting the filing deadline. ${payEvents.length} pay events over ${days} days establishes a continuing pattern of compensation discrimination. The most recent paycheck triggers a new 180/300-day filing window.`
+        });
+      }
+    }
+
+    // Pay discrimination followed by retaliation for complaining
+    for (const pe of payEvents) {
+      const laterProtected = events.filter(e => {
+        const days = this.getDaysBetween(pe.date, e.date);
+        return days !== null && days >= 0 && days <= 60 && this.hasTags(e, protectedTags);
+      });
+
+      for (const prot of laterProtected) {
+        const adverseAfter = events.filter(e => {
+          const days = this.getDaysBetween(prot.date, e.date);
+          return days !== null && days > 0 && days <= 90 && this.hasTags(e, adverseTags);
+        });
+
+        for (const ae of adverseAfter) {
+          const totalDays = this.getDaysBetween(pe.date, ae.date);
+
+          suggestions.push({
+            id: uuidv4(),
+            source_id: pe.id,
+            source_type: 'event',
+            target_id: ae.id,
+            target_type: 'event',
+            connection_type: 'pay_retaliation_chain',
+            precedent_key: 'burlington_northern',
+            legal_element: 'causal_connection',
+            strength: 0.85,
+            days_between: totalDays,
+            description: `Pay discrimination → complaint → adverse action over ${totalDays} days`,
+            reasoning: `Compound EEOC claim: Pay discrimination triggered a complaint (protected activity), which was followed by adverse action — combining Equal Pay Act / Title VII pay discrimination with Burlington Northern retaliation. This chain strengthens both claims and demonstrates employer retaliatory intent.`
+          });
+        }
+      }
+    }
+
+    return suggestions;
+  }
+
+  // ─── Pass 9: Supervisor Liability (Vance v. Ball State) ──────
+
+  static analyzeSupervisorLiability(events, actors, caseDb, caseId) {
+    const suggestions = [];
+    const harmTags = [
+      'HARASSMENT', 'SEXUAL_HARASSMENT', 'GENDER_HARASSMENT',
+      'HOSTILE_ENVIRONMENT', 'INCIDENT', 'EXCLUSION'
+    ];
+    const adverseTags = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION', 'PAY_CUT'];
+
+    // Find supervisors and bad actors from the actors table
+    const supervisorRelationships = [
+      'supervisor', 'manager', 'director', 'executive',
+      'direct_supervisor', 'skip_level', 'senior_leadership'
+    ];
+
+    const supervisors = new Set();
+    const supervisorNames = {};
+    for (const actor of actors) {
+      if (supervisorRelationships.includes(actor.relationship_to_self) ||
+          (actor.classification === 'bad_actor' && supervisorRelationships.includes(actor.relationship_to_self))) {
+        supervisors.add(actor.id);
+        supervisorNames[actor.id] = actor.name;
+      }
+    }
+
+    if (supervisors.size === 0) return suggestions;
+
+    // Find events involving supervisors
+    const supervisorEventIds = new Set(
+      actors.filter(a => supervisors.has(a.id) && a.event_id).map(a => a.event_id)
+    );
+
+    const supervisorHarmEvents = events.filter(e =>
+      supervisorEventIds.has(e.id) && this.hasTags(e, harmTags)
+    );
+    const supervisorAdverseEvents = events.filter(e =>
+      supervisorEventIds.has(e.id) && this.hasTags(e, adverseTags)
+    );
+
+    // Supervisor harassment → tangible employment action = strict liability
+    for (const he of supervisorHarmEvents) {
+      for (const ae of supervisorAdverseEvents) {
+        const days = this.getDaysBetween(he.date, ae.date);
+        if (days === null || days < 0 || days > 180) continue;
+
+        // Find which supervisor is involved
+        const heActors = actors.filter(a => a.event_id === he.id && supervisors.has(a.id));
+        const aeActors = actors.filter(a => a.event_id === ae.id && supervisors.has(a.id));
+        const commonSupervisors = heActors.filter(a => aeActors.some(b => b.id === a.id));
+
+        const supervisorName = commonSupervisors.length > 0
+          ? commonSupervisors.map(a => supervisorNames[a.id]).join(', ')
+          : heActors.length > 0
+            ? heActors.map(a => supervisorNames[a.id]).join(', ')
+            : 'supervisor';
+
+        suggestions.push({
+          id: uuidv4(),
+          source_id: he.id,
+          source_type: 'event',
+          target_id: ae.id,
+          target_type: 'event',
+          connection_type: 'supervisor_liability',
+          precedent_key: 'vance',
+          legal_element: 'supervisor_harasser',
+          strength: commonSupervisors.length > 0 ? 0.95 : 0.80,
+          days_between: days,
+          description: `Supervisor (${supervisorName}) involved in harassment → tangible employment action`,
+          reasoning: `Vance v. Ball State: When the harasser is a "supervisor" (can take tangible employment actions), the employer is vicariously liable. ${supervisorName} is documented in both the harassment event and the adverse action, establishing supervisor involvement. Under Faragher/Ellerth, no affirmative defense is available when a supervisor's harassment culminates in a tangible employment action.`
+        });
+      }
+    }
+
+    // Supervisor-linked pattern (same supervisor across multiple harm events)
+    const supervisorArray = [...supervisors];
+    for (const supId of supervisorArray) {
+      const supEvents = supervisorHarmEvents.filter(e =>
+        actors.some(a => a.event_id === e.id && a.id === supId)
+      );
+
+      if (supEvents.length >= 2) {
+        const first = supEvents[0];
+        const last = supEvents[supEvents.length - 1];
+        const days = this.getDaysBetween(first.date, last.date);
+
+        suggestions.push({
+          id: uuidv4(),
+          source_id: first.id,
+          source_type: 'event',
+          target_id: last.id,
+          target_type: 'event',
+          connection_type: 'supervisor_pattern',
+          precedent_key: 'vance',
+          legal_element: 'supervisor_harasser',
+          strength: Math.min(0.95, 0.6 + (supEvents.length * 0.1)),
+          days_between: days,
+          description: `Supervisor ${supervisorNames[supId]} linked to ${supEvents.length} harassment events over ${days} days`,
+          reasoning: `Vance v. Ball State + Harris v. Forklift: ${supervisorNames[supId]} is a supervisor (authorized to take tangible employment actions) linked to ${supEvents.length} separate harassment events. This establishes both a pervasive pattern AND supervisor involvement, triggering strict vicarious liability. Employer cannot assert Faragher/Ellerth affirmative defense.`
+        });
+      }
+    }
+
+    return suggestions;
+  }
+
+  // ─── Pass 10: Retaliatory Harassment (Monaghan) ──────────────
+
+  static analyzeRetaliatoryHarassment(events) {
+    const suggestions = [];
+    const protectedTags = ['PROTECTED_ACTIVITY', 'COMPLAINT', 'HELP_REQUEST', 'REPORTED'];
+    const harassmentTags = [
+      'HARASSMENT', 'GENDER_HARASSMENT', 'SEXUAL_HARASSMENT',
+      'HOSTILE_ENVIRONMENT', 'EXCLUSION', 'INCIDENT'
+    ];
+
+    const protectedEvents = events.filter(e => this.hasTags(e, protectedTags));
+    const harassmentEvents = events.filter(e => this.hasTags(e, harassmentTags));
+
+    for (const pe of protectedEvents) {
+      // Find harassment events AFTER protected activity
+      const subsequentHarassment = harassmentEvents.filter(he => {
+        const days = this.getDaysBetween(pe.date, he.date);
+        return days !== null && days > 0 && days <= 120;
+      });
+
+      if (subsequentHarassment.length === 0) continue;
+
+      // Monaghan: even a SINGLE retaliatory act suffices (no severe/pervasive needed)
+      const firstHarassment = subsequentHarassment[0];
+      const days = this.getDaysBetween(pe.date, firstHarassment.date);
+
+      suggestions.push({
+        id: uuidv4(),
+        source_id: pe.id,
+        source_type: 'event',
+        target_id: firstHarassment.id,
+        target_type: 'event',
+        connection_type: 'retaliatory_harassment',
+        precedent_key: 'monaghan_retaliation',
+        legal_element: 'retaliatory_conduct',
+        strength: days <= 14 ? 0.90 : days <= 30 ? 0.85 : days <= 60 ? 0.75 : 0.60,
+        days_between: days,
+        description: `Protected activity followed by harassment within ${days} days — retaliatory harassment`,
+        reasoning: `Monaghan v. Worldpay (11th Cir. 2020): Retaliatory harassment does NOT require the "severe or pervasive" showing of a hostile environment claim. Under Burlington Northern's "dissuade a reasonable worker" standard, even a single retaliatory act can be actionable. The ${days}-day gap between protected activity and harassment supports retaliatory intent.`
+      });
+
+      // If multiple harassment events follow, the pattern strengthens the claim
+      if (subsequentHarassment.length >= 2) {
+        const last = subsequentHarassment[subsequentHarassment.length - 1];
+        const totalDays = this.getDaysBetween(pe.date, last.date);
+
+        suggestions.push({
+          id: uuidv4(),
+          source_id: pe.id,
+          source_type: 'event',
+          target_id: last.id,
+          target_type: 'event',
+          connection_type: 'retaliatory_harassment_pattern',
+          precedent_key: 'monaghan_retaliation',
+          legal_element: 'dissuade_standard',
+          strength: Math.min(0.95, 0.7 + (subsequentHarassment.length * 0.08)),
+          days_between: totalDays,
+          description: `${subsequentHarassment.length} harassment events following protected activity over ${totalDays} days`,
+          reasoning: `Monaghan v. Worldpay: ${subsequentHarassment.length} separate instances of harassment following protected activity establish a clear pattern of retaliation. Each act independently satisfies the "would dissuade a reasonable worker" standard. Combined, this pattern provides compelling evidence of retaliatory animus, exceeding the threshold even under traditional hostile environment analysis.`
+        });
+      }
+    }
+
+    return suggestions;
+  }
+
+  // ─── Pass 11: FCRA Discrimination (Harper v. Blockbuster) ────
+
+  static analyzeFCRADiscrimination(events, actors) {
+    const suggestions = [];
+    const adverseTags = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION', 'PAY_CUT'];
+    const incidentTags = ['INCIDENT', 'HARASSMENT', 'GENDER_HARASSMENT',
+      'SEXUAL_HARASSMENT', 'EXCLUSION', 'PAY_DISCRIMINATION'];
+
+    const adverseEvents = events.filter(e => this.hasTags(e, adverseTags));
+    const incidentEvents = events.filter(e => this.hasTags(e, incidentTags));
+
+    if (adverseEvents.length === 0) return suggestions;
+
+    // Build discrimination pattern: incidents showing differential treatment → adverse action
+    for (const ae of adverseEvents) {
+      // Find discrimination-related incidents within 180 days before the adverse action
+      const priorIncidents = incidentEvents.filter(ie => {
+        const days = this.getDaysBetween(ie.date, ae.date);
+        return days !== null && days >= 0 && days <= 180;
+      });
+
+      if (priorIncidents.length === 0) continue;
+
+      const first = priorIncidents[0];
+      const days = this.getDaysBetween(first.date, ae.date);
+      const hasGenderTag = priorIncidents.some(e =>
+        this.hasTags(e, ['GENDER_HARASSMENT', 'SEXUAL_HARASSMENT'])
+      );
+      const hasPayTag = priorIncidents.some(e =>
+        this.hasTags(e, ['PAY_DISCRIMINATION'])
+      );
+      const hasExclusion = priorIncidents.some(e =>
+        this.hasTags(e, ['EXCLUSION'])
+      );
+
+      // Count discrimination indicators
+      let indicators = 0;
+      const indicatorLabels = [];
+      if (hasGenderTag) { indicators++; indicatorLabels.push('gender-based conduct'); }
+      if (hasPayTag) { indicators++; indicatorLabels.push('pay disparity'); }
+      if (hasExclusion) { indicators++; indicatorLabels.push('exclusion/isolation'); }
+      if (priorIncidents.length >= 2) { indicators++; indicatorLabels.push(`${priorIncidents.length} prior incidents`); }
+
+      if (indicators >= 1) {
+        const strength = Math.min(0.90, 0.5 + (indicators * 0.12) + (priorIncidents.length * 0.05));
+
+        // Harper v. Blockbuster: FCRA / McDonnell Douglas framework
+        suggestions.push({
+          id: uuidv4(),
+          source_id: first.id,
+          source_type: 'event',
+          target_id: ae.id,
+          target_type: 'event',
+          connection_type: 'fcra_discrimination',
+          precedent_key: 'harper_fcra',
+          legal_element: 'adverse_action',
+          strength,
+          days_between: days,
+          description: `Discrimination pattern (${indicatorLabels.join(', ')}) culminating in adverse action`,
+          reasoning: `Harper v. Blockbuster (11th Cir.): Under the FCRA/McDonnell Douglas burden-shifting framework, the plaintiff must show (1) protected class membership, (2) qualification for the position, (3) adverse employment action, and (4) differential treatment. This pattern shows ${indicatorLabels.join(', ')} preceding an adverse employment action, establishing the prima facie case elements. If combined with a convincing mosaic (Lewis v. Union City), strict comparator evidence is not required.`
+        });
+      }
+
+      // Muldrow "some harm" — even minor actions count as adverse
+      if (this.hasTags(ae, ['PIP', 'DEMOTION'])) {
+        suggestions.push({
+          id: uuidv4(),
+          source_id: first.id,
+          source_type: 'event',
+          target_id: ae.id,
+          target_type: 'event',
+          connection_type: 'discrimination_some_harm',
+          precedent_key: 'muldrow_some_harm',
+          legal_element: 'some_harm_action',
+          strength: 0.80,
+          days_between: days,
+          description: `Discrimination culminating in action meeting Muldrow "some harm" standard`,
+          reasoning: `Muldrow v. City of St. Louis (2024): The Supreme Court lowered the adverse action threshold in discrimination claims. Actions causing only "some harm" to employment terms now qualify — including PIPs, lateral transfers, schedule changes, and duty reassignments. This broadened standard means ${indicatorLabels.join(', ')} leading to any harmful employment change satisfies the adverse action element.`
         });
       }
     }

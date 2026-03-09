@@ -41,13 +41,28 @@ const CONNECTION_TYPE_COLORS = {
   continuing_violation: '#f59e0b',
   employer_notice: '#8b5cf6',
   convincing_mosaic: '#06b6d4',
-  whistleblower_retaliation: '#10b981'
+  whistleblower_retaliation: '#10b981',
+  quid_pro_quo: '#e11d48',
+  sexual_harassment_pattern: '#be123c',
+  pay_discrimination: '#16a34a',
+  pay_retaliation_chain: '#15803d',
+  supervisor_liability: '#7c3aed',
+  supervisor_pattern: '#6d28d9',
+  retaliatory_harassment: '#ea580c',
+  retaliatory_harassment_pattern: '#c2410c',
+  fcra_discrimination: '#6366f1',
+  discrimination_some_harm: '#ec4899'
 };
 
 const CONNECTION_TYPES = [
   'retaliation_chain', 'escalation', 'temporal_cluster', 'actor_continuity',
   'hostile_environment', 'continuing_violation', 'employer_notice',
-  'convincing_mosaic', 'whistleblower_retaliation'
+  'convincing_mosaic', 'whistleblower_retaliation',
+  'quid_pro_quo', 'sexual_harassment_pattern',
+  'pay_discrimination', 'pay_retaliation_chain',
+  'supervisor_liability', 'supervisor_pattern',
+  'retaliatory_harassment', 'retaliatory_harassment_pattern',
+  'fcra_discrimination', 'discrimination_some_harm'
 ];
 
 export default function Connections() {
