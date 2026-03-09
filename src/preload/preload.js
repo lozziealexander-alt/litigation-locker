@@ -251,6 +251,16 @@ contextBridge.exposeInMainWorld('api', {
     inputTypes: () => ipcRenderer.invoke('assessor:inputTypes')
   },
 
+  // Lawyer Briefs (SESSION-9E)
+  brief: {
+    generate:       ()          => ipcRenderer.invoke('brief:generate'),
+    latest:         ()          => ipcRenderer.invoke('brief:latest'),
+    markStale:      ()          => ipcRenderer.invoke('brief:markStale'),
+    versions:       ()          => ipcRenderer.invoke('brief:versions'),
+    exportMarkdown: (brief)     => ipcRenderer.invoke('brief:exportMarkdown', brief),
+    exportHTML:     (brief)     => ipcRenderer.invoke('brief:exportHTML', brief)
+  },
+
   // Debug
   debug: {
     testIngest: () => ipcRenderer.invoke('debug:testIngest')

@@ -1,6 +1,7 @@
 const { ipcMain, dialog, shell } = require('electron');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const { generateBrief } = require('./analysis/brief-generator');
 const keyManager = require('./crypto/key-derivation');
 const { burn, verifyBurn } = require('./crypto/kill-switch');
 const db = require('./database/init');
@@ -3946,7 +3947,257 @@ function registerIpcHandlers() {
     }
   });
 
+  // ==================== LAWYER BRIEFS (SESSION-9E) ====================
+
+  ipcMain.handle('brief:generate', async () => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      // Gather all case data
+      const rawEvents = caseDb.prepare('SELECT * FROM events ORDER BY date, created_at').all();
+      for (const evt of rawEvents) {
+        try { evt.tags = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(evt.id).map(r => r.tag); }
+        catch (e) { evt.tags = []; }
+        try { evt.linkedDocIds = caseDb.prepare('SELECT document_id FROM event_documents WHERE event_id = ?').all(evt.id).map(r => r.document_id); }
+        catch (e) { evt.linkedDocIds = []; }
+        try { evt.actorIds = caseDb.prepare('SELECT actor_id FROM event_actors WHERE event_id = ?').all(evt.id).map(r => r.actor_id); }
+        catch (e) { evt.actorIds = []; }
+      }
+
+      const rawDocuments = caseDb.prepare('SELECT * FROM documents').all();
+      for (const doc of rawDocuments) {
+        try { doc.actorIds = caseDb.prepare('SELECT actor_id FROM actor_appearances WHERE document_id = ?').all(doc.id).map(r => r.actor_id); }
+        catch (e) { doc.actorIds = []; }
+      }
+
+      const rawActors = caseDb.prepare('SELECT * FROM actors').all();
+      const rawIncidents = caseDb.prepare('SELECT * FROM incidents').all();
+
+      let caseContext = null;
+      try { caseContext = caseDb.prepare('SELECT * FROM case_context WHERE id = 1').get(); } catch (e) {}
+
+      // Generate brief
+      const brief = generateBrief(rawEvents, rawDocuments, rawActors, rawIncidents, caseContext);
+
+      // Save to DB — archive previous as version (keep last 5)
+      const latest = caseDb.prepare('SELECT id FROM lawyer_briefs ORDER BY id DESC LIMIT 1').get();
+      if (latest) {
+        const prev = caseDb.prepare('SELECT * FROM lawyer_briefs WHERE id = ?').get(latest.id);
+        caseDb.prepare(
+          'INSERT INTO brief_versions (generated_at, content_json, strength_score) VALUES (?, ?, ?)'
+        ).run(prev.generated_at, prev.content_json, prev.strength_score);
+        // Keep only 5 versions
+        const oldVersions = caseDb.prepare('SELECT id FROM brief_versions ORDER BY id DESC LIMIT -1 OFFSET 5').all();
+        const delStmt = caseDb.prepare('DELETE FROM brief_versions WHERE id = ?');
+        for (const v of oldVersions) delStmt.run(v.id);
+        // Update existing record
+        caseDb.prepare(
+          'UPDATE lawyer_briefs SET generated_at = ?, content_json = ?, strength_score = ?, is_stale = 0 WHERE id = ?'
+        ).run(brief.generatedAt, JSON.stringify(brief), brief.executive.strength, latest.id);
+      } else {
+        caseDb.prepare(
+          'INSERT INTO lawyer_briefs (generated_at, content_json, strength_score, is_stale) VALUES (?, ?, ?, 0)'
+        ).run(brief.generatedAt, JSON.stringify(brief), brief.executive.strength);
+      }
+
+      return { success: true, brief };
+    } catch (error) {
+      console.error('[IPC] brief:generate error:', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('brief:latest', async () => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: true, brief: null };
+      const row = caseDb.prepare('SELECT * FROM lawyer_briefs ORDER BY id DESC LIMIT 1').get();
+      if (!row) return { success: true, brief: null };
+      return { success: true, brief: { ...JSON.parse(row.content_json), isStale: !!row.is_stale, storedAt: row.generated_at } };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('brief:markStale', async () => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: true };
+      caseDb.prepare('UPDATE lawyer_briefs SET is_stale = 1').run();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('brief:versions', async () => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: true, versions: [] };
+      const rows = caseDb.prepare('SELECT id, generated_at, strength_score FROM brief_versions ORDER BY id DESC LIMIT 5').all();
+      return { success: true, versions: rows };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('brief:exportMarkdown', async (event, brief) => {
+    try {
+      const md = buildMarkdownExport(brief);
+      const result = await dialog.showSaveDialog({
+        title: 'Save Lawyer Brief',
+        defaultPath: 'lawyer-brief.md',
+        filters: [{ name: 'Markdown', extensions: ['md'] }]
+      });
+      if (result.canceled || !result.filePath) return { success: false, error: 'Cancelled' };
+      fs.writeFileSync(result.filePath, md, 'utf8');
+      return { success: true, path: result.filePath };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('brief:exportHTML', async (event, brief) => {
+    try {
+      const html = buildHTMLExport(brief);
+      const result = await dialog.showSaveDialog({
+        title: 'Save Lawyer Brief (HTML)',
+        defaultPath: 'lawyer-brief.html',
+        filters: [{ name: 'HTML', extensions: ['html'] }]
+      });
+      if (result.canceled || !result.filePath) return { success: false, error: 'Cancelled' };
+      fs.writeFileSync(result.filePath, html, 'utf8');
+      shell.openPath(result.filePath);
+      return { success: true, path: result.filePath };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   console.log('[IPC] All handlers registered successfully');
+}
+
+// ── Brief export helpers ──────────────────────────────────────────────────────
+
+function buildMarkdownExport(brief) {
+  const ex = brief.executive || {};
+  const lines = [
+    '# Lawyer Brief — Case Overview',
+    `*Generated: ${brief.generatedAt ? new Date(brief.generatedAt).toLocaleString() : 'Unknown'}*`,
+    '',
+    '---',
+    '',
+    '## Executive Summary',
+    '',
+    `**Case Type:** ${ex.caseType || 'Undetermined'}`,
+    `**Time Span:** ${ex.timeSpan || 'No dates recorded'}`,
+    `**Evidence:** ${ex.counts?.documents || 0} documents · ${ex.counts?.events || 0} events · ${ex.counts?.actors || 0} actors`,
+    `**Strength Score:** ${ex.strength || 0}/10`,
+    '',
+    '---',
+    '',
+    '## Thread Breakdown',
+    ''
+  ];
+
+  for (const t of (brief.threads || [])) {
+    lines.push(`### 🧵 ${t.name} (Strength: ${t.strength}/10)`);
+    lines.push('');
+    lines.push('**Legal Elements:**');
+    for (const el of (t.elements || [])) {
+      const icon = el.status === 'satisfied' ? '✓' : el.status === 'partial' ? '⚠' : '✗';
+      lines.push(`- ${icon} ${el.label}`);
+    }
+    if (t.keyEvidence?.length) {
+      lines.push('');
+      lines.push('**Key Evidence:**');
+      for (const e of t.keyEvidence) {
+        lines.push(`- ${e.filename || e.id} (${e.date ? new Date(e.date).toLocaleDateString('en-AU') : 'undated'})`);
+      }
+    }
+    if (t.gaps?.length) {
+      lines.push('');
+      lines.push('**Gaps:**');
+      for (const g of t.gaps) lines.push(`- ${g}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('---', '', '## Key People', '');
+  for (const a of (brief.actors || [])) {
+    const cls = (a.classification || 'unknown').replace(/_/g, ' ');
+    lines.push(`### ${a.name} (${cls})`);
+    lines.push(`- Events: ${a.eventCount} · Documents: ${a.docCount}`);
+    if (a.reliabilityLabel) lines.push(`- Reliability: ${a.reliabilityLabel}`);
+    lines.push('');
+  }
+
+  if ((brief.redFlags || []).length > 0) {
+    lines.push('---', '', '## Red Flags & Gaps', '');
+    for (const f of brief.redFlags) {
+      const icon = f.severity === 'high' ? '🔴' : '🟡';
+      lines.push(`${icon} **${f.label}**`);
+      if (f.detail) lines.push(`  *${f.detail}*`);
+      lines.push('');
+    }
+  }
+
+  if ((brief.timeline?.gaps || []).length > 0) {
+    lines.push('---', '', '## Timeline Gaps', '');
+    for (const g of brief.timeline.gaps) {
+      lines.push(`- ${g.label}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('---');
+  lines.push(`*Generated by Litigation Locker · ${new Date().toLocaleDateString('en-AU')}*`);
+
+  return lines.join('\n');
+}
+
+function buildHTMLExport(brief) {
+  const md = buildMarkdownExport(brief);
+  const escaped = md
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Convert basic markdown to HTML
+  let html = escaped
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/^---$/gm, '<hr>')
+    .replace(/\n\n/g, '</p><p>');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lawyer Brief — Litigation Locker</title>
+<style>
+  body { font-family: Georgia, serif; max-width: 900px; margin: 40px auto; padding: 0 24px; color: #1a1a1a; line-height: 1.7; }
+  h1 { font-size: 2em; border-bottom: 3px solid #2563EB; padding-bottom: 8px; }
+  h2 { font-size: 1.4em; color: #2563EB; margin-top: 2em; }
+  h3 { font-size: 1.1em; margin-top: 1.5em; }
+  li { margin: 4px 0; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 2em 0; }
+  em { color: #666; }
+  strong { color: #111; }
+  .footer { color: #999; font-size: 0.85em; margin-top: 3em; }
+</style>
+</head>
+<body>
+<p>${html}</p>
+<div class="footer">Generated by Litigation Locker &mdash; ${new Date().toLocaleDateString('en-AU')}</div>
+</body>
+</html>`;
 }
 
 function closeCurrentCase() {

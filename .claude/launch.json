@@ -3,9 +3,9 @@
   "configurations": [
     {
       "name": "litigation-locker",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["serve", "src/renderer", "--listen", "3847", "--no-clipboard"],
-      "port": 3847
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 0
     }
   ]
 }

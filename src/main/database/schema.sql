@@ -368,6 +368,22 @@ CREATE TABLE IF NOT EXISTS document_date_entries (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Lawyer briefs (SESSION-9E)
+CREATE TABLE IF NOT EXISTS lawyer_briefs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  generated_at TEXT NOT NULL,
+  content_json TEXT NOT NULL,
+  strength_score REAL,
+  is_stale INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS brief_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  generated_at TEXT NOT NULL,
+  content_json TEXT NOT NULL,
+  strength_score REAL
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_documents_date ON documents(document_date);
 CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(evidence_type);

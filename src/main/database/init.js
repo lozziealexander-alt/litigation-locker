@@ -839,6 +839,31 @@ function openCase(caseId) {
     }
   }
 
+  // SESSION-9E: Lawyer briefs tables
+  {
+    const hasBriefs = caseDb.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='lawyer_briefs'"
+    ).get();
+    if (!hasBriefs) {
+      caseDb.exec(
+        'CREATE TABLE IF NOT EXISTS lawyer_briefs (' +
+        '  id INTEGER PRIMARY KEY AUTOINCREMENT,' +
+        '  generated_at TEXT NOT NULL,' +
+        '  content_json TEXT NOT NULL,' +
+        '  strength_score REAL,' +
+        '  is_stale INTEGER DEFAULT 0' +
+        ');' +
+        'CREATE TABLE IF NOT EXISTS brief_versions (' +
+        '  id INTEGER PRIMARY KEY AUTOINCREMENT,' +
+        '  generated_at TEXT NOT NULL,' +
+        '  content_json TEXT NOT NULL,' +
+        '  strength_score REAL' +
+        ');'
+      );
+      console.log('[DB] SESSION-9E: Created lawyer_briefs and brief_versions tables');
+    }
+  }
+
   return caseDb;
 }
 

@@ -5,6 +5,7 @@ import People from './pages/People';
 import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
 import Connections from './pages/Connections';
+import LawyerBrief from './pages/LawyerBrief';
 import DocumentPanel from './components/DocumentPanel';
 import EditMomentModal from './components/EditMomentModal';
 import ActorDetail from './components/ActorDetail';
@@ -27,6 +28,7 @@ export default function App() {
   const [highlightDocIds, setHighlightDocIds] = useState(null);
   const [renamingCaseId, setRenamingCaseId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
+  const [briefStale, setBriefStale] = useState(false);
 
   // Recompute styles each render so they pick up current theme colors
   const styles = getStyles();
@@ -42,6 +44,7 @@ export default function App() {
         await window.api.documents.ingest(result.filePaths);
         setTimelineKey(k => k + 1);
         setThreadsKey(k => k + 1);
+        markBriefStale();
       }
     };
     const handleAddMoment = () => setSelectedEvent({});
@@ -52,6 +55,26 @@ export default function App() {
       window.removeEventListener('add-moment', handleAddMoment);
     };
   }, []);
+
+  // Keyboard shortcut: Cmd/Ctrl + B → open lawyer brief
+  useEffect(() => {
+    function handleKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault();
+        setCurrentPage('brief');
+      }
+    }
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, []);
+
+  // Mark brief stale when case data changes
+  async function markBriefStale() {
+    try {
+      await window.api.brief.markStale();
+      setBriefStale(true);
+    } catch (e) { /* non-critical */ }
+  }
 
   async function checkVaultStatus() {
     const unlocked = await window.api.vault.isUnlocked();
@@ -213,6 +236,17 @@ export default function App() {
           <button
             style={{
               ...styles.caseButton,
+              ...(currentPage === 'brief' ? styles.navButtonActive : {})
+            }}
+            onClick={() => { setBriefStale(false); setCurrentPage('brief'); }}
+          >
+            <span style={styles.caseIcon}>📄</span>
+            <span style={styles.caseName}>Lawyer Brief</span>
+            {briefStale && <span style={styles.staleDot} />}
+          </button>
+          <button
+            style={{
+              ...styles.caseButton,
               ...(currentPage === 'settings' ? styles.navButtonActive : {})
             }}
             onClick={() => setCurrentPage('settings')}
@@ -311,6 +345,9 @@ export default function App() {
         {currentPage === 'settings' && (
           <Settings />
         )}
+        {currentPage === 'brief' && (
+          <LawyerBrief />
+        )}
       </div>
 
       {selectedEvent && (
@@ -322,6 +359,7 @@ export default function App() {
             setTimelineKey(k => k + 1);
             setThreadsKey(k => k + 1);
             setSelectedEvent(null);
+            markBriefStale();
           }}
         />
       )}
@@ -336,6 +374,7 @@ export default function App() {
           onDocumentUpdated={() => {
             setTimelineKey(k => k + 1);
             setThreadsKey(k => k + 1);
+            markBriefStale();
           }}
         />
       )}
@@ -350,6 +389,7 @@ export default function App() {
             setTimelineKey(k => k + 1);
             setPeopleKey(k => k + 1);
             setThreadsKey(k => k + 1);
+            markBriefStale();
           }}
         />
       )}
@@ -569,6 +609,16 @@ function getStyles() {
       fontWeight: typography.fontWeight.semibold,
       cursor: 'pointer',
       transition: 'background 0.15s ease'
+    },
+
+    // Stale brief dot
+    staleDot: {
+      width: 7,
+      height: 7,
+      borderRadius: '50%',
+      background: '#F59E0B',
+      flexShrink: 0,
+      marginLeft: 'auto'
     },
 
     // Main
