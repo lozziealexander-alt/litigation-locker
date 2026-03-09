@@ -3,9 +3,6 @@ import Unlock from './pages/Unlock';
 import Timeline from './pages/Timeline';
 import People from './pages/People';
 import Dashboard from './pages/Dashboard';
-import Events from './pages/Events';
-import ContextDocs from './pages/ContextDocs';
-import Assessor from './pages/Assessor';
 import Settings from './pages/Settings';
 import DocumentPanel from './components/DocumentPanel';
 import EventPanel from './components/EventPanel';
@@ -22,11 +19,10 @@ export default function App() {
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedActor, setSelectedActor] = useState(null);
-  const [currentPage, setCurrentPage] = useState('events');
+  const [currentPage, setCurrentPage] = useState('timeline');
   const [timelineKey, setTimelineKey] = useState(0);
   const [peopleKey, setPeopleKey] = useState(0);
-  const [dashboardKey, setDashboardKey] = useState(0);
-  const [eventsKey, setEventsKey] = useState(0);
+  const [threadsKey, setThreadsKey] = useState(0);
   const [highlightDocIds, setHighlightDocIds] = useState(null);
   const [renamingCaseId, setRenamingCaseId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
@@ -158,16 +154,6 @@ export default function App() {
           <button
             style={{
               ...styles.caseButton,
-              ...(currentPage === 'events' ? styles.navButtonActive : {})
-            }}
-            onClick={() => setCurrentPage('events')}
-          >
-            <span style={styles.caseIcon}>{'\u{1F4CC}'}</span>
-            <span style={styles.caseName}>Events</span>
-          </button>
-          <button
-            style={{
-              ...styles.caseButton,
               ...(currentPage === 'timeline' ? styles.navButtonActive : {})
             }}
             onClick={() => setCurrentPage('timeline')}
@@ -178,42 +164,22 @@ export default function App() {
           <button
             style={{
               ...styles.caseButton,
+              ...(currentPage === 'threads' ? styles.navButtonActive : {})
+            }}
+            onClick={() => { setThreadsKey(k => k + 1); setCurrentPage('threads'); }}
+          >
+            <span style={styles.caseIcon}>{'\uD83E\uDDF5'}</span>
+            <span style={styles.caseName}>Threads</span>
+          </button>
+          <button
+            style={{
+              ...styles.caseButton,
               ...(currentPage === 'people' ? styles.navButtonActive : {})
             }}
             onClick={() => setCurrentPage('people')}
           >
             <span style={styles.caseIcon}>{'\u{1F465}'}</span>
             <span style={styles.caseName}>People</span>
-          </button>
-          <button
-            style={{
-              ...styles.caseButton,
-              ...(currentPage === 'dashboard' ? styles.navButtonActive : {})
-            }}
-            onClick={() => { setDashboardKey(k => k + 1); setCurrentPage('dashboard'); }}
-          >
-            <span style={styles.caseIcon}>{'\uD83D\uDCCA'}</span>
-            <span style={styles.caseName}>Dashboard</span>
-          </button>
-          <button
-            style={{
-              ...styles.caseButton,
-              ...(currentPage === 'context' ? styles.navButtonActive : {})
-            }}
-            onClick={() => setCurrentPage('context')}
-          >
-            <span style={styles.caseIcon}>{'\uD83D\uDCC1'}</span>
-            <span style={styles.caseName}>Context Docs</span>
-          </button>
-          <button
-            style={{
-              ...styles.caseButton,
-              ...(currentPage === 'assess' ? styles.navButtonActive : {})
-            }}
-            onClick={() => setCurrentPage('assess')}
-          >
-            <span style={styles.caseIcon}>{'\u2696'}</span>
-            <span style={styles.caseName}>Assessor</span>
           </button>
           <button
             style={{
@@ -282,9 +248,6 @@ export default function App() {
 
       {/* Main content */}
       <div style={styles.main}>
-        {currentPage === 'events' && (
-          <Events key={eventsKey} caseId={activeCase.id} onSelectEvent={setSelectedEvent} onSelectDocument={setSelectedDocument} />
-        )}
         {currentPage === 'timeline' && (
           <Timeline
             key={timelineKey}
@@ -292,30 +255,12 @@ export default function App() {
             onSelectEvent={setSelectedEvent}
             highlightDocIds={highlightDocIds}
             onClearHighlights={() => setHighlightDocIds(null)}
-            onDataChanged={() => {
-              setDashboardKey(k => k + 1);
-              setEventsKey(k => k + 1);
-            }}
+            onDataChanged={() => setThreadsKey(k => k + 1)}
           />
         )}
-        {currentPage === 'people' && (
-          <People
-            key={peopleKey}
-            onSelectActor={setSelectedActor}
-          />
-        )}
-        {currentPage === 'context' && (
-          <ContextDocs />
-        )}
-        {currentPage === 'assess' && (
-          <Assessor />
-        )}
-        {currentPage === 'settings' && (
-          <Settings />
-        )}
-        {currentPage === 'dashboard' && (
+        {currentPage === 'threads' && (
           <Dashboard
-            key={dashboardKey}
+            key={threadsKey}
             onNavigateToTimeline={(docIds) => {
               setHighlightDocIds(docIds || null);
               setCurrentPage('timeline');
@@ -324,6 +269,15 @@ export default function App() {
             onSelectDocument={setSelectedDocument}
             onSelectActor={setSelectedActor}
           />
+        )}
+        {currentPage === 'people' && (
+          <People
+            key={peopleKey}
+            onSelectActor={setSelectedActor}
+          />
+        )}
+        {currentPage === 'settings' && (
+          <Settings />
         )}
       </div>
 
@@ -335,9 +289,8 @@ export default function App() {
           onSelectDocument={setSelectedDocument}
           onNavigate={setSelectedEvent}
           onEventUpdated={() => {
-            setEventsKey(k => k + 1);
             setTimelineKey(k => k + 1);
-            setDashboardKey(k => k + 1);
+            setThreadsKey(k => k + 1);
           }}
         />
       )}
@@ -350,7 +303,7 @@ export default function App() {
           onNavigate={setSelectedDocument}
           onDocumentUpdated={() => {
             setTimelineKey(k => k + 1);
-            setDashboardKey(k => k + 1);
+            setThreadsKey(k => k + 1);
           }}
         />
       )}
@@ -364,7 +317,7 @@ export default function App() {
             setSelectedActor(null);
             setTimelineKey(k => k + 1);
             setPeopleKey(k => k + 1);
-            setDashboardKey(k => k + 1);
+            setThreadsKey(k => k + 1);
           }}
         />
       )}
