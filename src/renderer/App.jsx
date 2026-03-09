@@ -313,7 +313,7 @@ export default function App() {
       <div style={styles.main}>
         {currentPage === 'timeline' && (
           <Timeline
-            key={timelineKey}
+            refreshSignal={timelineKey}
             onSelectDocument={setSelectedDocument}
             onSelectEvent={setSelectedEvent}
             highlightDocIds={highlightDocIds}

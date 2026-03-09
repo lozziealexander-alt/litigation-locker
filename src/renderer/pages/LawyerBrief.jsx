@@ -62,6 +62,7 @@ export default function LawyerBrief() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeTab, setActiveTab]       = useState('executive');
   const [progress, setProgress]         = useState('');
+  const [genError, setGenError]         = useState(null);
   const [versions, setVersions]         = useState([]);
   const [showVersions, setShowVersions] = useState(false);
   const [exportStatus, setExportStatus] = useState('');
@@ -86,6 +87,7 @@ export default function LawyerBrief() {
 
   async function handleGenerate() {
     setIsGenerating(true);
+    setGenError(null);
     setProgress('Gathering threads...');
     await delay(120);
     setProgress('Analysing incidents...');
@@ -102,10 +104,10 @@ export default function LawyerBrief() {
         setBrief(res.brief);
         setActiveTab('executive');
       } else {
-        console.error('[LawyerBrief] generate failed:', res.error);
+        setGenError(res.error || 'Generation failed — check that a case is open and try again.');
       }
     } catch (e) {
-      console.error('[LawyerBrief] generate error:', e);
+      setGenError(e?.message || 'Unexpected error generating brief.');
     }
 
     setProgress('');
@@ -191,6 +193,14 @@ export default function LawyerBrief() {
         <div style={s.progressBar}>
           <div style={s.progressInner} />
           <span style={s.progressText}>{progress}</span>
+        </div>
+      )}
+
+      {/* Error banner */}
+      {genError && !isGenerating && (
+        <div style={s.errorBanner}>
+          <span>⚠ {genError}</span>
+          <button style={s.errorDismiss} onClick={() => setGenError(null)}>✕</button>
         </div>
       )}
 
@@ -709,6 +719,28 @@ function getStyles() {
       padding: `0 ${spacing.xl}`,
       fontSize: typography.fontSize.sm,
       color: colors.textSecondary
+    },
+
+    errorBanner: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+      padding: `${spacing.sm} ${spacing.xl}`,
+      background: '#FEF2F2',
+      borderBottom: `1px solid #FECACA`,
+      color: '#DC2626',
+      fontSize: typography.fontSize.sm,
+      flexShrink: 0
+    },
+    errorDismiss: {
+      background: 'none',
+      border: 'none',
+      color: '#DC2626',
+      cursor: 'pointer',
+      fontSize: '14px',
+      padding: '0 4px',
+      flexShrink: 0
     },
 
     // Version drawer

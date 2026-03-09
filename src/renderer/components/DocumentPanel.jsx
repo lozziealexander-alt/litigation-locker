@@ -57,6 +57,7 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
   const [showMomentPicker, setShowMomentPicker] = useState(false);
   const [selectedMomentId, setSelectedMomentId] = useState('');
   const [linkingMoment, setLinkingMoment] = useState(false);
+  const [linkError, setLinkError] = useState(null);
   const nameInputRef = useRef(null);
   const styles = getStyles();
 
@@ -166,12 +167,19 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
   async function handleLinkMoment() {
     if (!selectedMomentId || !caseId) return;
     setLinkingMoment(true);
+    setLinkError(null);
     try {
-      await window.api.events.linkEvidence(caseId, selectedMomentId, doc.id);
-      await loadLinkedMoments(doc.id);
-      setSelectedMomentId('');
-      setShowMomentPicker(false);
-    } catch (e) {}
+      const res = await window.api.events.linkEvidence(caseId, selectedMomentId, doc.id);
+      if (res.success) {
+        await loadLinkedMoments(doc.id);
+        setSelectedMomentId('');
+        setShowMomentPicker(false);
+      } else {
+        setLinkError(res.error || 'Link failed — try again.');
+      }
+    } catch (e) {
+      setLinkError(e?.message || 'Unexpected error linking moment.');
+    }
     setLinkingMoment(false);
   }
 
@@ -691,15 +699,20 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
                       onClick={handleLinkMoment}
                       disabled={!selectedMomentId || linkingMoment}
                     >
-                      Link
+                      {linkingMoment ? 'Linking...' : 'Link'}
                     </button>
                     <button
                       style={styles.cancelBtn}
-                      onClick={() => { setShowMomentPicker(false); setSelectedMomentId(''); }}
+                      onClick={() => { setShowMomentPicker(false); setSelectedMomentId(''); setLinkError(null); }}
                     >
                       Cancel
                     </button>
                   </div>
+                  {linkError && (
+                    <p style={{ color: '#DC2626', fontSize: '12px', marginTop: spacing.xs }}>
+                      ⚠ {linkError}
+                    </p>
+                  )}
                 </div>
               ) : (
                 <button

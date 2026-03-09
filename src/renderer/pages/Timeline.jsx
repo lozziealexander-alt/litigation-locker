@@ -6,7 +6,7 @@ const PERIOD_COLORS = [
   '#16a085', '#d35400'
 ];
 
-export default function Timeline({ onSelectDocument, onSelectEvent, onDataChanged }) {
+export default function Timeline({ onSelectDocument, onSelectEvent, onDataChanged, refreshSignal }) {
   const [timelineItems, setTimelineItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [zoomLevel, setZoomLevel] = useState('month');
@@ -20,6 +20,11 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
     window.api.on?.('case-changed', handleCaseChange);
     return () => window.api.off?.('case-changed', handleCaseChange);
   }, []);
+
+  // Reload data when parent signals a data change (without remounting)
+  useEffect(() => {
+    if (refreshSignal) loadTimeline();
+  }, [refreshSignal]);
 
   useEffect(() => {
     if (timelineItems.length > 0) groupByZoom();
