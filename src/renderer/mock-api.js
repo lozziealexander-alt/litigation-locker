@@ -449,6 +449,18 @@ window.api = {
         return actor ? { actor_id: id, name: actor.name, role: actor.role, classification: actor.classification, relationship_to_self: actor.relationship_to_self } : { actor_id: id, name: 'Unknown' };
       });
       return Promise.resolve({ success: true });
+    },
+    batchDocumentMeta: function() {
+      const eventCounts = { 'doc-1': 3, 'doc-2': 1, 'doc-3': 2, 'doc-4': 0, 'doc-5': 1, 'doc-6': 4 };
+      const notifMap = {};
+      // Build from _store
+      for (const [key, actors] of Object.entries(this._store)) {
+        if (key.startsWith('document:')) {
+          const docId = key.replace('document:', '');
+          notifMap[docId] = actors.map(a => ({ id: a.actor_id, name: a.name, role: a.role, classification: a.classification }));
+        }
+      }
+      return Promise.resolve({ success: true, eventCounts, notifMap });
     }
   },
 

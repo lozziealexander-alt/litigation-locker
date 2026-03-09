@@ -264,7 +264,8 @@ contextBridge.exposeInMainWorld('api', {
   // Notifications (multi-select people notified about documents/events/incidents)
   notifications: {
     getForTarget: (targetType, targetId) => ipcRenderer.invoke('notifications:getForTarget', targetType, targetId),
-    setForTarget: (targetType, targetId, actorIds) => ipcRenderer.invoke('notifications:setForTarget', targetType, targetId, actorIds)
+    setForTarget: (targetType, targetId, actorIds) => ipcRenderer.invoke('notifications:setForTarget', targetType, targetId, actorIds),
+    batchDocumentMeta: () => ipcRenderer.invoke('notifications:batchDocumentMeta')
   },
 
   // Debug

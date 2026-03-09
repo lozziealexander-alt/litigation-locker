@@ -3276,6 +3276,56 @@ function registerIpcHandlers() {
     }
   });
 
+  // Batch: get linked-event counts + notification actors for all documents
+  ipcMain.handle('notifications:batchDocumentMeta', async () => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      // Ensure notifications table exists
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id TEXT PRIMARY KEY,
+          target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(target_type, target_id, actor_id)
+        )
+      `);
+
+      // Linked event counts per document
+      let eventCounts = {};
+      try {
+        const rows = caseDb.prepare(`
+          SELECT document_id, COUNT(*) as cnt
+          FROM event_documents
+          GROUP BY document_id
+        `).all();
+        rows.forEach(r => { eventCounts[r.document_id] = r.cnt; });
+      } catch (e) { /* event_documents may not exist */ }
+
+      // Notification actors per document
+      const notifRows = caseDb.prepare(`
+        SELECT n.target_id, a.id as actor_id, a.name, a.role, a.classification
+        FROM notifications n
+        JOIN actors a ON a.id = n.actor_id
+        WHERE n.target_type = 'document'
+        ORDER BY a.name
+      `).all();
+
+      const notifMap = {};
+      notifRows.forEach(r => {
+        if (!notifMap[r.target_id]) notifMap[r.target_id] = [];
+        notifMap[r.target_id].push({ id: r.actor_id, name: r.name, role: r.role, classification: r.classification });
+      });
+
+      return { success: true, eventCounts, notifMap };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // ==================== CASE CONTEXT ====================
 
   ipcMain.handle('context:get', async (event, caseId) => {
