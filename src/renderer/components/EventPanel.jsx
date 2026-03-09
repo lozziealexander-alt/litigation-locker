@@ -80,7 +80,9 @@ export default function EventPanel({ event, onClose, onEventUpdated, onSelectDoc
           });
           setAllEvents(sorted);
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error('[EventPanel] Failed to load events list:', e);
+      }
     })();
   }, [caseId, onNavigate]);
 
@@ -211,7 +213,9 @@ export default function EventPanel({ event, onClose, onEventUpdated, onSelectDoc
       if (result.success) {
         setAllDocuments(result.documents || []);
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error('[EventPanel] Failed to load documents:', e);
+    }
     setShowLinkDocs(true);
   }
 

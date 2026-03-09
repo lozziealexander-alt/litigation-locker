@@ -92,7 +92,9 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
           });
           setAllDocs(sorted);
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error('[DocumentPanel] Failed to load doc list:', e);
+      }
     })();
   }, [onNavigate]);
 
@@ -153,7 +155,9 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
     try {
       const result = await window.api.events.getForDocument(caseId, docId);
       if (result.success) setLinkedMoments(result.events || []);
-    } catch (e) {}
+    } catch (e) {
+      console.error('[DocumentPanel] Failed to load linked moments:', e);
+    }
   }
 
   async function loadAllMoments() {
@@ -161,7 +165,9 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
     try {
       const result = await window.api.events.list(caseId);
       if (result.success) setAllMoments(result.events || []);
-    } catch (e) {}
+    } catch (e) {
+      console.error('[DocumentPanel] Failed to load moments:', e);
+    }
   }
 
   async function handleLinkMoment() {
@@ -186,9 +192,15 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
   async function handleUnlinkMoment(momentId) {
     if (!caseId) return;
     try {
-      await window.api.events.unlinkEvidence(caseId, momentId, doc.id);
-      setLinkedMoments(prev => prev.filter(m => m.id !== momentId));
-    } catch (e) {}
+      const res = await window.api.events.unlinkEvidence(caseId, momentId, doc.id);
+      if (res && !res.success) {
+        setLinkError('Failed to unlink moment: ' + (res.error || 'Unknown error'));
+      } else {
+        setLinkedMoments(prev => prev.filter(m => m.id !== momentId));
+      }
+    } catch (e) {
+      setLinkError('Failed to unlink moment: ' + (e.message || 'Unknown error'));
+    }
   }
 
   async function loadAllActors() {

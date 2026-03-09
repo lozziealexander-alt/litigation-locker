@@ -183,11 +183,15 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     try {
       const linksResult = await window.api.eventLinks.list();
       if (linksResult.success) setCausalityLinks(linksResult.links || []);
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[Dashboard] Failed to load causality links:', e);
+    }
     try {
       const suggestResult = await window.api.incidents.suggest();
       if (suggestResult.success) setSuggestedIncidents(suggestResult.suggestions || []);
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[Dashboard] Failed to load suggested incidents:', e);
+    }
 
     // Compute stats
     const docs = docsResult.documents || [];

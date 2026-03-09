@@ -6,6 +6,8 @@ import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
 import Connections from './pages/Connections';
 import LawyerBrief from './pages/LawyerBrief';
+import Assessor from './pages/Assessor';
+import ContextDocs from './pages/ContextDocs';
 import DocumentPanel from './components/DocumentPanel';
 import EditMomentModal from './components/EditMomentModal';
 import ActorDetail from './components/ActorDetail';
@@ -236,6 +238,26 @@ export default function App() {
           <button
             style={{
               ...styles.caseButton,
+              ...(currentPage === 'assessor' ? styles.navButtonActive : {})
+            }}
+            onClick={() => setCurrentPage('assessor')}
+          >
+            <span style={styles.caseIcon}>{'\u{1F50D}'}</span>
+            <span style={styles.caseName}>Assessor</span>
+          </button>
+          <button
+            style={{
+              ...styles.caseButton,
+              ...(currentPage === 'context' ? styles.navButtonActive : {})
+            }}
+            onClick={() => setCurrentPage('context')}
+          >
+            <span style={styles.caseIcon}>{'\u{1F4CB}'}</span>
+            <span style={styles.caseName}>Policies</span>
+          </button>
+          <button
+            style={{
+              ...styles.caseButton,
               ...(currentPage === 'brief' ? styles.navButtonActive : {})
             }}
             onClick={() => { setBriefStale(false); setCurrentPage('brief'); }}
@@ -341,6 +363,12 @@ export default function App() {
         )}
         {currentPage === 'connections' && (
           <Connections />
+        )}
+        {currentPage === 'assessor' && (
+          <Assessor />
+        )}
+        {currentPage === 'context' && (
+          <ContextDocs />
         )}
         {currentPage === 'settings' && (
           <Settings />

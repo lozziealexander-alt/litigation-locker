@@ -86,26 +86,40 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
     try {
       const res = await window.api.documents.list();
       if (res.success) setAllDocs(res.documents || []);
-    } catch (e) {}
+    } catch (e) {
+      console.error('[EditMomentModal] Failed to load documents:', e);
+    }
   }
 
   async function handleLinkDoc() {
     if (!selectedDocId) return;
     setLinkingDoc(true);
     try {
-      await window.api.events.linkEvidence(caseId, momentId, selectedDocId);
-      const docsResult = await window.api.events.getLinkedDocuments(caseId, momentId);
-      if (docsResult.success) setLinkedDocs(docsResult.documents || []);
-      setSelectedDocId('');
-    } catch (e) {}
+      const linkRes = await window.api.events.linkEvidence(caseId, momentId, selectedDocId);
+      if (linkRes && !linkRes.success) {
+        setError('Failed to link document: ' + (linkRes.error || 'Unknown error'));
+      } else {
+        const docsResult = await window.api.events.getLinkedDocuments(caseId, momentId);
+        if (docsResult.success) setLinkedDocs(docsResult.documents || []);
+        setSelectedDocId('');
+      }
+    } catch (e) {
+      setError('Failed to link document: ' + e.message);
+    }
     setLinkingDoc(false);
   }
 
   async function handleUnlinkDoc(docId) {
     try {
-      await window.api.events.unlinkEvidence(caseId, momentId, docId);
-      setLinkedDocs(prev => prev.filter(d => d.id !== docId));
-    } catch (e) {}
+      const res = await window.api.events.unlinkEvidence(caseId, momentId, docId);
+      if (res && !res.success) {
+        setError('Failed to unlink document: ' + (res.error || 'Unknown error'));
+      } else {
+        setLinkedDocs(prev => prev.filter(d => d.id !== docId));
+      }
+    } catch (e) {
+      setError('Failed to unlink document: ' + e.message);
+    }
   }
 
   async function handleSave() {
