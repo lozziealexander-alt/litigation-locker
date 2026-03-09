@@ -33,8 +33,15 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
   const [isContextEvent, setIsContextEvent] = useState(false);
   const [contextScope, setContextScope] = useState('company-wide');
 
+  // Document linking
+  const [linkedDocs, setLinkedDocs] = useState([]);
+  const [allDocs, setAllDocs] = useState([]);
+  const [linkingDoc, setLinkingDoc] = useState(false);
+  const [selectedDocId, setSelectedDocId] = useState('');
+
   useEffect(() => {
     loadMoment();
+    loadAllDocs();
   }, [momentId]);
 
   async function loadMoment() {
@@ -60,6 +67,11 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
         if (tagsResult.success) {
           setTags(tagsResult.tags || []);
         }
+
+        const docsResult = await window.api.events.getLinkedDocuments(caseId, momentId);
+        if (docsResult.success) {
+          setLinkedDocs(docsResult.documents || []);
+        }
       } else {
         setError('Failed to load moment');
       }
@@ -68,6 +80,32 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
     }
 
     setLoading(false);
+  }
+
+  async function loadAllDocs() {
+    try {
+      const res = await window.api.documents.list();
+      if (res.success) setAllDocs(res.documents || []);
+    } catch (e) {}
+  }
+
+  async function handleLinkDoc() {
+    if (!selectedDocId) return;
+    setLinkingDoc(true);
+    try {
+      await window.api.events.linkEvidence(caseId, momentId, selectedDocId);
+      const docsResult = await window.api.events.getLinkedDocuments(caseId, momentId);
+      if (docsResult.success) setLinkedDocs(docsResult.documents || []);
+      setSelectedDocId('');
+    } catch (e) {}
+    setLinkingDoc(false);
+  }
+
+  async function handleUnlinkDoc(docId) {
+    try {
+      await window.api.events.unlinkEvidence(caseId, momentId, docId);
+      setLinkedDocs(prev => prev.filter(d => d.id !== docId));
+    } catch (e) {}
   }
 
   async function handleSave() {
@@ -204,6 +242,55 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
               ))}
             </div>
           </div>
+
+          {/* Document Linking — only for existing moments */}
+          {momentId && (
+            <div style={styles.field}>
+              <label style={styles.label}>Linked Documents</label>
+
+              {linkedDocs.length === 0 ? (
+                <p style={{ fontSize: '13px', color: '#9CA3AF', margin: '0 0 10px 0' }}>No documents linked yet</p>
+              ) : (
+                <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {linkedDocs.map(doc => (
+                    <div key={doc.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: '#F3F4F6', borderRadius: '6px', fontSize: '13px' }}>
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {doc.filename || doc.title || doc.id}
+                        {doc.evidence_type && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#6B7280', background: '#E5E7EB', padding: '2px 6px', borderRadius: '4px' }}>{doc.evidence_type}</span>}
+                      </span>
+                      <button onClick={() => handleUnlinkDoc(doc.id)} style={{ marginLeft: '8px', padding: '2px 8px', fontSize: '12px', border: '1px solid #D1D5DB', borderRadius: '4px', background: 'white', cursor: 'pointer', color: '#DC2626', flexShrink: 0 }}>
+                        Unlink
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <select
+                  value={selectedDocId}
+                  onChange={e => setSelectedDocId(e.target.value)}
+                  style={{ ...styles.select, flex: 1 }}
+                >
+                  <option value=''>— select a document to link —</option>
+                  {allDocs
+                    .filter(d => !linkedDocs.some(ld => ld.id === d.id))
+                    .map(doc => (
+                      <option key={doc.id} value={doc.id}>
+                        {doc.filename || doc.title || doc.id}{doc.evidence_type ? ` [${doc.evidence_type}]` : ''}
+                      </option>
+                    ))}
+                </select>
+                <button
+                  onClick={handleLinkDoc}
+                  disabled={!selectedDocId || linkingDoc}
+                  style={{ padding: '10px 16px', background: '#8B5CF6', color: 'white', border: 'none', borderRadius: '6px', cursor: selectedDocId ? 'pointer' : 'not-allowed', opacity: selectedDocId ? 1 : 0.5, fontSize: '13px', flexShrink: 0 }}
+                >
+                  Link
+                </button>
+              </div>
+            </div>
+          )}
 
           <div style={{ ...styles.field, background: isContextEvent ? '#F9FAFB' : 'transparent', padding: '12px', borderRadius: '8px', border: '1px solid #E5E7EB' }}>
             <label style={{ ...styles.label, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: 0 }}>

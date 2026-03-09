@@ -22,7 +22,7 @@ const DOCUMENT_SUBTYPE_OPTIONS = [
   { value: 'forward_fyi', label: '📤 Forward / FYI' }
 ];
 
-export default function DocumentPanel({ document: doc, onClose, onDocumentUpdated, onNavigate }) {
+export default function DocumentPanel({ caseId, document: doc, onClose, onDocumentUpdated, onNavigate }) {
   const { mode } = useTheme();
   const [fullDoc, setFullDoc] = useState(null);
   const [allDocs, setAllDocs] = useState([]);
@@ -51,6 +51,12 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
   const [allActors, setAllActors] = useState([]);
   const [showActorPicker, setShowActorPicker] = useState(false);
   const [actorSearch, setActorSearch] = useState('');
+  // Linked moments
+  const [linkedMoments, setLinkedMoments] = useState([]);
+  const [allMoments, setAllMoments] = useState([]);
+  const [showMomentPicker, setShowMomentPicker] = useState(false);
+  const [selectedMomentId, setSelectedMomentId] = useState('');
+  const [linkingMoment, setLinkingMoment] = useState(false);
   const nameInputRef = useRef(null);
   const styles = getStyles();
 
@@ -59,12 +65,15 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
       loadFullDocument(doc.id);
       loadDateEntries(doc.id);
       loadDocActors(doc.id);
+      loadLinkedMoments(doc.id);
       setPreviewData(null);
       setShowPreview(false);
       setShowGroupPicker(false);
       setCreatingGroup(false);
       setShowActorPicker(false);
       setActorSearch('');
+      setShowMomentPicker(false);
+      setSelectedMomentId('');
     }
   }, [doc?.id]);
 
@@ -136,6 +145,42 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
     if (result.success) {
       setDocActors(result.actors);
     }
+  }
+
+  async function loadLinkedMoments(docId) {
+    if (!caseId) return;
+    try {
+      const result = await window.api.events.getForDocument(caseId, docId);
+      if (result.success) setLinkedMoments(result.events || []);
+    } catch (e) {}
+  }
+
+  async function loadAllMoments() {
+    if (!caseId) return;
+    try {
+      const result = await window.api.events.list(caseId);
+      if (result.success) setAllMoments(result.events || []);
+    } catch (e) {}
+  }
+
+  async function handleLinkMoment() {
+    if (!selectedMomentId || !caseId) return;
+    setLinkingMoment(true);
+    try {
+      await window.api.events.linkEvidence(caseId, selectedMomentId, doc.id);
+      await loadLinkedMoments(doc.id);
+      setSelectedMomentId('');
+      setShowMomentPicker(false);
+    } catch (e) {}
+    setLinkingMoment(false);
+  }
+
+  async function handleUnlinkMoment(momentId) {
+    if (!caseId) return;
+    try {
+      await window.api.events.unlinkEvidence(caseId, momentId, doc.id);
+      setLinkedMoments(prev => prev.filter(m => m.id !== momentId));
+    } catch (e) {}
   }
 
   async function loadAllActors() {
@@ -599,6 +644,73 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
               </button>
             )}
           </div>
+
+          {/* Linked Moments */}
+          {caseId && (
+            <div style={styles.section}>
+              <h3 style={styles.sectionTitle}>
+                Linked Moments
+                {linkedMoments.length > 0 && <span style={styles.countBadge}>{linkedMoments.length}</span>}
+              </h3>
+              {linkedMoments.length > 0 && (
+                <div style={styles.datesList}>
+                  {linkedMoments.map(moment => (
+                    <div key={moment.id} style={styles.actorRow}>
+                      <span style={{ ...styles.memberName, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {moment.date && <span style={{ color: colors.textMuted, fontSize: '11px', marginRight: '6px' }}>{moment.date.slice(0, 10)}</span>}
+                        {moment.title}
+                      </span>
+                      <button
+                        style={styles.unpinBtn}
+                        onClick={() => handleUnlinkMoment(moment.id)}
+                        title="Unlink from moment"
+                      >✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {showMomentPicker ? (
+                <div style={{ marginTop: spacing.sm }}>
+                  <select
+                    value={selectedMomentId}
+                    onChange={e => setSelectedMomentId(e.target.value)}
+                    style={styles.typeSelect}
+                  >
+                    <option value=''>— select a moment to link —</option>
+                    {allMoments
+                      .filter(m => !linkedMoments.some(lm => lm.id === m.id))
+                      .map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.date ? m.date.slice(0, 10) + ' — ' : ''}{m.title}
+                        </option>
+                      ))}
+                  </select>
+                  <div style={{ display: 'flex', gap: spacing.sm, marginTop: spacing.sm }}>
+                    <button
+                      style={{ ...styles.saveBtn, flex: 1 }}
+                      onClick={handleLinkMoment}
+                      disabled={!selectedMomentId || linkingMoment}
+                    >
+                      Link
+                    </button>
+                    <button
+                      style={styles.cancelBtn}
+                      onClick={() => { setShowMomentPicker(false); setSelectedMomentId(''); }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  style={styles.addDateBtn}
+                  onClick={() => { loadAllMoments(); setShowMomentPicker(true); }}
+                >
+                  + Link to moment
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Extracted text */}
           {displayDoc.extracted_text && (

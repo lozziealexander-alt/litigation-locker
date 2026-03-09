@@ -12,21 +12,48 @@ const THREAD_DEFINITIONS = [
   { id: 'hr_failure',          name: 'HR Failure to Act',     description: 'HR ignored complaints, failed to investigate, or enabled misconduct',        tag_signals: ['help_request','hr_failure','ignored_complaint'],               precedents: ['faragher-ellerth','vance'],             color: '#A855F7' },
 ];
 
+// Map event_type (moment type) → thread tag signals
+const EVENT_TYPE_SIGNALS = {
+  'reported':          ['protected_activity'],
+  'help':              ['help_request'],
+  'harassment':        ['harassment'],
+  'adverse_action':    ['adverse_action'],
+  'protected_activity':['protected_activity'],
+  'retaliation':       ['retaliation', 'adverse_action'],
+  'start':             [],
+  'end':               [],
+  'milestone':         [],
+};
+
+// Map document evidence_type → thread tag signals
+const DOC_TYPE_SIGNALS = {
+  'ADVERSE_ACTION':     ['adverse_action'],
+  'PROTECTED_ACTIVITY': ['protected_activity'],
+  'REQUEST_FOR_HELP':   ['help_request'],
+  'RESPONSE':           ['help_request'],
+  'PAY_RECORD':         ['pay_discrimination'],
+  'INCIDENT':           ['harassment'],
+  'CLAIM_YOU_MADE':     ['protected_activity'],
+  'CLAIM_AGAINST_YOU':  ['retaliation'],
+};
+
+function buildEffectiveSignals(evt) {
+  const signals = new Set(evt.tags || []);
+  // Add signals from moment type
+  (EVENT_TYPE_SIGNALS[evt.event_type] || []).forEach(s => signals.add(s));
+  // Add signals from linked document categories
+  (evt.documents || []).forEach(d => {
+    (DOC_TYPE_SIGNALS[d.evidence_type] || []).forEach(s => signals.add(s));
+  });
+  return signals;
+}
+
 function assignEventsToThreads(events) {
   const assignments = {};
   for (const evt of events) {
-    const tags = evt.tags || [];
+    const signals = buildEffectiveSignals(evt);
     for (const thread of THREAD_DEFINITIONS) {
-      let matches = thread.tag_signals.some(sig => tags.includes(sig));
-      if (!matches && thread.id === 'pay_discrimination') {
-        const docTypes = (evt.documents || []).map(d => d.evidence_type);
-        if (docTypes.includes('PAY_RECORD')) matches = true;
-      }
-      if (!matches && thread.id === 'hr_failure') {
-        const docTypes = (evt.documents || []).map(d => d.evidence_type);
-        if (['REQUEST_FOR_HELP','RESPONSE'].some(t => docTypes.includes(t))) matches = true;
-      }
-      if (matches) {
+      if (thread.tag_signals.some(sig => signals.has(sig))) {
         if (!assignments[thread.id]) assignments[thread.id] = { thread, events: [], documents: new Set() };
         assignments[thread.id].events.push(evt);
         (evt.documents || []).forEach(d => assignments[thread.id].documents.add(d.id));
@@ -42,8 +69,8 @@ function calculateThreadStrength(assignment) {
   let score = 20;
   score += Math.min(assignment.events.length * 10, 40);
   score += Math.min(assignment.documents.length * 5, 30);
-  const hasPair = assignment.events.some(e => e.tags?.includes('protected_activity')) &&
-                  assignment.events.some(e => e.tags?.includes('adverse_action'));
+  const hasPair = assignment.events.some(e => buildEffectiveSignals(e).has('protected_activity')) &&
+                  assignment.events.some(e => buildEffectiveSignals(e).has('adverse_action'));
   if (hasPair) score += 10;
   return Math.min(score, 100);
 }
@@ -53,8 +80,8 @@ function getThreadGaps(assignment, thread) {
   if (assignment.events.length === 0) { gaps.push('No events tagged yet'); return gaps; }
   if (assignment.documents.length === 0) gaps.push('No supporting documents linked');
   if (thread.id === 'retaliation') {
-    const hasPA  = assignment.events.some(e => e.tags?.includes('protected_activity'));
-    const hasAdv = assignment.events.some(e => e.tags?.includes('adverse_action'));
+    const hasPA  = assignment.events.some(e => buildEffectiveSignals(e).has('protected_activity'));
+    const hasAdv = assignment.events.some(e => buildEffectiveSignals(e).has('adverse_action'));
     if (!hasPA)  gaps.push('Missing: protected activity event');
     if (!hasAdv) gaps.push('Missing: adverse action event');
   }
@@ -81,6 +108,7 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
   const [suggestedIncidents, setSuggestedIncidents] = useState([]);
   const [activeTab, setActiveTab] = useState('overview');
   const [threads, setThreads] = useState({});
+  const [events, setEvents] = useState([]);
 
   function toggleSection(section) {
     setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -93,12 +121,17 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
   async function loadDashboardData() {
     setLoading(true);
     try {
-    const [docsResult, incidentsResult, actorsResult, precedentResult, connectionsResult] = await Promise.all([
+    // Get current case first so we can use the new connections + events APIs
+    const currentCase = await window.api.cases.current().catch(() => null);
+    const caseId = currentCase?.caseId;
+
+    const [docsResult, incidentsResult, actorsResult, precedentResult, connectionsResult, eventsResult] = await Promise.all([
       window.api.documents.list().catch(e => ({ success: false })),
       window.api.incidents.list().catch(e => ({ success: false })),
       window.api.actors.list().catch(e => ({ success: false })),
       window.api.precedents.analyze().catch(e => ({ success: false })),
-      window.api.timeline.getConnections().catch(e => ({ success: false }))
+      caseId ? window.api.connections.list(caseId).catch(e => ({ success: false, connections: [] })) : Promise.resolve({ success: false, connections: [] }),
+      caseId ? window.api.events.list(caseId).catch(e => ({ success: false, events: [] })) : Promise.resolve({ success: false, events: [] })
     ]);
 
     if (docsResult.success) setDocuments(docsResult.documents);
@@ -117,10 +150,24 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
       }
     }
     if (precedentResult.success) setPrecedentAnalysis(precedentResult.analysis);
+
+    // Normalize new connections API (snake_case → camelCase) so rest of code is unchanged
     if (connectionsResult.success) {
-      setConnections(connectionsResult.connections);
-      setEscalation(connectionsResult.escalation);
+      const normalized = (connectionsResult.connections || []).map(c => ({
+        ...c,
+        connectionType: c.connection_type || c.connectionType,
+        sourceId: c.source_id || c.sourceId,
+        targetId: c.target_id || c.targetId,
+        daysBetween: c.days_between ?? c.daysBetween,
+      }));
+      setConnections(normalized);
+      setEscalation(connectionsResult.escalation || null);
     }
+
+    // Process events
+    const evts = eventsResult.success ? (eventsResult.events || []) : [];
+    setEvents(evts);
+    setThreads(assignEventsToThreads(evts));
 
     // Run incident chain analysis (categorizer)
     try {
@@ -142,31 +189,33 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
       if (suggestResult.success) setSuggestedIncidents(suggestResult.suggestions || []);
     } catch (e) {}
 
-    // Load events and assign to claim threads
-    try {
-      const currentCase = await window.api.cases.current();
-      const caseId = currentCase?.caseId;
-      if (caseId) {
-        const eventsResult = await window.api.events.list(caseId);
-        if (eventsResult.success) {
-          setThreads(assignEventsToThreads(eventsResult.events || []));
-        }
-      }
-    } catch (e) {}
-
     // Compute stats
     const docs = docsResult.documents || [];
     const incs = incidentsResult.incidents || [];
     const acts = actorsResult.actors || [];
 
+    // Count incidents from events (more accurate than legacy incidents table)
+    const incidentTagSignals = ['harassment', 'sexual_harassment', 'gender_harassment', 'hostile_environment', 'exclusion', 'adverse_action', 'retaliation'];
+    const eventIncidentCount = evts.filter(e => {
+      const sigs = [...(e.tags || []), e.event_type].filter(Boolean);
+      return sigs.some(s => incidentTagSignals.includes(s));
+    }).length;
+    const effectiveIncidentCount = eventIncidentCount > 0 ? eventIncidentCount : incs.length;
+
     const allDates = [
       ...docs.filter(d => d.document_date).map(d => new Date(d.document_date)),
-      ...incs.filter(i => i.incident_date).map(i => new Date(i.incident_date))
+      ...evts.filter(e => e.date).map(e => new Date(e.date))
     ];
 
     const computed = {
       documentCount: docs.length,
-      incidentCount: incs.length,
+      incidentCount: effectiveIncidentCount,
+      momentCount: evts.length,
+      helpRequestCount: evts.filter(e => (e.tags || []).includes('help_request') || e.event_type === 'help').length
+        + docs.filter(d => d.evidence_type === 'REQUEST_FOR_HELP').length,
+      adverseActionCount: evts.filter(e => (e.tags || []).some(t => ['adverse_action', 'retaliation'].includes(t))).length
+        + docs.filter(d => d.evidence_type === 'ADVERSE_ACTION').length,
+      retaliationEventCount: evts.filter(e => (e.tags || []).some(t => ['retaliation', 'adverse_action'].includes(t)) && (e.tags || []).includes('protected_activity')).length,
       actorCount: acts.length,
       badActorCount: acts.filter(a => a.classification === 'bad_actor').length,
       witnessCount: acts.filter(a => a.classification?.startsWith('witness')).length,
@@ -211,7 +260,16 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     }
 
     // Evidence count
-    parts.push(`You have documented ${stats.documentCount} piece${stats.documentCount !== 1 ? 's' : ''} of evidence and ${stats.incidentCount} incident${stats.incidentCount !== 1 ? 's' : ''}.`);
+    const momentStr = stats.momentCount > 0 ? ` and ${stats.momentCount} moment${stats.momentCount !== 1 ? 's' : ''}` : '';
+    parts.push(`You have documented ${stats.documentCount} piece${stats.documentCount !== 1 ? 's' : ''} of evidence${momentStr}, with ${stats.incidentCount} documented incidents.`);
+
+    // Help requests and adverse actions
+    if (stats.helpRequestCount > 0) {
+      parts.push(`You asked for help ${stats.helpRequestCount} time${stats.helpRequestCount !== 1 ? 's' : ''} — establishing protected activity.`);
+    }
+    if (stats.adverseActionCount > 0) {
+      parts.push(`${stats.adverseActionCount} adverse action${stats.adverseActionCount !== 1 ? 's were' : ' was'} taken against you.`);
+    }
 
     // Actors
     if (stats.badActorCount > 0) {
@@ -321,8 +379,10 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
   function getPatternInsights() {
     const insights = [];
 
-    // Count requests for help
-    const helpCount = documents.filter(d => d.evidence_type === 'REQUEST_FOR_HELP').length;
+    // Count requests for help (events + docs combined, deduplicated by intent)
+    const helpEventCount = events.filter(e => (e.tags || []).includes('help_request') || e.event_type === 'help').length;
+    const helpDocCount = documents.filter(d => d.evidence_type === 'REQUEST_FOR_HELP').length;
+    const helpCount = Math.max(helpEventCount, helpDocCount);
     if (helpCount > 0) {
       insights.push({
         icon: '\uD83D\uDE4B',
@@ -332,8 +392,24 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
       });
     }
 
-    // Count adverse actions
-    const adverseCount = documents.filter(d => d.evidence_type === 'ADVERSE_ACTION').length;
+    // Employer notice — HR/supervisor actors involved in help events (Faragher/Ellerth)
+    const noticeActors = actors.filter(a =>
+      ['hr', 'direct_supervisor', 'skip_level'].includes(a.relationship_to_self)
+    );
+    if (noticeActors.length > 0 && helpCount > 0) {
+      const noticeNames = noticeActors.map(a => a.name).join(', ');
+      insights.push({
+        icon: '\uD83D\uDCCB',
+        count: noticeActors.length,
+        label: `supervisor/HR ${noticeActors.length === 1 ? 'person' : 'people'} had notice (${noticeNames})`,
+        legal: 'Employer had actual or constructive notice — Faragher v. City of Boca Raton / Ellerth — key for vicarious liability'
+      });
+    }
+
+    // Count adverse actions (events + docs)
+    const adverseEventCount = events.filter(e => (e.tags || []).some(t => ['adverse_action', 'retaliation'].includes(t))).length;
+    const adverseDocCount = documents.filter(d => d.evidence_type === 'ADVERSE_ACTION').length;
+    const adverseCount = adverseEventCount + adverseDocCount;
     if (adverseCount > 0) {
       insights.push({
         icon: '\u26A0\uFE0F',
@@ -343,23 +419,35 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
       });
     }
 
-    // Count incidents
-    if (incidents.length > 0) {
+    // Count harassment incidents from events
+    const harassEventCount = events.filter(e => {
+      const sigs = [...(e.tags || []), e.event_type].filter(Boolean);
+      return sigs.some(s => ['harassment', 'sexual_harassment', 'gender_harassment', 'hostile_environment'].includes(s));
+    }).length;
+    const incidentDocCount = documents.filter(d => d.evidence_type === 'INCIDENT').length;
+    const harassTotal = harassEventCount + incidentDocCount;
+    if (harassTotal > 0) {
       insights.push({
         icon: '\u26A1',
-        count: incidents.length,
-        label: `incident${incidents.length !== 1 ? 's' : ''} recorded`,
+        count: harassTotal,
+        label: `harassment incident${harassTotal !== 1 ? 's' : ''} documented`,
         legal: 'Pattern of incidents supports hostile work environment claim — Harris v. Forklift'
       });
     }
 
+    // Retaliation: events with both protected_activity and adverse_action/retaliation tags
+    const retaliationEvtCount = events.filter(e => {
+      const tags = e.tags || [];
+      return tags.includes('protected_activity') && tags.some(t => ['adverse_action', 'retaliation'].includes(t));
+    }).length;
     // Count retaliation chains
-    const retaliationCount = connections.filter(c => c.connectionType === 'retaliation_chain').length;
+    const retaliationConnCount = connections.filter(c => c.connectionType === 'retaliation_chain').length;
+    const retaliationCount = retaliationEvtCount + retaliationConnCount;
     if (retaliationCount > 0) {
       insights.push({
         icon: '\uD83D\uDD17',
         count: retaliationCount,
-        label: `retaliation chain${retaliationCount !== 1 ? 's' : ''} detected`,
+        label: `retaliation indicator${retaliationCount !== 1 ? 's' : ''} detected`,
         legal: 'Temporal proximity between protected activity and adverse action supports retaliation inference'
       });
     }
@@ -522,9 +610,10 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
             onClick={() => onNavigateToTimeline?.()}
           />
           <StatCard
-            icon={'\u26A1'}
-            value={stats?.incidentCount || 0}
-            label="Incidents"
+            icon={'\uD83D\uDD34'}
+            value={stats?.momentCount || 0}
+            label="Moments"
+            sublabel={stats?.incidentCount > 0 ? `${stats.incidentCount} incidents` : null}
             onClick={() => onNavigateToTimeline?.()}
           />
           <StatCard

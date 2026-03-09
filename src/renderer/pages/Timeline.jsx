@@ -155,6 +155,10 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
               }}>{level}</button>
             ))}
           </div>
+          <button onClick={() => window.dispatchEvent(new CustomEvent('add-moment'))} style={{
+            padding: '6px 14px', background: '#e74c3c', color: '#fff',
+            border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500
+          }}>+ Moment</button>
           <button onClick={() => window.dispatchEvent(new CustomEvent('import-files'))} style={{
             padding: '6px 14px', background: '#2c3e50', color: '#fff',
             border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500

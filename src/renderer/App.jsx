@@ -35,6 +35,24 @@ export default function App() {
     checkVaultStatus();
   }, []);
 
+  useEffect(() => {
+    const handleImport = async () => {
+      const result = await window.api.dialog.openFiles();
+      if (!result.canceled && result.filePaths.length > 0) {
+        await window.api.documents.ingest(result.filePaths);
+        setTimelineKey(k => k + 1);
+        setThreadsKey(k => k + 1);
+      }
+    };
+    const handleAddMoment = () => setSelectedEvent({});
+    window.addEventListener('import-files', handleImport);
+    window.addEventListener('add-moment', handleAddMoment);
+    return () => {
+      window.removeEventListener('import-files', handleImport);
+      window.removeEventListener('add-moment', handleAddMoment);
+    };
+  }, []);
+
   async function checkVaultStatus() {
     const unlocked = await window.api.vault.isUnlocked();
     console.log('[App] vault isUnlocked:', unlocked);
@@ -311,6 +329,7 @@ export default function App() {
       {/* Document panel */}
       {selectedDocument && (
         <DocumentPanel
+          caseId={activeCase?.id}
           document={selectedDocument}
           onClose={() => setSelectedDocument(null)}
           onNavigate={setSelectedDocument}

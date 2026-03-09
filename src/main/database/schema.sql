@@ -181,20 +181,20 @@ CREATE TABLE IF NOT EXISTS claim_evidence (
   PRIMARY KEY (claim_id, document_id)
 );
 
--- Timeline connections (causality)
+-- Timeline connections (causality / auto-detected)
 CREATE TABLE IF NOT EXISTS timeline_connections (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT PRIMARY KEY,
+  case_id TEXT,
   source_id TEXT NOT NULL,
-  source_type TEXT NOT NULL CHECK(source_type IN ('document', 'incident')),
+  source_type TEXT NOT NULL,
   target_id TEXT NOT NULL,
-  target_type TEXT NOT NULL CHECK(target_type IN ('document', 'incident')),
-  connection_type TEXT CHECK(connection_type IN (
-    'retaliation_chain', 'escalation', 'temporal_cluster',
-    'actor_continuity', 'causal', 'response_to'
-  )),
+  target_type TEXT NOT NULL,
+  connection_type TEXT,
+  strength REAL DEFAULT 0.5,
   days_between INTEGER,
   description TEXT,
-  auto_detected BOOLEAN DEFAULT 1
+  auto_detected BOOLEAN DEFAULT 1,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Pay records

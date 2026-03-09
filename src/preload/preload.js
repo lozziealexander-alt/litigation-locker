@@ -146,6 +146,7 @@ contextBridge.exposeInMainWorld('api', {
     getTags: (caseId, eventId) => ipcRenderer.invoke('events:getTags', caseId, eventId),
     updateTags: (caseId, eventId, tags) => ipcRenderer.invoke('events:updateTags', caseId, eventId, tags),
     getLinkedDocuments: (caseId, eventId) => ipcRenderer.invoke('events:getLinkedDocuments', caseId, eventId),
+    getForDocument: (caseId, docId) => ipcRenderer.invoke('events:getForDocument', caseId, docId),
     updateContextStatus: (caseId, eventId, isContext, scope) =>
       ipcRenderer.invoke('events:updateContextStatus', caseId, eventId, isContext, scope)
   },
@@ -158,9 +159,13 @@ contextBridge.exposeInMainWorld('api', {
     delete: (id) => ipcRenderer.invoke('comparators:delete', id)
   },
 
-  // Connections view (SESSION-9C)
+  // Connections (SESSION-9D)
   connections: {
-    list: () => ipcRenderer.invoke('connections:list')
+    list: (caseId) => ipcRenderer.invoke('connections:list', caseId),
+    autoDetect: (caseId) => ipcRenderer.invoke('connections:autoDetect', caseId),
+    create: (caseId, data) => ipcRenderer.invoke('connections:create', caseId, data),
+    update: (caseId, id, data) => ipcRenderer.invoke('connections:update', caseId, id, data),
+    delete: (caseId, id) => ipcRenderer.invoke('connections:delete', caseId, id)
   },
 
   // Encrypted export (SESSION-9C)

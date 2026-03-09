@@ -812,6 +812,33 @@ function openCase(caseId) {
     )`);
   }
 
+  // SESSION-9D: Migrate timeline_connections to support event-to-event connections with strength/case_id
+  {
+    const tcCols = caseDb.prepare("PRAGMA table_info(timeline_connections)").all().map(c => c.name);
+    if (!tcCols.includes('case_id') || !tcCols.includes('strength')) {
+      console.log('[DB] SESSION-9D: Rebuilding timeline_connections with new schema');
+      caseDb.exec('DROP TABLE IF EXISTS timeline_connections');
+      caseDb.exec(`CREATE TABLE timeline_connections (
+        id TEXT PRIMARY KEY,
+        case_id TEXT,
+        source_id TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        connection_type TEXT,
+        strength REAL DEFAULT 0.5,
+        days_between INTEGER,
+        description TEXT,
+        auto_detected BOOLEAN DEFAULT 1,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`);
+      caseDb.exec('CREATE INDEX IF NOT EXISTS idx_tc_case ON timeline_connections(case_id)');
+      caseDb.exec('CREATE INDEX IF NOT EXISTS idx_tc_source ON timeline_connections(source_id, source_type)');
+      caseDb.exec('CREATE INDEX IF NOT EXISTS idx_tc_target ON timeline_connections(target_id, target_type)');
+      console.log('[DB] SESSION-9D: timeline_connections migration complete');
+    }
+  }
+
   return caseDb;
 }
 

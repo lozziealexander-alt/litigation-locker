@@ -6,6 +6,7 @@ const { burn, verifyBurn } = require('./crypto/kill-switch');
 const db = require('./database/init');
 const { processFiles } = require('./ingest/file-processor');
 const { analyzeConnections, detectEscalationPattern } = require('./analysis/timeline-connections');
+const { ConnectionDetector } = require('./analysis/connection-detector');
 const { analyzeAllPrecedents, getDocumentPrecedentBadges } = require('./analysis/precedent-matcher');
 const { classifyEvidence } = require('./ingest/evidence-classifier');
 const { detectIncidents, computeSeverity, suggestActorsForIncident } = require('./analysis/incident-detector');
@@ -3703,6 +3704,21 @@ function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle('events:getForDocument', async (event, caseId, docId) => {
+    try {
+      const caseDb = currentCaseDb;
+      const events = caseDb.prepare(`
+        SELECT e.* FROM events e
+        JOIN event_documents ed ON ed.event_id = e.id
+        WHERE ed.document_id = ?
+        ORDER BY e.date ASC
+      `).all(docId);
+      return { success: true, events };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // ==================== SESSION-9C: CONTEXT EVENTS ====================
 
   ipcMain.handle('events:updateContextStatus', async (event, caseId, eventId, isContext, scope) => {
@@ -3790,24 +3806,105 @@ function registerIpcHandlers() {
 
   // ==================== SESSION-9C: CONNECTIONS VIEW ====================
 
-  ipcMain.handle('connections:list', async () => {
+  ipcMain.handle('connections:list', async (event, caseId) => {
     try {
       const caseDb = currentCaseDb;
-      const links = caseDb.prepare(`
-        SELECT el.*,
-          se.title as source_title, se.date as source_date, se.event_type as source_type,
-          te.title as target_title, te.date as target_date, te.event_type as target_type
-        FROM event_links el
-        JOIN events se ON se.id = el.source_event_id
-        JOIN events te ON te.id = el.target_event_id
-        ORDER BY se.date ASC
-      `).all();
-      const events = caseDb.prepare(
-        'SELECT id, title, date, event_type, is_context_event FROM events ORDER BY date ASC'
-      ).all();
-      return { success: true, links, events };
+      if (!caseDb) return { success: false, error: 'No case open', connections: [] };
+
+      const connections = caseDb.prepare(`
+        SELECT
+          tc.*,
+          e1.title as source_title,
+          e1.date as source_date,
+          e2.title as target_title,
+          e2.date as target_date
+        FROM timeline_connections tc
+        LEFT JOIN events e1 ON e1.id = tc.source_id
+        LEFT JOIN events e2 ON e2.id = tc.target_id
+        WHERE tc.case_id = ?
+        ORDER BY tc.strength DESC, tc.days_between ASC
+      `).all(caseId || currentCaseId);
+
+      return { success: true, connections };
     } catch (err) {
-      return { success: false, error: err.message, links: [], events: [] };
+      console.error('[IPC] connections:list failed:', err);
+      return { success: false, error: err.message, connections: [] };
+    }
+  });
+
+  ipcMain.handle('connections:autoDetect', async (event, caseId) => {
+    try {
+      console.log('[IPC] Auto-detecting connections for case:', caseId);
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      const connections = ConnectionDetector.detectConnections(caseDb, caseId);
+
+      event.sender.send('case-changed', { caseId });
+
+      return { success: true, connections, count: connections.length };
+    } catch (err) {
+      console.error('[IPC] connections:autoDetect failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('connections:create', async (event, caseId, data) => {
+    try {
+      const id = uuidv4();
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      caseDb.prepare(`
+        INSERT INTO timeline_connections (
+          id, case_id, source_type, source_id, target_type, target_id,
+          connection_type, strength, days_between, description, auto_detected
+        ) VALUES (?, ?, 'event', ?, 'event', ?, ?, ?, ?, ?, 0)
+      `).run(
+        id, caseId, data.source_id, data.target_id,
+        data.connection_type, data.strength || 0.8, data.days_between, data.description
+      );
+
+      const connection = caseDb.prepare('SELECT * FROM timeline_connections WHERE id = ?').get(id);
+      return { success: true, connection };
+    } catch (err) {
+      console.error('[IPC] connections:create failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('connections:update', async (event, caseId, connectionId, data) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      caseDb.prepare(`
+        UPDATE timeline_connections SET
+          connection_type = ?,
+          strength = ?,
+          description = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND case_id = ?
+      `).run(data.connection_type, data.strength, data.description, connectionId, caseId);
+
+      const connection = caseDb.prepare('SELECT * FROM timeline_connections WHERE id = ?').get(connectionId);
+      return { success: true, connection };
+    } catch (err) {
+      console.error('[IPC] connections:update failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('connections:delete', async (event, caseId, connectionId) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      caseDb.prepare('DELETE FROM timeline_connections WHERE id = ? AND case_id = ?').run(connectionId, caseId);
+      return { success: true };
+    } catch (err) {
+      console.error('[IPC] connections:delete failed:', err);
+      return { success: false, error: err.message };
     }
   });
 
