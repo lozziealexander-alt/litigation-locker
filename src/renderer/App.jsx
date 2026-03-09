@@ -77,11 +77,15 @@ export default function App() {
   }
 
   async function checkVaultStatus() {
-    const unlocked = await window.api.vault.isUnlocked();
-    console.log('[App] vault isUnlocked:', unlocked);
-    setIsUnlocked(unlocked);
-    if (unlocked) {
-      await loadCases();
+    try {
+      const unlocked = await window.api.vault.isUnlocked();
+      console.log('[App] vault isUnlocked:', unlocked);
+      setIsUnlocked(unlocked);
+      if (unlocked) {
+        await loadCases();
+      }
+    } catch (e) {
+      console.error('[App] checkVaultStatus error:', e);
     }
     setIsLoading(false);
   }

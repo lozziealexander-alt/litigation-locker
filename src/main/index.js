@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
 const { registerIpcHandlers } = require('./ipc-handlers');
 const { terminateOcr } = require('./ingest/ocr-engine');
@@ -42,8 +42,13 @@ app.whenReady().then(() => {
   console.log('[STARTUP] app name:', app.getName());
   try {
     registerIpcHandlers();
+    console.log('[STARTUP] IPC handlers registered successfully');
   } catch (err) {
     console.error('[STARTUP] FATAL: Failed to register IPC handlers:', err);
+    dialog.showErrorBox(
+      'Startup Error',
+      'Failed to register IPC handlers. The app may not work correctly.\n\n' + err.message
+    );
   }
   createWindow();
 });
