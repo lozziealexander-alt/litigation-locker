@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import NotifyModal, { NotifySummary } from '../components/NotifyModal';
 
 const PERIOD_COLORS = [
@@ -28,15 +28,39 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
   // Notification modal state
   const [notifyDocId, setNotifyDocId] = useState(null);
 
+  // Scroll + chart scroll restoration
+  const itemsPanelRef = useRef(null);
+  const chartPanelRef = useRef(null);
+  const scrollPosRef = useRef(0);
+  const chartScrollRef = useRef(0);
+  const isInitialLoad = useRef(true);
+
+  // Save scroll position before reload
+  const saveScrollPos = useCallback(() => {
+    if (itemsPanelRef.current) scrollPosRef.current = itemsPanelRef.current.scrollTop;
+    if (chartPanelRef.current) chartScrollRef.current = chartPanelRef.current.scrollLeft;
+  }, []);
+
+  // Restore scroll position after reload
+  const restoreScrollPos = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (itemsPanelRef.current) itemsPanelRef.current.scrollTop = scrollPosRef.current;
+      if (chartPanelRef.current) chartPanelRef.current.scrollLeft = chartScrollRef.current;
+    });
+  }, []);
+
   useEffect(() => {
     loadTimeline();
-    const handleCaseChange = () => loadTimeline();
+    const handleCaseChange = () => { isInitialLoad.current = true; loadTimeline(); };
     window.api.on?.('case-changed', handleCaseChange);
     return () => window.api.off?.('case-changed', handleCaseChange);
   }, []);
 
   useEffect(() => {
-    if (refreshSignal) loadTimeline();
+    if (refreshSignal) {
+      saveScrollPos();
+      loadTimeline();
+    }
   }, [refreshSignal]);
 
   // Filter items by viewMode
@@ -57,9 +81,11 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
 
   const loadTimeline = async () => {
     try {
-      setLoading(true);
+      // Only show loading spinner on first load, not on refresh
+      if (isInitialLoad.current) setLoading(true);
+
       const { caseId } = await window.api.cases.current();
-      if (!caseId) { setTimelineItems([]); setLoading(false); return; }
+      if (!caseId) { setTimelineItems([]); setLoading(false); isInitialLoad.current = false; return; }
 
       const [eventsRes, docsRes, metaRes] = await Promise.all([
         window.api.events.list(caseId),
@@ -98,9 +124,14 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
 
       setTimelineItems(merged);
       setLoading(false);
+
+      // Restore scroll on refresh (not initial load)
+      if (!isInitialLoad.current) restoreScrollPos();
+      isInitialLoad.current = false;
     } catch (err) {
       console.error('[Timeline] Load failed:', err);
       setLoading(false);
+      isInitialLoad.current = false;
     }
   };
 
@@ -146,7 +177,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
     const res = item._type === 'moment'
       ? await window.api.events.delete(caseId, item.id)
       : await window.api.documents.delete(caseId, item.id);
-    if (res.success) { onDataChanged?.(); loadTimeline(); }
+    if (res.success) { saveScrollPos(); onDataChanged?.(); loadTimeline(); }
     else alert(`Delete failed: ${res.error}`);
   };
 
@@ -221,7 +252,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
             {viewMode === 'all' ? 'No items yet' : `No ${viewMode} yet`}
           </div>
         ) : (
-          <div style={{ display: 'flex', overflowX: 'auto', padding: '20px 24px 0', gap: 0, alignItems: 'flex-end' }}>
+          <div ref={chartPanelRef} style={{ display: 'flex', overflowX: 'auto', padding: '20px 24px 0', gap: 0, alignItems: 'flex-end' }}>
 
             {/* Y-axis */}
             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: CHART_HEIGHT, paddingBottom: 32, marginRight: 8, flexShrink: 0 }}>
@@ -281,7 +312,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
       </div>
 
       {/* ITEMS PANEL */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
+      <div ref={itemsPanelRef} style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
         {selectedPeriod && (
           <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
             <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: '#2c3e50' }}>{selectedPeriod}</h3>
