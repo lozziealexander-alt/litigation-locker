@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Litigation Locker — Preview</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+      background: #FAFAF8;
+      color: #1A1A1A;
+      overflow: hidden;
+    }
+    #root { height: 100vh; }
+    button:hover { filter: brightness(1.05); }
+    select { cursor: pointer; }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    // Mock window.api so the app can render without Electron
+    const MOCK_BRIEF = {
+      generatedAt: '2026-03-09T10:30:00.000Z',
+      isStale: false,
+      executive: {
+        caseType: 'Sexual Harassment + Retaliation + HR Failure to Act',
+        timeSpan: '14 Mar 2024 — 8 Jan 2026',
+        timeSpanDays: 665,
+        counts: { documents: 23, events: 47, actors: 9, incidents: 6, activeThreads: 3 },
+        strength: 6.8
+      },
+      timeline: {
+        start: '2024-03-14',
+        end: '2026-01-08',
+        gaps: [
+          { from: '2024-06-10', to: '2024-09-22', days: 104, label: '104-day gap (10 Jun 2024 — 22 Sep 2024)' },
+          { from: '2025-04-01', to: '2025-06-15', days: 75, label: '75-day gap (1 Apr 2025 — 15 Jun 2025)' }
+        ],
+        criticalMoments: [
+          { id: 'e1', date: '2024-03-14', title: 'Inappropriate comment by manager at team meeting', tags: ['sexual_harassment', 'harassment'], severity: 'severe', score: 5 },
+          { id: 'e2', date: '2024-04-02', title: 'Second incident — unwelcome physical contact in office', tags: ['sexual_harassment'], severity: 'egregious', score: 7 },
+          { id: 'e3', date: '2024-05-18', title: 'Formal complaint submitted to HR', tags: ['help_request', 'protected_activity'], severity: 'moderate', score: 7 },
+          { id: 'e4', date: '2024-06-01', title: 'HR acknowledged complaint — no investigation opened', tags: ['hr_failure', 'ignored_complaint'], severity: 'severe', score: 6 },
+          { id: 'e5', date: '2024-09-22', title: 'Removed from key project without explanation', tags: ['retaliation', 'adverse_action'], severity: 'severe', score: 9 },
+          { id: 'e6', date: '2024-11-15', title: 'Negative performance review — first in 4 years', tags: ['retaliation', 'adverse_action'], severity: 'moderate', score: 7 },
+          { id: 'e7', date: '2025-01-10', title: 'Excluded from team planning offsite', tags: ['exclusion', 'isolation'], severity: 'moderate', score: 4 },
+          { id: 'e8', date: '2025-03-20', title: 'Second complaint to HR — still no action', tags: ['help_request', 'hr_failure'], severity: 'severe', score: 6 },
+          { id: 'e9', date: '2025-08-05', title: 'Demotion effective — title and pay reduced', tags: ['adverse_action', 'retaliation'], severity: 'egregious', score: 9 },
+          { id: 'e10', date: '2026-01-08', title: 'Constructive dismissal — resignation under duress', tags: ['adverse_action'], severity: 'egregious', score: 8 }
+        ]
+      },
+      threads: [
+        {
+          id: 'sexual_harassment', name: 'Sexual Harassment', color: '#8B5CF6',
+          precedents: ['Harris v. Forklift Systems (1993)', 'Faragher v. Boca Raton (1998)'],
+          eventCount: 8, docCount: 5, strength: 7.2,
+          elements: [
+            { key: 'unwelcome', label: 'Unwelcome conduct', status: 'satisfied' },
+            { key: 'protected_class', label: 'Based on sex/gender', status: 'satisfied' },
+            { key: 'severe_pervasive', label: 'Severe or pervasive', status: 'satisfied' },
+            { key: 'employer_knowledge', label: 'Employer knew or should have known', status: 'satisfied' }
+          ],
+          keyEvidence: [
+            { id: 'd1', filename: 'email-complaint-to-hr-2024-05-18.pdf', date: '2024-05-18', type: 'REQUEST_FOR_HELP' },
+            { id: 'd2', filename: 'text-messages-march-2024.png', date: '2024-03-15', type: 'COMMUNICATION' },
+            { id: 'd3', filename: 'witness-statement-jclarke.pdf', date: '2024-04-10', type: 'WITNESS_STATEMENT' }
+          ],
+          gaps: []
+        },
+        {
+          id: 'retaliation', name: 'Retaliation', color: '#F59E0B',
+          precedents: ['Burlington Northern v. White (2006)', 'Vance v. Ball State (2013)'],
+          eventCount: 12, docCount: 7, strength: 8.1,
+          elements: [
+            { key: 'protected_activity', label: 'Protected activity occurred', status: 'satisfied' },
+            { key: 'employer_knowledge', label: 'Employer aware of protected activity', status: 'satisfied' },
+            { key: 'adverse_action', label: 'Adverse employment action taken', status: 'satisfied' },
+            { key: 'causal_link', label: 'Causal connection (timing / nexus)', status: 'satisfied' }
+          ],
+          keyEvidence: [
+            { id: 'd4', filename: 'performance-review-2024-11.pdf', date: '2024-11-15', type: 'ADVERSE_ACTION' },
+            { id: 'd5', filename: 'demotion-letter-2025-08.pdf', date: '2025-08-05', type: 'ADVERSE_ACTION' },
+            { id: 'd6', filename: 'project-removal-email.eml', date: '2024-09-22', type: 'COMMUNICATION' }
+          ],
+          gaps: []
+        },
+        {
+          id: 'hr_failure', name: 'HR Failure to Act', color: '#A855F7',
+          precedents: ['Faragher v. Boca Raton (1998)', 'Vance v. Ball State (2013)'],
+          eventCount: 5, docCount: 3, strength: 5.4,
+          elements: [
+            { key: 'complaint_made', label: 'Complaint formally made to HR/mgmt', status: 'satisfied' },
+            { key: 'no_investigation', label: 'No adequate investigation taken', status: 'partial' },
+            { key: 'no_remediation', label: 'No corrective action taken', status: 'satisfied' }
+          ],
+          keyEvidence: [
+            { id: 'd7', filename: 'hr-response-email-june-2024.eml', date: '2024-06-01', type: 'RESPONSE' }
+          ],
+          gaps: ['No evidence for: No adequate investigation taken — need internal HR investigation records']
+        }
+      ],
+      actors: [
+        { id: 'a1', name: 'David Morrison', classification: 'bad_actor', role: 'Direct Manager', eventCount: 18, docCount: 8, reliabilityLabel: null, would_they_help: null, still_employed: 'yes' },
+        { id: 'a2', name: 'Karen Walsh', classification: 'enabler', role: 'HR Director', eventCount: 6, docCount: 4, reliabilityLabel: null, would_they_help: 'likely_hostile', still_employed: 'yes' },
+        { id: 'a3', name: 'James Clarke', classification: 'witness_supportive', role: 'Colleague — same team', eventCount: 4, docCount: 2, reliabilityLabel: 'High (contemporaneous, specific statement)', would_they_help: 'likely_helpful', still_employed: 'yes' },
+        { id: 'a4', name: 'Priya Nair', classification: 'witness_neutral', role: 'Colleague — adjacent team', eventCount: 2, docCount: 1, reliabilityLabel: 'Moderate (statement exists)', would_they_help: null, still_employed: 'no' },
+        { id: 'a5', name: 'Tom Brewster', classification: 'bystander', role: 'Senior Director', eventCount: 1, docCount: 0, reliabilityLabel: null, would_they_help: null, still_employed: 'yes' },
+        { id: 'self', name: 'You', classification: 'self', role: null, eventCount: 47, docCount: 23, reliabilityLabel: null, would_they_help: null, still_employed: 'no' }
+      ],
+      redFlags: [
+        { type: 'timeline_gap', severity: 'medium', label: '2 timeline gaps identified', detail: '104-day gap (10 Jun 2024 — 22 Sep 2024); 75-day gap (1 Apr 2025 — 15 Jun 2025)' },
+        { type: 'missing_investigation_docs', severity: 'high', label: 'No HR investigation records found', detail: 'If HR claims they investigated, request those records — their absence strengthens the HR Failure claim' }
+      ]
+    };
+
+    // Mock vault as already unlocked, case already open
+    window.api = {
+      vault: {
+        check: () => Promise.resolve({ exists: true }),
+        unlock: () => Promise.resolve({ success: true }),
+        create: () => Promise.resolve({ success: true })
+      },
+      cases: {
+        list: () => Promise.resolve({ success: true, cases: [{ id: 'preview', name: 'Preview Case', created_at: '2024-01-01' }] }),
+        open: () => Promise.resolve({ success: true }),
+        create: () => Promise.resolve({ success: true, id: 'preview' })
+      },
+      brief: {
+        generate: () => Promise.resolve({ success: true, brief: MOCK_BRIEF }),
+        latest: () => Promise.resolve({ success: true, brief: MOCK_BRIEF }),
+        markStale: () => Promise.resolve({ success: true }),
+        versions: () => Promise.resolve({ success: true, versions: [
+          { id: 1, generated_at: '2026-03-01T08:00:00Z', strength_score: 5.2 },
+          { id: 2, generated_at: '2026-03-05T14:30:00Z', strength_score: 6.1 }
+        ]}),
+        exportMarkdown: () => Promise.resolve({ success: true }),
+        exportHTML: () => Promise.resolve({ success: true })
+      },
+      documents: { list: () => Promise.resolve({ success: true, documents: [] }) },
+      events: { list: () => Promise.resolve({ success: true, events: [] }), get: () => Promise.resolve({ success: true }) },
+      actors: { list: () => Promise.resolve({ success: true, actors: [] }) },
+      incidents: { list: () => Promise.resolve({ success: true, incidents: [] }) },
+      connections: { list: () => Promise.resolve({ success: true, connections: [] }) },
+      timeline: { list: () => Promise.resolve({ success: true, events: [] }) },
+      eventTags: { list: () => Promise.resolve({ success: true, tags: [] }) },
+      settings: { get: () => Promise.resolve({ success: true, settings: {} }), set: () => Promise.resolve({ success: true }) },
+      context: { get: () => Promise.resolve({ success: true, context: null }) },
+      contextDocs: { list: () => Promise.resolve({ success: true, documents: [] }) },
+      jurisdiction: { get: () => Promise.resolve({ success: true }) },
+      groups: { list: () => Promise.resolve({ success: true, groups: [] }) },
+      precedents: { list: () => Promise.resolve({ success: true, precedents: [] }) },
+      comparators: { list: () => Promise.resolve({ success: true, comparators: [] }) },
+      damages: { get: () => Promise.resolve({ success: true }) },
+      burn: { case: () => Promise.resolve({ success: true }), all: () => Promise.resolve({ success: true }) },
+      assessor: { run: () => Promise.resolve({ success: true }) },
+      categorizer: { run: () => Promise.resolve({ success: true }) },
+      dialog: { showOpen: () => Promise.resolve({ canceled: true }), showSave: () => Promise.resolve({ canceled: true }) },
+      eventLinks: { list: () => Promise.resolve({ success: true, links: [] }) },
+      incidentEvents: { list: () => Promise.resolve({ success: true, events: [] }) },
+      payRecords: { list: () => Promise.resolve({ success: true, records: [] }) },
+      debug: { log: () => {} },
+      on: () => {},
+      off: () => {}
+    };
+
+    document.addEventListener('dragover', function(e) { e.preventDefault(); });
+  </script>
+  <script src="./bundle.js"></script>
+</body>
+</html>
