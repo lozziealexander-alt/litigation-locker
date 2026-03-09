@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import NotifyModal, { NotifySummary } from '../components/NotifyModal';
 
 const PERIOD_COLORS = [
@@ -21,6 +21,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
   const [sortedKeys, setSortedKeys] = useState([]);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [viewMode, setViewMode] = useState('all');
+  const [pendingDeleteId, setPendingDeleteId] = useState(null);
 
   // Document metadata: linked event counts + notification actors
   const [docMeta, setDocMeta] = useState({ eventCounts: {}, notifMap: {} });
@@ -34,6 +35,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
   const scrollPosRef = useRef(0);
   const chartScrollRef = useRef(0);
   const isInitialLoad = useRef(true);
+  const needsScrollRestore = useRef(false);
 
   // Save scroll position before reload
   const saveScrollPos = useCallback(() => {
@@ -41,13 +43,14 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
     if (chartPanelRef.current) chartScrollRef.current = chartPanelRef.current.scrollLeft;
   }, []);
 
-  // Restore scroll position after reload
-  const restoreScrollPos = useCallback(() => {
-    requestAnimationFrame(() => {
+  // Restore scroll synchronously after DOM update (before paint) to avoid flash-to-top
+  useLayoutEffect(() => {
+    if (needsScrollRestore.current) {
       if (itemsPanelRef.current) itemsPanelRef.current.scrollTop = scrollPosRef.current;
       if (chartPanelRef.current) chartPanelRef.current.scrollLeft = chartScrollRef.current;
-    });
-  }, []);
+      needsScrollRestore.current = false;
+    }
+  }, [timelineItems]);
 
   useEffect(() => {
     loadTimeline();
@@ -59,6 +62,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
   useEffect(() => {
     if (refreshSignal) {
       saveScrollPos();
+      needsScrollRestore.current = true;
       loadTimeline();
     }
   }, [refreshSignal]);
@@ -124,9 +128,6 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
 
       setTimelineItems(merged);
       setLoading(false);
-
-      // Restore scroll on refresh (not initial load)
-      if (!isInitialLoad.current) restoreScrollPos();
       isInitialLoad.current = false;
     } catch (err) {
       console.error('[Timeline] Load failed:', err);
@@ -171,14 +172,18 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
   };
 
   const handleDelete = async (item) => {
-    const label = item._label;
-    if (!confirm(`Delete "${label}"?\n\nCannot be undone.`)) return;
+    if (pendingDeleteId !== item.id) {
+      setPendingDeleteId(item.id);
+      setTimeout(() => setPendingDeleteId(null), 4000);
+      return;
+    }
+    setPendingDeleteId(null);
     const { caseId } = await window.api.cases.current();
     const res = item._type === 'moment'
       ? await window.api.events.delete(caseId, item.id)
-      : await window.api.documents.delete(caseId, item.id);
-    if (res.success) { saveScrollPos(); onDataChanged?.(); loadTimeline(); }
-    else alert(`Delete failed: ${res.error}`);
+      : await window.api.documents.delete(item.id);
+    if (res?.success) { saveScrollPos(); onDataChanged?.(); loadTimeline(); }
+    else console.error('[Timeline] Delete failed:', res?.error);
   };
 
   const handleNotified = (docId, actors) => {
@@ -326,7 +331,8 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
 
         {(selectedPeriod ? selectedItems : filteredItems).map(item => {
           const isMoment = item._type === 'moment';
-          const typeColor = isMoment ? '#e74c3c' : '#2196f3';
+          const isContext = isMoment && item.is_context_event;
+          const typeColor = isContext ? '#6B7280' : isMoment ? '#e74c3c' : '#2196f3';
           const tags = isMoment ? (item.tags || []) : (item.evidence_type ? [item.evidence_type] : []);
 
           // Document-specific metadata
@@ -344,16 +350,17 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
               {/* Icon */}
               <div style={{
                 width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
-                background: isMoment ? '#ffeef0' : '#e8f4fd',
+                background: isContext ? '#f3f4f6' : isMoment ? '#ffeef0' : '#e8f4fd',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14
               }}>
-                {isMoment ? '\uD83D\uDD34' : '\uD83D\uDCC4'}
+                {isContext ? '\u25EF' : isMoment ? '\uD83D\uDD34' : '\uD83D\uDCC4'}
               </div>
 
               {/* Content */}
               <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                <div style={{ fontWeight: 500, fontSize: 13, color: '#2c3e50', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ fontWeight: 500, fontSize: 13, color: isContext ? '#6B7280' : '#2c3e50', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
                   {item._label}
+                  {isContext && <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#e5e7eb', color: '#6B7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0 }}>Context</span>}
                 </div>
                 <div style={{ fontSize: 11, color: '#aaa', marginTop: 2, whiteSpace: 'nowrap' }}>
                   {item._date ? new Date(item._date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'No date'}
@@ -364,8 +371,8 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
                     {tags.slice(0, 4).map(tag => (
                       <span key={tag} style={{
                         padding: '1px 6px', fontSize: 10, borderRadius: 3,
-                        background: isMoment ? '#ffeef0' : '#e8f4fd',
-                        color: typeColor, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.3
+                        background: isContext ? '#f3f4f6' : isMoment ? '#ffeef0' : '#e8f4fd',
+                        color: isContext ? '#9CA3AF' : typeColor, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.3
                       }}>{tag.replace(/_/g, ' ')}</span>
                     ))}
                   </div>
@@ -412,8 +419,10 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
                 </button>
                 <button onClick={() => handleDelete(item)} style={{
                   padding: '4px 8px', fontSize: 11, cursor: 'pointer', borderRadius: 4,
-                  background: '#fff', color: '#e74c3c', border: '1px solid #ffd0d0'
-                }}>{'\uD83D\uDDD1'}</button>
+                  background: pendingDeleteId === item.id ? '#e74c3c' : '#fff',
+                  color: pendingDeleteId === item.id ? '#fff' : '#e74c3c',
+                  border: '1px solid #ffd0d0', fontWeight: pendingDeleteId === item.id ? 600 : 400
+                }}>{pendingDeleteId === item.id ? 'Sure?' : '\uD83D\uDDD1'}</button>
               </div>
             </div>
           );

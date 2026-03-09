@@ -85,6 +85,14 @@ export default function ActorDetail({ actor, onClose, onActorUpdated }) {
 
   const styles = getStyles();
 
+  // Sync state when actor prop changes (e.g., after parent re-fetches from DB)
+  useEffect(() => {
+    setEditedActor({ ...actor, relationship_to_self: normalizeRelationship(actor.relationship_to_self) });
+    setInReportingChain(!!actor.in_reporting_chain);
+    try { setAliases(JSON.parse(actor.aliases || '[]')); } catch { setAliases([]); }
+    setDirty(false);
+  }, [actor.id, actor.in_reporting_chain]);
+
   useEffect(() => {
     loadDetails();
   }, [actor.id]);

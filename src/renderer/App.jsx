@@ -29,6 +29,7 @@ export default function App() {
   const [renamingCaseId, setRenamingCaseId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [briefStale, setBriefStale] = useState(false);
+  const [importToast, setImportToast] = useState(null);
 
   // Recompute styles each render so they pick up current theme colors
   const styles = getStyles();
@@ -39,12 +40,30 @@ export default function App() {
 
   useEffect(() => {
     const handleImport = async () => {
+      if (!activeCase) {
+        alert('Please open a case before importing documents.');
+        return;
+      }
       const result = await window.api.dialog.openFiles();
       if (!result.canceled && result.filePaths.length > 0) {
-        await window.api.documents.ingest(result.filePaths);
-        setTimelineKey(k => k + 1);
-        setThreadsKey(k => k + 1);
-        markBriefStale();
+        try {
+          const res = await window.api.documents.ingest(result.filePaths);
+          const added = res?.documents?.length ?? 0;
+          const errors = res?.errors?.length ?? 0;
+          const dupes = res?.nearDuplicates?.length ?? 0;
+          let msg = `${added} document${added !== 1 ? 's' : ''} added.`;
+          if (dupes) msg += ` ${dupes} near-duplicate${dupes !== 1 ? 's' : ''} detected.`;
+          if (errors) msg += ` ${errors} skipped (duplicate or error).`;
+          setImportToast(msg);
+          setTimeout(() => setImportToast(null), 4000);
+          setCurrentPage('timeline');
+          setTimelineKey(k => k + 1);
+          setThreadsKey(k => k + 1);
+          markBriefStale();
+        } catch (e) {
+          setImportToast('Import failed: ' + (e?.message || 'Unknown error'));
+          setTimeout(() => setImportToast(null), 5000);
+        }
       }
     };
     const handleAddMoment = () => setSelectedEvent({});
@@ -54,7 +73,7 @@ export default function App() {
       window.removeEventListener('import-files', handleImport);
       window.removeEventListener('add-moment', handleAddMoment);
     };
-  }, []);
+  }, [activeCase]);
 
   // Keyboard shortcut: Cmd/Ctrl + B → open lawyer brief
   useEffect(() => {
@@ -240,8 +259,8 @@ export default function App() {
             }}
             onClick={() => { setBriefStale(false); setCurrentPage('brief'); }}
           >
-            <span style={styles.caseIcon}>📄</span>
-            <span style={styles.caseName}>Lawyer Brief</span>
+            <span style={styles.caseIcon}>⚖️</span>
+            <span style={styles.caseName}>Case Overview</span>
             {briefStale && <span style={styles.staleDot} />}
           </button>
           <button
@@ -346,12 +365,32 @@ export default function App() {
           <Settings />
         )}
         {currentPage === 'brief' && (
-          <LawyerBrief />
+          <LawyerBrief
+            onNavigateToThread={(threadId) => {
+              setThreadsKey(k => k + 1);
+              setCurrentPage('threads');
+            }}
+            onNavigateToConnections={() => setCurrentPage('connections')}
+          />
         )}
       </div>
 
+      {/* Import toast */}
+      {importToast && (
+        <div style={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          background: '#1E293B', color: '#fff', padding: '10px 20px',
+          borderRadius: 8, fontSize: 13, fontFamily: 'system-ui, sans-serif',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.25)', zIndex: 9999,
+          whiteSpace: 'nowrap'
+        }}>
+          {importToast}
+        </div>
+      )}
+
       {selectedEvent && (
         <EditMomentModal
+          key={selectedEvent.id ?? 'new'}
           caseId={activeCase?.id}
           momentId={selectedEvent.id}
           onClose={() => setSelectedEvent(null)}
@@ -384,8 +423,22 @@ export default function App() {
         <ActorDetail
           actor={selectedActor}
           onClose={() => setSelectedActor(null)}
-          onActorUpdated={() => {
-            setSelectedActor(null);
+          onActorUpdated={async () => {
+            // Re-fetch the actor so the panel shows updated data
+            try {
+              const res = await window.api.actors.list();
+              if (res.success && selectedActor) {
+                const updated = res.actors.find(a => a.id === selectedActor.id);
+                if (updated) {
+                  setSelectedActor(updated);
+                } else {
+                  setSelectedActor(null); // actor was deleted
+                }
+              }
+            } catch (e) {
+              console.error('[App] re-fetch actor failed:', e);
+              setSelectedActor(null);
+            }
             setTimelineKey(k => k + 1);
             setPeopleKey(k => k + 1);
             setThreadsKey(k => k + 1);

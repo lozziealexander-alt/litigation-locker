@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
+import ReactDOM from 'react-dom';
 import { colors, shadows, spacing, typography, radius, getEvidenceColor, getSeverityColor } from '../styles/tokens';
 
 // ── Thread Registry (mirrored from src/main/analysis/thread-registry.js) ──────
 const THREAD_DEFINITIONS = [
-  { id: 'sexual_harassment',   name: 'Sexual Harassment',     description: 'Unwanted sexual conduct, propositions, or comments',                        tag_signals: ['sexual_harassment','harassment'],                              precedents: ['harris-v-forklift','faragher-ellerth'], color: '#8B5CF6' },
-  { id: 'gender_harassment',   name: 'Gender Harassment',     description: 'Gender-based comments, stereotyping, or discriminatory treatment',           tag_signals: ['gender_harassment','harassment'],                              precedents: ['harris-v-forklift'],                    color: '#EC4899' },
-  { id: 'retaliation',         name: 'Retaliation',           description: 'Adverse actions taken after protected activity',                             tag_signals: ['retaliation','protected_activity','adverse_action'],          precedents: ['burlington-northern','vance'],          color: '#F59E0B' },
-  { id: 'exclusion',           name: 'Exclusion & Isolation', description: 'Systematic exclusion from meetings, decisions, or team activities',          tag_signals: ['exclusion','isolation'],                                       precedents: ['harris-v-forklift'],                    color: '#10B981' },
-  { id: 'pay_discrimination',  name: 'Pay Discrimination',    description: 'Unequal compensation or benefits based on protected characteristics',         tag_signals: ['pay_discrimination'],                                         precedents: ['lilly-ledbetter'],                      color: '#3B82F6' },
+  { id: 'sexual_harassment',   name: 'Sexual Harassment',     description: 'Unwanted sexual conduct, propositions, or sexual comments',                  tag_signals: ['sexual_harassment'],                                           precedents: ['harris-v-forklift','faragher-ellerth','meritor'], color: '#8B5CF6',
+    title_keywords: ['sexual', 'inappropriate touch', 'inappropriate contact', 'groped', 'groping', 'unwanted advance', 'proposition', 'unwanted sexual'] },
+  { id: 'gender_harassment',   name: 'Gender Harassment',     description: 'Gender-based comments, stereotyping, or discriminatory treatment',           tag_signals: ['gender_harassment'],                                           precedents: ['harris-v-forklift'], color: '#EC4899',
+    title_keywords: ['gendered', 'sexist', 'stereotype', 'because she', 'because he', 'boys club', 'gender bias', 'gender discrimination'] },
+  { id: 'retaliation',         name: 'Retaliation',           description: 'Adverse actions taken after protected activity',                             tag_signals: ['retaliation','protected_activity','adverse_action'],           precedents: ['burlington-northern','vance'],          color: '#F59E0B' },
+  { id: 'exclusion',           name: 'Exclusion & Isolation', description: 'Systematic exclusion from meetings, decisions, or team activities',          tag_signals: ['exclusion','isolation'],                                       precedents: ['harris-v-forklift'],                    color: '#10B981',
+    title_keywords: ['excluded', 'left out', 'not invited', 'removed from', 'cut out', 'isolated', 'sidelined', 'marginalized', 'shut out'] },
+  { id: 'pay_discrimination',  name: 'Pay Discrimination',    description: 'Unequal compensation or benefits based on protected characteristics',        tag_signals: ['pay_discrimination'],                                          precedents: ['lilly-ledbetter'],                      color: '#3B82F6' },
   { id: 'hostile_environment', name: 'Hostile Environment',   description: 'Pervasive conduct creating an abusive or intimidating workplace',            tag_signals: ['hostile_environment'],                                         precedents: ['harris-v-forklift','meritor'],          color: '#6366F1' },
   { id: 'hr_failure',          name: 'HR Failure to Act',     description: 'HR ignored complaints, failed to investigate, or enabled misconduct',        tag_signals: ['help_request','hr_failure','ignored_complaint'],               precedents: ['faragher-ellerth','vance'],             color: '#A855F7' },
 ];
@@ -32,7 +36,7 @@ const DOC_TYPE_SIGNALS = {
   'REQUEST_FOR_HELP':   ['help_request'],
   'RESPONSE':           ['help_request'],
   'PAY_RECORD':         ['pay_discrimination'],
-  'INCIDENT':           ['harassment'],
+  // NOTE: 'INCIDENT' deliberately omitted — too broad, incidents can be any type
   'CLAIM_YOU_MADE':     ['protected_activity'],
   'CLAIM_AGAINST_YOU':  ['retaliation'],
 };
@@ -45,21 +49,65 @@ function buildEffectiveSignals(evt) {
   (evt.documents || []).forEach(d => {
     (DOC_TYPE_SIGNALS[d.evidence_type] || []).forEach(s => signals.add(s));
   });
+
+  const text = ((evt.title || '') + ' ' + (evt.what_happened || '') + ' ' + (evt.description || '')).toLowerCase();
+  const sexualKeywords = ['sexual', 'grope', 'groping', 'unwanted touch', 'unwanted advance', 'inappropriate touch', 'proposition'];
+  const genderKeywords = ['gendered', 'sexist', 'stereotype', 'because she', 'because he', 'boys club', 'gender bias', 'gender discrimination',
+    'for a woman', 'for a man', 'as a woman', 'as a man', 'like a woman', 'like a man', 'too aggressive for a', 'too emotional'];
+
+  // Resolve generic 'harassment' into specific sub-type using content
+  if (signals.has('harassment') && !signals.has('sexual_harassment') && !signals.has('gender_harassment')) {
+    if (sexualKeywords.some(k => text.includes(k))) {
+      signals.add('sexual_harassment');
+    } else if (genderKeywords.some(k => text.includes(k))) {
+      signals.add('gender_harassment');
+    } else {
+      signals.add('hostile_environment');
+    }
+    signals.delete('harassment');
+  }
+
+  // Content-based correction: if tagged sexual_harassment but content is clearly gender-based (not sexual)
+  if (signals.has('sexual_harassment') && !sexualKeywords.some(k => text.includes(k))) {
+    if (genderKeywords.some(k => text.includes(k))) {
+      // Content is gendered, not sexual — reclassify
+      signals.delete('sexual_harassment');
+      signals.add('gender_harassment');
+    }
+  }
+
   return signals;
 }
 
 function assignEventsToThreads(events) {
   const assignments = {};
+  console.group('[Threads] Event → Thread Assignment');
   for (const evt of events) {
+    // Skip context events — they're background info, not part of claim threads
+    if (evt.is_context_event) { continue; }
     const signals = buildEffectiveSignals(evt);
+    const evtText = ((evt.title || '') + ' ' + (evt.what_happened || '') + ' ' + (evt.description || '')).toLowerCase();
+    const matchedThreads = [];
     for (const thread of THREAD_DEFINITIONS) {
-      if (thread.tag_signals.some(sig => signals.has(sig))) {
+      let matches = thread.tag_signals.some(sig => signals.has(sig));
+      let matchReason = matches ? 'tag_signal' : '';
+      // Also check title_keywords if the thread defines them and tags didn't match
+      if (!matches && thread.title_keywords) {
+        const kw = thread.title_keywords.find(kw => evtText.includes(kw.toLowerCase()));
+        if (kw) { matches = true; matchReason = `title_keyword: "${kw}"`; }
+      }
+      if (matches) {
+        matchedThreads.push(`${thread.name} (${matchReason})`);
         if (!assignments[thread.id]) assignments[thread.id] = { thread, events: [], documents: new Set() };
         assignments[thread.id].events.push(evt);
         (evt.documents || []).forEach(d => assignments[thread.id].documents.add(d.id));
       }
     }
+    if (matchedThreads.length > 0) {
+      console.log(`"${evt.title}" | tags=[${(evt.tags||[]).join(',')}] type=${evt.event_type||'?'} | signals=[${[...signals].join(',')}] → ${matchedThreads.join(', ')}`);
+    }
   }
+  console.groupEnd();
   for (const id in assignments) assignments[id].documents = Array.from(assignments[id].documents);
   return assignments;
 }
@@ -88,6 +136,87 @@ function getThreadGaps(assignment, thread) {
   if (assignment.events.length < 2) gaps.push('More corroborating events strengthen this thread');
   return gaps;
 }
+
+// ── Document hover preview item ──────────────────────────────────────────────
+function DocPreviewItem({ doc, onSelectDocument }) {
+  const [hoverPos, setHoverPos] = React.useState(null);
+  const preview = doc.extracted_text
+    ? doc.extracted_text.slice(0, 600).trim()
+    : null;
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '5px 8px',
+        borderRadius: '5px',
+        background: colors.surfaceAlt,
+        border: `1px solid ${colors.border}`,
+        fontSize: typography.fontSize.xs,
+        color: colors.textSecondary,
+        cursor: onSelectDocument ? 'pointer' : 'default'
+      }}
+      onMouseEnter={e => {
+        if (!preview) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        setHoverPos({ top: rect.top, left: rect.left, bottom: rect.bottom });
+      }}
+      onMouseLeave={() => setHoverPos(null)}
+      onClick={() => onSelectDocument?.(doc)}
+    >
+      <span style={{
+        padding: '1px 5px',
+        borderRadius: '3px',
+        fontSize: 10,
+        background: `${colors.primary}22`,
+        color: colors.primary,
+        flexShrink: 0
+      }}>
+        {(doc.evidence_type || 'DOC').replace(/_/g, ' ')}
+      </span>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+        {doc.filename || doc.id}
+      </span>
+
+      {/* Hover preview popover — rendered via portal to escape overflow:hidden ancestors */}
+      {hoverPos && preview && ReactDOM.createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            top: hoverPos.top > 280 ? hoverPos.top - 280 : hoverPos.bottom + 8,
+            left: Math.max(8, Math.min(hoverPos.left, window.innerWidth - 356)),
+            zIndex: 9999,
+            width: 340,
+            maxHeight: 260,
+            overflow: 'hidden',
+            background: '#1E293B',
+            color: '#E2E8F0',
+            borderRadius: '8px',
+            padding: '12px',
+            fontSize: '12px',
+            lineHeight: '1.6',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+            pointerEvents: 'none',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word'
+          }}
+        >
+          <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            {doc.filename || 'Document'}
+          </div>
+          {preview}
+          {doc.extracted_text && doc.extracted_text.length > 600 && (
+            <div style={{ color: '#64748B', marginTop: 6, fontStyle: 'italic' }}>…click to view full document</div>
+          )}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, onSelectDocument, onSelectActor }) {
@@ -106,7 +235,6 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [causalityLinks, setCausalityLinks] = useState([]);
   const [suggestedIncidents, setSuggestedIncidents] = useState([]);
-  const [activeTab, setActiveTab] = useState('overview');
   const [threads, setThreads] = useState({});
   const [events, setEvents] = useState([]);
 
@@ -164,10 +292,17 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
       setEscalation(connectionsResult.escalation || null);
     }
 
-    // Process events
+    // Process events — enrich thread documents with full doc objects (for hover preview)
     const evts = eventsResult.success ? (eventsResult.events || []) : [];
     setEvents(evts);
-    setThreads(assignEventsToThreads(evts));
+    const docLookup = new Map((docsResult.documents || []).map(d => [d.id, d]));
+    const threadAssignments = assignEventsToThreads(evts);
+    for (const tid in threadAssignments) {
+      threadAssignments[tid].documents = threadAssignments[tid].documents
+        .map(docId => docLookup.get(docId) || { id: docId })
+        .filter(Boolean);
+    }
+    setThreads(threadAssignments);
 
     // Run incident chain analysis (categorizer)
     try {
@@ -517,7 +652,6 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     );
   }
 
-  const alerts = getAlerts();
   const gaps = getGaps();
   const topActors = actors
     .filter(a => a.classification === 'bad_actor' || a.classification === 'enabler' || !!a.in_reporting_chain)
@@ -534,471 +668,12 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
     <div style={styles.container}>
       {/* Header */}
       <div style={styles.header}>
-        <h1 style={styles.title}>Dashboard</h1>
-        <p style={styles.subtitle}>Fresh eyes view of your case</p>
+        <h1 style={styles.title}>Threads</h1>
+        <p style={styles.subtitle}>Legal claim threads built from your timeline</p>
       </div>
 
-      {/* Tab bar */}
-      <div style={styles.tabBar}>
-        <button style={activeTab === 'overview' ? {...styles.tab, ...styles.tabActive} : styles.tab} onClick={() => setActiveTab('overview')}>Overview</button>
-        <button style={activeTab === 'threads'  ? {...styles.tab, ...styles.tabActive} : styles.tab} onClick={() => setActiveTab('threads')}>Threads ({THREAD_DEFINITIONS.length})</button>
-      </div>
-
-      {activeTab === 'overview' && (
-      <div style={styles.content}>
-        {/* Summary Card */}
-        <div style={styles.summaryCard}>
-          <h2 style={styles.cardTitle}>Case Summary</h2>
-          <p style={styles.summaryText}>{generateSummary()}</p>
-        </div>
-
-        {/* Pattern Insights */}
-        {(() => {
-          const insights = getPatternInsights();
-          if (insights.length === 0) return null;
-          return (
-            <div style={styles.card}>
-              <h3
-                style={styles.collapsibleTitle}
-                onClick={() => toggleSection('insights')}
-              >
-                <span style={styles.chevron}>{collapsedSections.insights ? '\u25B6' : '\u25BC'}</span>
-                Pattern Insights
-                <span style={styles.badge}>{insights.length}</span>
-              </h3>
-              {!collapsedSections.insights && (
-                <div style={styles.insightsGrid}>
-                  {insights.map((insight, i) => (
-                    <div key={i} style={styles.insightItem}>
-                      <div style={styles.insightTop}>
-                        <span style={styles.insightIcon}>{insight.icon}</span>
-                        <span style={styles.insightCount}>{insight.count}</span>
-                        <span style={styles.insightLabel}>{insight.label}</span>
-                      </div>
-                      <div style={styles.insightLegal}>{insight.legal}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
-        {/* Protected Class Status */}
-        {protectedClasses.length > 0 && (
-          <div style={{ ...styles.card, borderLeft: `3px solid ${colors.primary}`, marginBottom: spacing.md }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '14px', fontWeight: 600, color: colors.textPrimary }}>Protected Class Status:</span>
-              {protectedClasses.map((pc, i) => (
-                <span key={i} style={{
-                  padding: '2px 10px', borderRadius: radius.full, fontSize: '12px', fontWeight: 500,
-                  background: colors.primary + '14', color: colors.primary, border: `1px solid ${colors.primary}30`
-                }}>
-                  {pc.type}: {pc.value}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Stats Row */}
-        <div style={styles.statsRow}>
-          <StatCard
-            icon={'\uD83D\uDCC4'}
-            value={stats?.documentCount || 0}
-            label="Documents"
-            onClick={() => onNavigateToTimeline?.()}
-          />
-          <StatCard
-            icon={'\uD83D\uDD34'}
-            value={stats?.momentCount || 0}
-            label="Moments"
-            sublabel={stats?.incidentCount > 0 ? `${stats.incidentCount} incidents` : null}
-            onClick={() => onNavigateToTimeline?.()}
-          />
-          <StatCard
-            icon={'\uD83D\uDC65'}
-            value={stats?.actorCount || 0}
-            label="People"
-            sublabel={[
-              stats?.badActorCount > 0 ? `${stats.badActorCount} bad actor${stats.badActorCount !== 1 ? 's' : ''}` : null,
-              stats?.chainCount > 0 ? `${stats.chainCount} in chain` : null
-            ].filter(Boolean).join(' · ') || null}
-            onClick={() => onNavigateToPeople?.()}
-          />
-          <StatCard
-            icon={'\uD83D\uDCC5'}
-            value={stats?.timelineSpanDays || 0}
-            label="Days Span"
-          />
-          <StatCard
-            icon={'\u{1F525}'}
-            value={causalityLinks.length}
-            label="Causality Links"
-            sublabel={causalityLinks.length > 0 ? `${causalityLinks.filter(l => l.link_type === 'caused').length} causal` : 'none yet'}
-          />
-          {suggestedIncidents.length > 0 && (
-            <StatCard
-              icon={'\u{1F6A8}'}
-              value={suggestedIncidents.length}
-              label="Suggested Incidents"
-              sublabel="Auto-detected patterns"
-            />
-          )}
-        </div>
-
-        {/* Case Strength */}
-        {precedentAnalysis && (
-          <div style={styles.card}>
-            <h3
-              style={styles.collapsibleTitle}
-              onClick={() => toggleSection('strength')}
-            >
-              <span style={styles.chevron}>{collapsedSections.strength ? '\u25B6' : '\u25BC'}</span>
-              Case Strength
-              <span style={{
-                ...styles.strengthBadge,
-                background: precedentAnalysis.caseStrength >= 70 ? colors.success :
-                             precedentAnalysis.caseStrength >= 40 ? colors.warning : colors.error
-              }}>{precedentAnalysis.caseStrength}%</span>
-            </h3>
-            {!collapsedSections.strength && (
-              <div
-                style={{ cursor: 'pointer' }}
-                onClick={() => setShowCaseStrength(true)}
-                title="Click for detailed precedent analysis"
-              >
-                <div style={styles.strengthMeter}>
-                  <div style={styles.strengthBarOuter}>
-                    <div
-                      style={{
-                        ...styles.strengthBarInner,
-                        width: `${precedentAnalysis.caseStrength}%`,
-                        background: precedentAnalysis.caseStrength >= 70 ? colors.success :
-                                   precedentAnalysis.caseStrength >= 40 ? colors.warning : colors.error
-                      }}
-                    />
-                  </div>
-                  <span style={styles.strengthValue}>{precedentAnalysis.caseStrength}%</span>
-                </div>
-                <div style={styles.precedentRow}>
-                  {Object.entries(precedentAnalysis.precedents).slice(0, 3).map(([key, prec]) => (
-                    <div key={key} style={styles.precedentMini}>
-                      <span style={styles.precedentName}>{prec.name.split(' v.')[0]}</span>
-                      <span style={{
-                        ...styles.precedentScore,
-                        color: prec.alignmentPercent >= 70 ? colors.success :
-                               prec.alignmentPercent >= 40 ? colors.warning : colors.error
-                      }}>
-                        {prec.alignmentPercent}%
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Incident Chain Analysis (Employer Liability) */}
-        {chainAnalysis && (
-          <div style={styles.card}>
-            <h3
-              style={styles.collapsibleTitle}
-              onClick={() => toggleSection('chain')}
-            >
-              <span style={styles.chevron}>{collapsedSections.chain ? '\u25B6' : '\u25BC'}</span>
-              Employer Liability Analysis
-              <span style={{
-                ...styles.strengthBadge,
-                background: chainAnalysis.employerLiability?.level === 'critical' ? colors.error :
-                             chainAnalysis.employerLiability?.level === 'high' ? '#F97316' :
-                             chainAnalysis.employerLiability?.level === 'moderate' ? colors.warning : colors.success
-              }}>
-                {chainAnalysis.employerLiability?.level?.toUpperCase()}
-              </span>
-            </h3>
-            {!collapsedSections.chain && (
-              <div style={{ padding: `0 ${spacing.md} ${spacing.md}` }}>
-                {/* Top metrics row */}
-                <div style={{ display: 'flex', gap: spacing.md, marginBottom: spacing.md, flexWrap: 'wrap' }}>
-                  <div style={chainStyles.metric}>
-                    <div style={chainStyles.metricValue}>{chainAnalysis.incidentSeverity || 'N/A'}</div>
-                    <div style={chainStyles.metricLabel}>Incident Severity</div>
-                  </div>
-                  <div style={chainStyles.metric}>
-                    <div style={chainStyles.metricValue}>{chainAnalysis.documentationStrength || 'N/A'}</div>
-                    <div style={chainStyles.metricLabel}>Documentation</div>
-                  </div>
-                  <div style={chainStyles.metric}>
-                    <div style={chainStyles.metricValue}>{chainAnalysis.reports?.length || 0}</div>
-                    <div style={chainStyles.metricLabel}>Reports Filed</div>
-                  </div>
-                  <div style={chainStyles.metric}>
-                    <div style={chainStyles.metricValue}>{chainAnalysis.retaliationEntries || 0}</div>
-                    <div style={chainStyles.metricLabel}>Retaliation</div>
-                  </div>
-                </div>
-
-                {/* Reports breakdown */}
-                {chainAnalysis.reports?.length > 0 && (
-                  <div style={{ marginBottom: spacing.md }}>
-                    <div style={chainStyles.sectionLabel}>Notice History</div>
-                    {chainAnalysis.reports.map((r, i) => (
-                      <div key={i} style={chainStyles.reportRow}>
-                        <span style={chainStyles.reportBadge}>#{r.noticeSequence}</span>
-                        <span style={chainStyles.reportCategory}>{r.category?.replace('REPORT_', '').replace('_', ' ')}</span>
-                        <span style={chainStyles.reportTo}>{r.reportedTo ? `to ${r.reportedTo}` : ''}</span>
-                        {r.date && <span style={chainStyles.reportDate}>{r.date}</span>}
-                        {r.flags?.map((f, fi) => (
-                          <span key={fi} style={{
-                            ...chainStyles.flag,
-                            background: f.includes('no_action') ? '#FEE2E2' :
-                                       f.includes('verbal') ? '#FEF3C7' :
-                                       f.includes('continued') ? '#FEE2E2' : '#F3F4F6',
-                            color: f.includes('no_action') ? '#DC2626' :
-                                   f.includes('verbal') ? '#92400E' :
-                                   f.includes('continued') ? '#DC2626' : '#6B7280'
-                          }}>
-                            {f.replace(/_/g, ' ')}
-                          </span>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Liability signals */}
-                {chainAnalysis.employerLiability?.signals?.length > 0 && (
-                  <div>
-                    <div style={chainStyles.sectionLabel}>Liability Signals (Faragher/Ellerth)</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: spacing.xs }}>
-                      {chainAnalysis.employerLiability.signals.map((signal, i) => (
-                        <span key={i} style={chainStyles.signalTag}>
-                          {signal.replace(/_/g, ' ')}
-                        </span>
-                      ))}
-                    </div>
-                    {chainAnalysis.employerLiability.conductContinuedPostReport && (
-                      <div style={chainStyles.continuedWarning}>
-                        Conduct continued after employer was put on notice
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Notice by recipient */}
-                {chainAnalysis.employerLiability?.noticeByRecipient &&
-                  Object.keys(chainAnalysis.employerLiability.noticeByRecipient).length > 0 && (
-                  <div style={{ marginTop: spacing.md }}>
-                    <div style={chainStyles.sectionLabel}>Notice by Recipient</div>
-                    {Object.entries(chainAnalysis.employerLiability.noticeByRecipient).map(([recipient, data]) => {
-                      const importance = data.recipientImportance || {};
-                      const importanceColors = {
-                        critical: { bg: '#FEE2E2', color: '#DC2626', border: '#FECACA' },
-                        high: { bg: '#FEF3C7', color: '#92400E', border: '#FDE68A' },
-                        moderate: { bg: '#DBEAFE', color: '#1E40AF', border: '#BFDBFE' },
-                        external: { bg: '#F3F4F6', color: '#6B7280', border: '#E5E7EB' },
-                        low: { bg: '#F3F4F6', color: '#9CA3AF', border: '#E5E7EB' },
-                      };
-                      const ic = importanceColors[importance.level] || importanceColors.low;
-                      const actionStatus = data.actionStatus || (data.actionTaken ? 'yes' : 'no');
-                      const actionColor = actionStatus === 'yes' ? colors.success : actionStatus === 'no' ? colors.error : '#92400E';
-                      const actionLabel = actionStatus === 'yes' ? 'action taken' : actionStatus === 'no' ? 'no action taken' : 'no remedy documented';
-
-                      return (
-                        <div key={recipient} style={{ ...chainStyles.recipientRow, flexDirection: 'column', alignItems: 'flex-start', gap: '4px', padding: `${spacing.sm} ${spacing.md}`, marginBottom: spacing.xs, border: `1px solid ${ic.border}`, borderRadius: radius.sm, background: ic.bg + '40' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: spacing.sm, width: '100%', flexWrap: 'wrap' }}>
-                            <span style={{ ...chainStyles.recipientName, fontWeight: 600 }}>{importance.label || recipient}</span>
-                            <span style={chainStyles.recipientCount}>notified {data.timesNotified}x</span>
-                            <span style={{ ...chainStyles.recipientAction, color: actionColor, fontWeight: 600 }}>
-                              {actionLabel}
-                            </span>
-                            {data.allVerbalOnly && <span style={chainStyles.verbalTag}>verbal only</span>}
-                          </div>
-                          {importance.note && (
-                            <div style={{ fontSize: '11px', color: ic.color, lineHeight: '1.3' }}>
-                              {importance.note}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Two Column Layout */}
-        <div style={styles.twoColumn}>
-          {/* Left: Alerts */}
-          <div style={styles.column}>
-            <div style={styles.card}>
-              <h3
-                style={styles.collapsibleTitle}
-                onClick={() => toggleSection('alerts')}
-              >
-                <span style={styles.chevron}>{collapsedSections.alerts ? '\u25B6' : '\u25BC'}</span>
-                Pattern Alerts
-                {alerts.length > 0 && <span style={styles.badge}>{alerts.length}</span>}
-              </h3>
-              {!collapsedSections.alerts && (
-                alerts.length === 0 ? (
-                  <p style={styles.emptyText}>No patterns detected yet. Add more evidence to identify patterns.</p>
-                ) : (
-                  <div style={styles.alertList}>
-                    {alerts.map((alert, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          ...styles.alertItem,
-                          ...styles.clickableItem,
-                          borderLeftColor: alert.severity === 'critical' ? colors.error :
-                                           alert.severity === 'warning' ? colors.warning : colors.primary
-                        }}
-                        onClick={() => setSelectedAlert(alert)}
-                        title="View details"
-                      >
-                        <div style={styles.alertTitle}>{alert.title}</div>
-                        <div style={styles.alertDesc}>{alert.description}</div>
-                        <div style={styles.alertLegal}>{alert.legal}</div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              )}
-            </div>
-
-            {/* Filing Deadlines */}
-            {stats?.fchrDaysRemaining && (
-              <div style={styles.card}>
-                <h3
-                  style={styles.collapsibleTitle}
-                  onClick={() => toggleSection('deadlines')}
-                >
-                  <span style={styles.chevron}>{collapsedSections.deadlines ? '\u25B6' : '\u25BC'}</span>
-                  Filing Deadlines
-                </h3>
-                {!collapsedSections.deadlines && (
-                  <>
-                    <div style={styles.deadlineList}>
-                      <DeadlineItem
-                        agency="FCHR (Florida)"
-                        days={stats.fchrDaysRemaining}
-                        total={365}
-                      />
-                      <DeadlineItem
-                        agency="EEOC (Federal)"
-                        days={stats.eeocDaysRemaining}
-                        total={300}
-                      />
-                    </div>
-                    <p style={styles.deadlineNote}>
-                      Based on most recent documented incident
-                    </p>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Right: Gaps + Key Players */}
-          <div style={styles.column}>
-            {/* Evidence Gaps */}
-            <div style={styles.card}>
-              <h3
-                style={styles.collapsibleTitle}
-                onClick={() => toggleSection('gaps')}
-              >
-                <span style={styles.chevron}>{collapsedSections.gaps ? '\u25B6' : '\u25BC'}</span>
-                Evidence Gaps
-                {gaps.length > 0 && <span style={styles.badge}>{gaps.length}</span>}
-              </h3>
-              {!collapsedSections.gaps && (
-                gaps.length === 0 ? (
-                  <p style={styles.emptyText}>No critical gaps identified. Keep documenting!</p>
-                ) : (
-                  <div style={styles.gapList}>
-                    {gaps.map((gap, i) => (
-                      <div
-                        key={i}
-                        style={{...styles.gapItem, ...styles.clickableItem}}
-                        onClick={() => setShowCaseStrength(true)}
-                        title={`${gap.recommendation}\n\nPrecedent: ${gap.precedent}`}
-                      >
-                        <div style={styles.gapElement}>{gap.element}</div>
-                        <div style={styles.gapRec}>{gap.recommendation}</div>
-                        <div style={styles.gapPrecedent}>{gap.precedent}</div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              )}
-            </div>
-
-            {/* Key Players */}
-            <div style={styles.card}>
-              <h3
-                style={styles.collapsibleTitle}
-                onClick={() => toggleSection('players')}
-              >
-                <span style={styles.chevron}>{collapsedSections.players ? '\u25B6' : '\u25BC'}</span>
-                Key Players
-                {topActors.length > 0 && <span style={styles.badge}>{topActors.length}</span>}
-              </h3>
-              {!collapsedSections.players && (
-                topActors.length === 0 ? (
-                  <p style={styles.emptyText}>No bad actors, enablers, or reporting chain actors identified yet.</p>
-                ) : (
-                  <div style={styles.actorList}>
-                    {topActors.map(actor => {
-                      const isBadActor = actor.classification === 'bad_actor';
-                      const isEnabler = actor.classification === 'enabler';
-                      const isChain = !!actor.in_reporting_chain;
-                      return (
-                        <div
-                          key={actor.id}
-                          style={{...styles.actorItem, ...styles.clickableItem}}
-                          onClick={() => onSelectActor?.(actor)}
-                          title="Click to view details"
-                        >
-                          <div style={{
-                            ...styles.actorBadge,
-                            background: isBadActor ? '#DC262610' : isEnabler ? '#F9731610' : isChain ? '#3B82F610' : '#6B728010',
-                            color: isBadActor ? '#DC2626' : isEnabler ? '#F97316' : isChain ? '#3B82F6' : '#6B7280'
-                          }}>
-                            {actor.name.split(' ').map(p => p[0]).join('').slice(0, 2)}
-                          </div>
-                          <div style={styles.actorInfo}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span style={styles.actorName}>{actor.name}</span>
-                              {isChain && <span style={styles.dashboardChainTag}>Chain</span>}
-                            </div>
-                            <div style={styles.actorRole}>
-                              {actor.role || actor.relationship_to_self?.replace(/_/g, ' ') || actor.classification?.replace('_', ' ')}
-                            </div>
-                          </div>
-                          {actor.appearance_count > 0 && (
-                            <div style={styles.actorCount}>
-                              {actor.appearance_count} doc{actor.appearance_count !== 1 ? 's' : ''}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-      )} {/* end activeTab === 'overview' */}
 
       {/* Threads Tab */}
-      {activeTab === 'threads' && (
         <div style={styles.threadsContent}>
           {THREAD_DEFINITIONS.map(thread => {
             const assignment = threads[thread.id] || { events: [], documents: [] };
@@ -1033,6 +708,20 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
                   )}
                 </div>
 
+                {/* Key Evidence with hover preview */}
+                {assignment.documents.length > 0 && (
+                  <div style={{ marginTop: spacing.xs }}>
+                    <div style={{ fontSize: typography.fontSize.xs, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: spacing.xs }}>
+                      Key Evidence ({assignment.documents.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs, maxHeight: 160, overflowY: 'auto' }}>
+                      {assignment.documents.map(doc => (
+                        <DocPreviewItem key={doc.id || doc} doc={doc} onSelectDocument={onSelectDocument} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {gaps.length > 0 && (
                   <div style={styles.threadGaps}>
                     {gaps.slice(0, 2).map((gap, i) => (
@@ -1048,7 +737,6 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
             );
           })}
         </div>
-      )}
 
       {/* Alert Detail Modal */}
       {selectedAlert && (
@@ -1118,7 +806,7 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
                       }}
                       onClick={() => {
                         setSelectedAlert(null);
-                        onSelectDocument?.(doc.id);
+                        onSelectDocument?.(doc);
                       }}
                     >
                       <span style={{

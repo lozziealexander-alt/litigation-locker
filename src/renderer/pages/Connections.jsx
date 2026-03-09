@@ -65,6 +65,35 @@ const CONNECTION_TYPES = [
   'fcra_discrimination', 'discrimination_some_harm'
 ];
 
+const CONNECTION_TYPE_LABELS = {
+  retaliation_chain:              { label: 'Retaliation Chain',               desc: 'Sequence of adverse actions following protected activity, establishing causation' },
+  escalation:                     { label: 'Escalation Pattern',              desc: 'Progressive intensification of adverse treatment over time' },
+  temporal_cluster:               { label: 'Temporal Cluster',                desc: 'Events concentrated in a short time window, suggesting coordinated conduct' },
+  actor_continuity:               { label: 'Same-Actor Pattern',              desc: 'Repeated involvement of the same individual across multiple incidents' },
+  hostile_environment:            { label: 'Hostile Work Environment',        desc: 'Pattern of conduct creating an abusive or intimidating workplace' },
+  continuing_violation:           { label: 'Continuing Violation',            desc: 'Ongoing series of related acts treated as a single unlawful violation (Morgan)' },
+  employer_notice:                { label: 'Employer Notice',                 desc: 'Evidence the employer knew or should have known of misconduct and failed to act' },
+  convincing_mosaic:              { label: 'Convincing Mosaic',               desc: 'Cumulative circumstantial pattern establishing discriminatory intent (Lewis v. Union City)' },
+  whistleblower_retaliation:      { label: 'Whistleblower Retaliation',       desc: 'Adverse action following a protected disclosure or complaint' },
+  quid_pro_quo:                   { label: 'Quid Pro Quo',                   desc: 'Employment benefit conditioned on submission to unwelcome conduct' },
+  sexual_harassment_pattern:      { label: 'Sexual Harassment Pattern',       desc: 'Repeated unwelcome sexual conduct creating a hostile environment' },
+  pay_discrimination:             { label: 'Pay Discrimination',              desc: 'Unequal compensation based on a protected characteristic' },
+  pay_retaliation_chain:          { label: 'Pay Retaliation',                desc: 'Compensation reduced or withheld following protected activity' },
+  supervisor_liability:           { label: 'Supervisor Liability',            desc: 'Employer vicariously liable for supervisor\'s tangible employment actions (Vance)' },
+  supervisor_pattern:             { label: 'Supervisor Pattern',              desc: 'Systematic conduct by supervisors establishing employer liability' },
+  retaliatory_harassment:         { label: 'Retaliatory Harassment',          desc: 'Harassment directed at an employee following protected activity' },
+  retaliatory_harassment_pattern: { label: 'Retaliatory Harassment Pattern',  desc: 'Systemic post-complaint harassment campaign establishing retaliatory motive' },
+  fcra_discrimination:            { label: 'FCRA Discrimination',             desc: 'Discriminatory or retaliatory use of consumer report information' },
+  discrimination_some_harm:       { label: 'Discriminatory Harm',             desc: 'Adverse action causing material harm based on a protected characteristic (Muldrow)' }
+};
+
+function ctLabel(type) {
+  return (CONNECTION_TYPE_LABELS[type] || {}).label || (type ? type.replace(/_/g, ' ') : 'Unknown');
+}
+function ctDesc(type) {
+  return (CONNECTION_TYPE_LABELS[type] || {}).desc || '';
+}
+
 export default function Connections() {
   const [connections, setConnections] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
@@ -89,8 +118,9 @@ export default function Connections() {
       ]);
 
       if (eventsRes.success) setEvents(eventsRes.events);
-      if (connectionsRes.success) setConnections(connectionsRes.connections);
-      if (suggestionsRes.success) setSuggestions(suggestionsRes.suggestions);
+      // Filter out self-connections (same event as source and target)
+      if (connectionsRes.success) setConnections(connectionsRes.connections.filter(c => c.source_id !== c.target_id));
+      if (suggestionsRes.success) setSuggestions(suggestionsRes.suggestions.filter(s => s.source_id !== s.target_id));
 
       setLoading(false);
     } catch (err) {
@@ -113,7 +143,7 @@ export default function Connections() {
           byType[c.connection_type] = (byType[c.connection_type] || 0) + 1;
         });
         const breakdown = Object.entries(byType)
-          .map(([t, n]) => `${t.replace(/_/g, ' ')}: ${n}`)
+          .map(([t, n]) => `${ctLabel(t)}: ${n}`)
           .join('\n');
         alert(`Auto-Detect Complete!\n\nFound ${result.count} connections:\n${breakdown}`);
         loadData();
@@ -415,6 +445,85 @@ export default function Connections() {
               Approved Connections ({connections.length})
             </h3>
 
+            {/* Chain Assessment — ranked connection patterns */}
+            {(() => {
+              const typeGroups = {};
+              for (const c of connections) {
+                const t = c.connection_type || 'general';
+                if (!typeGroups[t]) typeGroups[t] = [];
+                typeGroups[t].push(c);
+              }
+              const ranked = Object.entries(typeGroups)
+                .map(([type, conns]) => ({
+                  type,
+                  count: conns.length,
+                  meanStrength: conns.reduce((sum, c) => sum + (c.strength || 0), 0) / conns.length
+                }))
+                .sort((a, b) => b.meanStrength - a.meanStrength);
+
+              return (
+                <div style={{
+                  marginBottom: '24px', padding: '16px',
+                  background: '#1e2028', border: '1px solid #2d323e',
+                  borderRadius: '10px'
+                }}>
+                  <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>
+                    Chain Assessment
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#8b92a8', margin: '0 0 12px 0' }}>
+                    Connection patterns ranked by evidential strength
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {ranked.map((g, i) => {
+                      const pct = Math.round(g.meanStrength * 100);
+                      const barColor = CONNECTION_TYPE_COLORS[g.type] || '#6b7280';
+                      return (
+                        <div key={g.type} style={{
+                          display: 'flex', alignItems: 'center', gap: '10px',
+                          padding: '8px 12px', background: '#252932',
+                          borderRadius: '6px', border: '1px solid #2d323e'
+                        }}>
+                          <span style={{
+                            width: '22px', height: '22px', borderRadius: '50%',
+                            background: barColor, display: 'flex', alignItems: 'center',
+                            justifyContent: 'center', fontSize: '11px', fontWeight: 700,
+                            flexShrink: 0
+                          }}>
+                            {i + 1}
+                          </span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                              <span style={{ fontSize: '13px', fontWeight: 600 }}>{ctLabel(g.type)}</span>
+                              <span style={{ fontSize: '11px', color: '#6b7280' }}>
+                                {g.count} link{g.count !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <div style={{
+                                flex: 1, height: '5px', background: '#1a1d24',
+                                borderRadius: '3px', overflow: 'hidden'
+                              }}>
+                                <div style={{
+                                  width: `${pct}%`, height: '100%',
+                                  background: barColor, borderRadius: '3px'
+                                }} />
+                              </div>
+                              <span style={{ fontSize: '11px', fontWeight: 600, color: barColor, minWidth: '32px' }}>
+                                {pct}%
+                              </span>
+                            </div>
+                            <p style={{ fontSize: '11px', color: '#6b7280', margin: '3px 0 0 0' }}>
+                              {ctDesc(g.type)}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))', gap: '16px' }}>
               {connections.map(conn => (
                 <div
@@ -432,15 +541,19 @@ export default function Connections() {
                     gap: '8px',
                     marginBottom: '12px'
                   }}>
-                    <span style={{
-                      padding: '4px 8px',
-                      background: CONNECTION_TYPE_COLORS[conn.connection_type] || '#6b7280',
-                      borderRadius: '4px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase'
-                    }}>
-                      {conn.connection_type ? conn.connection_type.replace(/_/g, ' ') : 'unknown'}
+                    <span
+                      title={ctDesc(conn.connection_type)}
+                      style={{
+                        padding: '4px 8px',
+                        background: CONNECTION_TYPE_COLORS[conn.connection_type] || '#6b7280',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        textTransform: 'uppercase',
+                        cursor: 'help'
+                      }}
+                    >
+                      {ctLabel(conn.connection_type)}
                     </span>
 
                     {conn.auto_detected === 1 && (
@@ -454,27 +567,52 @@ export default function Connections() {
                     )}
                   </div>
 
-                  <div style={{ marginBottom: '8px' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '2px' }}>
-                      {conn.source_title || conn.source_id}
-                    </div>
-                    <div style={{ fontSize: '12px', color: '#8b92a8' }}>
-                      {conn.source_date ? new Date(conn.source_date).toLocaleDateString() : ''}
-                    </div>
-                  </div>
+                  {(() => {
+                    // Always display in chronological order: earlier event first
+                    const srcDate = conn.source_date ? new Date(conn.source_date) : null;
+                    const tgtDate = conn.target_date ? new Date(conn.target_date) : null;
+                    const reversed = srcDate && tgtDate && srcDate > tgtDate;
+                    const firstTitle = reversed ? (conn.target_title || conn.target_id) : (conn.source_title || conn.source_id);
+                    const firstDate = reversed ? conn.target_date : conn.source_date;
+                    const secondTitle = reversed ? (conn.source_title || conn.source_id) : (conn.target_title || conn.target_id);
+                    const secondDate = reversed ? conn.source_date : conn.target_date;
+                    const absDays = conn.days_between != null ? Math.abs(conn.days_between) : null;
+                    return (
+                      <>
+                        <div style={{ marginBottom: '8px' }}>
+                          <div style={{ fontSize: '10px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>
+                            Triggering Event
+                          </div>
+                          <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '2px' }}>
+                            {firstTitle}
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#8b92a8' }}>
+                            {firstDate ? new Date(firstDate).toLocaleDateString() : ''}
+                          </div>
+                        </div>
 
-                  <div style={{ fontSize: '18px', color: '#6b7280', textAlign: 'center', margin: '6px 0' }}>
-                    ↓
-                  </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: '6px 0' }}>
+                          <div style={{ flex: 1, height: '1px', background: '#3d4450' }} />
+                          <span style={{ fontSize: '11px', color: '#6b7280', whiteSpace: 'nowrap' }}>
+                            {absDays != null ? `${absDays}d later` : 'led to'}
+                          </span>
+                          <div style={{ color: '#6b7280', fontSize: '14px' }}>↓</div>
+                        </div>
 
-                  <div style={{ marginBottom: '12px' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '2px' }}>
-                      {conn.target_title || conn.target_id}
-                    </div>
-                    <div style={{ fontSize: '12px', color: '#8b92a8' }}>
-                      {conn.target_date ? new Date(conn.target_date).toLocaleDateString() : ''}
-                    </div>
-                  </div>
+                        <div style={{ marginBottom: '12px' }}>
+                          <div style={{ fontSize: '10px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>
+                            Resulting Action
+                          </div>
+                          <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '2px' }}>
+                            {secondTitle}
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#8b92a8' }}>
+                            {secondDate ? new Date(secondDate).toLocaleDateString() : ''}
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
 
                   <div style={{
                     fontSize: '13px',
@@ -485,11 +623,6 @@ export default function Connections() {
                     marginTop: '12px'
                   }}>
                     {conn.description}
-                    {conn.days_between != null && (
-                      <div style={{ marginTop: '4px', fontSize: '12px', color: '#8b92a8' }}>
-                        <strong>{conn.days_between} days</strong> between events
-                      </div>
-                    )}
                   </div>
 
                   <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
@@ -549,6 +682,7 @@ export default function Connections() {
       {editModal && (
         <EditApproveModal
           suggestion={editModal}
+          events={events}
           onApprove={(edits) => {
             handleApprove(editModal, edits);
             setEditModal(null);
@@ -561,6 +695,7 @@ export default function Connections() {
       {editConnectionModal && (
         <EditConnectionModal
           connection={editConnectionModal}
+          events={events}
           onSave={(edits) => handleEditConnection(editConnectionModal, edits)}
           onClose={() => setEditConnectionModal(null)}
         />
@@ -599,39 +734,54 @@ function SuggestionCard({ suggestion: s, onApprove, onEditApprove, onDismiss, di
         }}>
           {precedentLabel}
         </span>
-        <span style={{
-          padding: '3px 6px',
-          background: '#1a1d24',
-          borderRadius: '3px',
-          fontSize: '10px',
-          color: '#8b92a8',
-          textTransform: 'uppercase'
-        }}>
-          {(s.legal_element || '').replace(/_/g, ' ')}
-        </span>
+        {s.legal_element && (
+          <span style={{
+            padding: '3px 6px',
+            background: '#1a1d24',
+            borderRadius: '3px',
+            fontSize: '10px',
+            color: '#8b92a8',
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em'
+          }}>
+            {s.legal_element.replace(/_/g, ' ')}
+          </span>
+        )}
         <span style={{ fontSize: '12px', color: '#6b7280', marginLeft: 'auto' }}>
           {Math.round((s.strength || 0) * 100)}%
         </span>
       </div>
 
-      {/* Source → Target */}
-      <div style={{ fontSize: '13px', marginBottom: '8px' }}>
-        <div style={{ fontWeight: 600 }}>
-          {s.source_title || s.source_id}
-          <span style={{ fontWeight: 400, color: '#8b92a8', marginLeft: '6px', fontSize: '12px' }}>
-            {s.source_date ? new Date(s.source_date).toLocaleDateString() : ''}
-          </span>
-        </div>
-        <div style={{ color: '#6b7280', fontSize: '12px', margin: '2px 0', paddingLeft: '8px' }}>
-          — {s.days_between != null ? `${s.days_between} days` : '?'} →
-        </div>
-        <div style={{ fontWeight: 600 }}>
-          {s.target_title || s.target_id}
-          <span style={{ fontWeight: 400, color: '#8b92a8', marginLeft: '6px', fontSize: '12px' }}>
-            {s.target_date ? new Date(s.target_date).toLocaleDateString() : ''}
-          </span>
-        </div>
-      </div>
+      {/* Source → Target (always chronological) */}
+      {(() => {
+        const srcDate = s.source_date ? new Date(s.source_date) : null;
+        const tgtDate = s.target_date ? new Date(s.target_date) : null;
+        const reversed = srcDate && tgtDate && srcDate > tgtDate;
+        const fTitle = reversed ? (s.target_title || s.target_id) : (s.source_title || s.source_id);
+        const fDate = reversed ? s.target_date : s.source_date;
+        const sTitle = reversed ? (s.source_title || s.source_id) : (s.target_title || s.target_id);
+        const sDate = reversed ? s.source_date : s.target_date;
+        const absDays = s.days_between != null ? Math.abs(s.days_between) : null;
+        return (
+          <div style={{ fontSize: '13px', marginBottom: '8px' }}>
+            <div style={{ fontWeight: 600 }}>
+              {fTitle}
+              <span style={{ fontWeight: 400, color: '#8b92a8', marginLeft: '6px', fontSize: '12px' }}>
+                {fDate ? new Date(fDate).toLocaleDateString() : ''}
+              </span>
+            </div>
+            <div style={{ color: '#6b7280', fontSize: '12px', margin: '2px 0', paddingLeft: '8px' }}>
+              — {absDays != null ? `${absDays} days` : '?'} →
+            </div>
+            <div style={{ fontWeight: 600 }}>
+              {sTitle}
+              <span style={{ fontWeight: 400, color: '#8b92a8', marginLeft: '6px', fontSize: '12px' }}>
+                {sDate ? new Date(sDate).toLocaleDateString() : ''}
+              </span>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Reasoning */}
       <div style={{
@@ -707,14 +857,50 @@ function SuggestionCard({ suggestion: s, onApprove, onEditApprove, onDismiss, di
 }
 
 
+// ─── Strength recalculator based on connection type + days_between ─────────
+function recalcStrength(newType, daysBetween) {
+  const d = daysBetween ?? 0;
+  switch (newType) {
+    case 'retaliation_chain':
+    case 'whistleblower_retaliation':
+    case 'retaliatory_harassment':
+    case 'retaliatory_harassment_pattern':
+    case 'pay_retaliation_chain':
+      if (d <= 7)  return 1.0;
+      if (d <= 14) return 0.9;
+      if (d <= 21) return 0.8;
+      if (d <= 30) return 0.7;
+      return 0.5;
+    case 'temporal_cluster':
+      return Math.max(0.1, parseFloat((1 - (d / 14)).toFixed(2)));
+    case 'actor_continuity':
+    case 'supervisor_pattern':
+    case 'supervisor_liability':
+      return 0.7;
+    case 'escalation':
+    case 'hostile_environment':
+    case 'sexual_harassment_pattern':
+    case 'continuing_violation':
+      return 0.65;
+    case 'convincing_mosaic':
+    case 'employer_notice':
+      return 0.6;
+    default:
+      return 0.6;
+  }
+}
+
 // ─── Edit & Approve Modal (for suggestions) ────────────────────
 
-function EditApproveModal({ suggestion, onApprove, onClose }) {
+function EditApproveModal({ suggestion, events = [], onApprove, onClose }) {
   const [connectionType, setConnectionType] = useState(suggestion.connection_type);
   const [strength, setStrength] = useState(suggestion.strength || 0.5);
   const [description, setDescription] = useState(suggestion.description || '');
+  const [sourceId, setSourceId] = useState(suggestion.source_id);
+  const [targetId, setTargetId] = useState(suggestion.target_id);
 
   const precedentLabel = PRECEDENT_LABELS[suggestion.precedent_key] || suggestion.precedent_key;
+  const sortedEvents = [...events].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
   return (
     <div style={{
@@ -734,22 +920,44 @@ function EditApproveModal({ suggestion, onApprove, onClose }) {
           }}>x</button>
         </div>
 
-        {/* Event info */}
+        {/* Event pickers */}
         <div style={{ marginBottom: '16px', fontSize: '13px' }}>
-          <div style={{ color: '#8b92a8', marginBottom: '4px' }}>Source</div>
-          <div style={{ fontWeight: 600 }}>{suggestion.source_title || suggestion.source_id}</div>
-          <div style={{ color: '#8b92a8', fontSize: '12px' }}>
-            {suggestion.source_date ? new Date(suggestion.source_date).toLocaleDateString() : ''}
+          <div style={{ marginBottom: '8px' }}>
+            <label style={{ display: 'block', fontSize: '10px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>Triggering Event</label>
+            <select
+              value={sourceId}
+              onChange={e => setSourceId(e.target.value)}
+              style={{
+                width: '100%', padding: '8px', background: '#1a1d24', border: '1px solid #3d4450',
+                borderRadius: '4px', color: '#fff', fontSize: '12px'
+              }}
+            >
+              {sortedEvents.map(ev => (
+                <option key={ev.id} value={ev.id}>
+                  {ev.date ? new Date(ev.date).toLocaleDateString() + ' — ' : ''}{ev.title || ev.id}
+                </option>
+              ))}
+            </select>
           </div>
 
-          <div style={{ color: '#6b7280', textAlign: 'center', margin: '8px 0' }}>
-            {suggestion.days_between != null ? `${suggestion.days_between} days` : ''} ↓
-          </div>
+          <div style={{ color: '#6b7280', textAlign: 'center', margin: '4px 0', fontSize: '12px' }}>↓</div>
 
-          <div style={{ color: '#8b92a8', marginBottom: '4px' }}>Target</div>
-          <div style={{ fontWeight: 600 }}>{suggestion.target_title || suggestion.target_id}</div>
-          <div style={{ color: '#8b92a8', fontSize: '12px' }}>
-            {suggestion.target_date ? new Date(suggestion.target_date).toLocaleDateString() : ''}
+          <div>
+            <label style={{ display: 'block', fontSize: '10px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>Resulting Action</label>
+            <select
+              value={targetId}
+              onChange={e => setTargetId(e.target.value)}
+              style={{
+                width: '100%', padding: '8px', background: '#1a1d24', border: '1px solid #3d4450',
+                borderRadius: '4px', color: '#fff', fontSize: '12px'
+              }}
+            >
+              {sortedEvents.map(ev => (
+                <option key={ev.id} value={ev.id}>
+                  {ev.date ? new Date(ev.date).toLocaleDateString() + ' — ' : ''}{ev.title || ev.id}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -766,14 +974,18 @@ function EditApproveModal({ suggestion, onApprove, onClose }) {
           <label style={{ display: 'block', fontSize: '12px', color: '#8b92a8', marginBottom: '4px' }}>Type</label>
           <select
             value={connectionType}
-            onChange={e => setConnectionType(e.target.value)}
+            onChange={e => {
+              const newType = e.target.value;
+              setConnectionType(newType);
+              setStrength(recalcStrength(newType, suggestion.days_between));
+            }}
             style={{
               width: '100%', padding: '8px', background: '#1a1d24', border: '1px solid #3d4450',
               borderRadius: '4px', color: '#fff', fontSize: '13px'
             }}
           >
             {CONNECTION_TYPES.map(t => (
-              <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+              <option key={t} value={t}>{ctLabel(t)}</option>
             ))}
           </select>
         </div>
@@ -813,7 +1025,11 @@ function EditApproveModal({ suggestion, onApprove, onClose }) {
             Cancel
           </button>
           <button
-            onClick={() => onApprove({ connection_type: connectionType, strength, description })}
+            onClick={() => onApprove({
+              connection_type: connectionType, strength, description,
+              source_id: sourceId !== suggestion.source_id ? sourceId : undefined,
+              target_id: targetId !== suggestion.target_id ? targetId : undefined
+            })}
             style={{
               padding: '8px 16px', background: '#059669', border: 'none',
               borderRadius: '6px', color: '#fff', fontSize: '13px', cursor: 'pointer'
@@ -830,10 +1046,14 @@ function EditApproveModal({ suggestion, onApprove, onClose }) {
 
 // ─── Edit Connection Modal (for existing approved connections) ──
 
-function EditConnectionModal({ connection, onSave, onClose }) {
+function EditConnectionModal({ connection, events = [], onSave, onClose }) {
   const [connectionType, setConnectionType] = useState(connection.connection_type);
   const [strength, setStrength] = useState(connection.strength || 0.5);
   const [description, setDescription] = useState(connection.description || '');
+  const [sourceId, setSourceId] = useState(connection.source_id);
+  const [targetId, setTargetId] = useState(connection.target_id);
+
+  const sortedEvents = [...events].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
   return (
     <div style={{
@@ -853,23 +1073,61 @@ function EditConnectionModal({ connection, onSave, onClose }) {
         </div>
 
         <div style={{ marginBottom: '16px', fontSize: '13px' }}>
-          <div style={{ fontWeight: 600 }}>{connection.source_title || connection.source_id}</div>
-          <div style={{ color: '#6b7280', textAlign: 'center', margin: '4px 0' }}>↓</div>
-          <div style={{ fontWeight: 600 }}>{connection.target_title || connection.target_id}</div>
+          <div style={{ marginBottom: '8px' }}>
+            <label style={{ display: 'block', fontSize: '10px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>Triggering Event</label>
+            <select
+              value={sourceId}
+              onChange={e => setSourceId(e.target.value)}
+              style={{
+                width: '100%', padding: '8px', background: '#1a1d24', border: '1px solid #3d4450',
+                borderRadius: '4px', color: '#fff', fontSize: '12px'
+              }}
+            >
+              {sortedEvents.map(ev => (
+                <option key={ev.id} value={ev.id}>
+                  {ev.date ? new Date(ev.date).toLocaleDateString() + ' — ' : ''}{ev.title || ev.id}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ color: '#6b7280', textAlign: 'center', margin: '4px 0', fontSize: '12px' }}>↓</div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '10px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>Resulting Action</label>
+            <select
+              value={targetId}
+              onChange={e => setTargetId(e.target.value)}
+              style={{
+                width: '100%', padding: '8px', background: '#1a1d24', border: '1px solid #3d4450',
+                borderRadius: '4px', color: '#fff', fontSize: '12px'
+              }}
+            >
+              {sortedEvents.map(ev => (
+                <option key={ev.id} value={ev.id}>
+                  {ev.date ? new Date(ev.date).toLocaleDateString() + ' — ' : ''}{ev.title || ev.id}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div style={{ marginBottom: '12px' }}>
           <label style={{ display: 'block', fontSize: '12px', color: '#8b92a8', marginBottom: '4px' }}>Type</label>
           <select
             value={connectionType}
-            onChange={e => setConnectionType(e.target.value)}
+            onChange={e => {
+              const newType = e.target.value;
+              setConnectionType(newType);
+              setStrength(recalcStrength(newType, connection.days_between));
+            }}
             style={{
               width: '100%', padding: '8px', background: '#1a1d24', border: '1px solid #3d4450',
               borderRadius: '4px', color: '#fff', fontSize: '13px'
             }}
           >
             {CONNECTION_TYPES.map(t => (
-              <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+              <option key={t} value={t}>{ctLabel(t)}</option>
             ))}
           </select>
         </div>
@@ -909,7 +1167,11 @@ function EditConnectionModal({ connection, onSave, onClose }) {
             Cancel
           </button>
           <button
-            onClick={() => onSave({ connection_type: connectionType, strength, description })}
+            onClick={() => onSave({
+              connection_type: connectionType, strength, description,
+              source_id: sourceId !== connection.source_id ? sourceId : undefined,
+              target_id: targetId !== connection.target_id ? targetId : undefined
+            })}
             style={{
               padding: '8px 16px', background: '#3b82f6', border: 'none',
               borderRadius: '6px', color: '#fff', fontSize: '13px', cursor: 'pointer'

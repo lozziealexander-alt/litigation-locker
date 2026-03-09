@@ -1513,8 +1513,10 @@ function registerIpcHandlers() {
 
       // Handle in_reporting_chain
       if (updates.inReportingChain !== undefined) {
+        const chainVal = updates.inReportingChain ? 1 : 0;
         fields.push('in_reporting_chain = ?');
-        values.push(updates.inReportingChain ? 1 : 0);
+        values.push(chainVal);
+        console.log(`[IPC] actors:update — in_reporting_chain: raw=${updates.inReportingChain} (type: ${typeof updates.inReportingChain}), storing=${chainVal} for actor ${actorId}`);
       }
 
       if (fields.length === 0) {
@@ -1524,8 +1526,15 @@ function registerIpcHandlers() {
       fields.push("updated_at = datetime('now')");
       values.push(actorId);
 
-      const stmt = currentCaseDb.prepare('UPDATE actors SET ' + fields.join(', ') + ' WHERE id = ?');
-      stmt.run(...values);
+      const sql = 'UPDATE actors SET ' + fields.join(', ') + ' WHERE id = ?';
+      console.log('[IPC] actors:update — SQL:', sql);
+      const stmt = currentCaseDb.prepare(sql);
+      const info = stmt.run(...values);
+      console.log('[IPC] actors:update — rows changed:', info.changes);
+
+      // Verify the save by reading back
+      const readBack = currentCaseDb.prepare('SELECT in_reporting_chain, relationship_to_self FROM actors WHERE id = ?').get(actorId);
+      console.log('[IPC] actors:update — readback:', readBack);
 
       // Refresh actor registry
       if (actorRegistry) {
@@ -1563,50 +1572,112 @@ function registerIpcHandlers() {
         return { success: false, error: 'No case is open' };
       }
 
-      // Delete conflicting appearances where both actors appear in same document
-      currentCaseDb.prepare(`
-        DELETE FROM actor_appearances
-        WHERE actor_id = ? AND document_id IN (
-          SELECT document_id FROM actor_appearances WHERE actor_id = ?
-        )
-      `).run(mergeActorId, keepActorId);
+      console.log('[IPC] actors:merge — keep:', keepActorId, 'merge:', mergeActorId);
 
-      // Move remaining appearances to the kept actor
-      currentCaseDb.prepare(`
-        UPDATE actor_appearances SET actor_id = ? WHERE actor_id = ?
-      `).run(keepActorId, mergeActorId);
+      // Verify both actors exist
+      const keepActor = currentCaseDb.prepare('SELECT id, name FROM actors WHERE id = ?').get(keepActorId);
+      const mergeActor = currentCaseDb.prepare('SELECT id, name FROM actors WHERE id = ?').get(mergeActorId);
+      if (!keepActor) return { success: false, error: `Keep actor ${keepActorId} not found` };
+      if (!mergeActor) return { success: false, error: `Merge actor ${mergeActorId} not found` };
 
-      // Delete conflicting incident links where both actors are in same incident
-      currentCaseDb.prepare(`
-        DELETE FROM incident_actors
-        WHERE actor_id = ? AND incident_id IN (
-          SELECT incident_id FROM incident_actors WHERE actor_id = ?
-        )
-      `).run(mergeActorId, keepActorId);
+      // Disable FK checks BEFORE starting transaction (required by SQLite)
+      // Use prepare().run() for reliable FK toggling (pragma() method can be unreliable)
+      currentCaseDb.prepare('PRAGMA foreign_keys = OFF').run();
+      const fkState = currentCaseDb.pragma('foreign_keys', { simple: true });
+      console.log('[actors:merge] foreign_keys after disable:', fkState);
 
-      // Move remaining incident links
-      currentCaseDb.prepare(`
-        UPDATE incident_actors SET actor_id = ? WHERE actor_id = ?
-      `).run(keepActorId, mergeActorId);
+      try {
+        // Helper: run a query, ignore "no such table" / "no such column" errors
+        const safeRun = (label, sql, ...args) => {
+          try {
+            const info = currentCaseDb.prepare(sql).run(...args);
+            console.log(`[actors:merge] ${label}: ${info.changes} rows affected`);
+          } catch (e) {
+            if (!e.message.includes('no such table') && !e.message.includes('no such column')) throw e;
+            console.log(`[actors:merge] ${label}: skipped (${e.message})`);
+          }
+        };
 
-      // Delete conflicting event links where both actors are in same event
-      currentCaseDb.prepare(`
-        DELETE FROM event_actors
-        WHERE actor_id = ? AND event_id IN (
-          SELECT event_id FROM event_actors WHERE actor_id = ?
-        )
-      `).run(mergeActorId, keepActorId);
+        // Run entire merge in a transaction for atomicity
+        const doMerge = currentCaseDb.transaction(() => {
+          // 1. actor_appearances — dedupe then move
+          safeRun('actor_appearances dedup', `
+            DELETE FROM actor_appearances
+            WHERE actor_id = ? AND document_id IN (
+              SELECT document_id FROM actor_appearances WHERE actor_id = ?
+            )
+          `, mergeActorId, keepActorId);
+          safeRun('actor_appearances move', `UPDATE actor_appearances SET actor_id = ? WHERE actor_id = ?`, keepActorId, mergeActorId);
 
-      // Move remaining event links
-      currentCaseDb.prepare(`
-        UPDATE event_actors SET actor_id = ? WHERE actor_id = ?
-      `).run(keepActorId, mergeActorId);
+          // 2. incident_actors — dedupe then move
+          safeRun('incident_actors dedup', `
+            DELETE FROM incident_actors
+            WHERE actor_id = ? AND incident_id IN (
+              SELECT incident_id FROM incident_actors WHERE actor_id = ?
+            )
+          `, mergeActorId, keepActorId);
+          safeRun('incident_actors move', `UPDATE incident_actors SET actor_id = ? WHERE actor_id = ?`, keepActorId, mergeActorId);
 
-      // Delete the merged actor
-      currentCaseDb.prepare('DELETE FROM actors WHERE id = ?').run(mergeActorId);
+          // 3. event_actors — dedupe then move
+          safeRun('event_actors dedup', `
+            DELETE FROM event_actors
+            WHERE actor_id = ? AND event_id IN (
+              SELECT event_id FROM event_actors WHERE actor_id = ?
+            )
+          `, mergeActorId, keepActorId);
+          safeRun('event_actors move', `UPDATE event_actors SET actor_id = ? WHERE actor_id = ?`, keepActorId, mergeActorId);
+
+          // 4. pay_records — move all
+          safeRun('pay_records move', `UPDATE pay_records SET actor_id = ? WHERE actor_id = ?`, keepActorId, mergeActorId);
+
+          // 5. notifications — dedupe then move
+          safeRun('notifications dedup', `
+            DELETE FROM notifications
+            WHERE actor_id = ? AND target_type || ':' || target_id IN (
+              SELECT target_type || ':' || target_id FROM notifications WHERE actor_id = ?
+            )
+          `, mergeActorId, keepActorId);
+          safeRun('notifications move', `UPDATE notifications SET actor_id = ? WHERE actor_id = ?`, keepActorId, mergeActorId);
+
+          // 6. comparators — move if table exists
+          safeRun('comparators move', `UPDATE comparators SET actor_id = ? WHERE actor_id = ?`, keepActorId, mergeActorId);
+
+          // 7. reports_to references
+          safeRun('reports_to fix', `UPDATE actors SET reports_to = ? WHERE reports_to = ?`, keepActorId, mergeActorId);
+
+          // 8. Belt-and-suspenders: delete any remaining FK refs we may have missed
+          safeRun('cleanup event_actors', `DELETE FROM event_actors WHERE actor_id = ?`, mergeActorId);
+          safeRun('cleanup notifications', `DELETE FROM notifications WHERE actor_id = ?`, mergeActorId);
+          safeRun('cleanup actor_appearances', `DELETE FROM actor_appearances WHERE actor_id = ?`, mergeActorId);
+          safeRun('cleanup incident_actors', `DELETE FROM incident_actors WHERE actor_id = ?`, mergeActorId);
+          safeRun('cleanup pay_records', `DELETE FROM pay_records WHERE actor_id = ?`, mergeActorId);
+
+          // 9. Delete the merged actor
+          console.log('[actors:merge] Deleting merged actor:', mergeActorId);
+          currentCaseDb.prepare('DELETE FROM actors WHERE id = ?').run(mergeActorId);
+          console.log('[actors:merge] Actor deleted successfully');
+        });
+
+        doMerge();
+
+        console.log('[IPC] actors:merge — success, merged', mergeActor.name, 'into', keepActor.name);
+      } finally {
+        // Always re-enable FK checks
+        currentCaseDb.prepare('PRAGMA foreign_keys = ON').run();
+        const fkAfter = currentCaseDb.pragma('foreign_keys', { simple: true });
+        console.log('[actors:merge] foreign_keys after re-enable:', fkAfter);
+      }
+
+      // Refresh actor registry
+      if (actorRegistry) {
+        try { actorRegistry.loadAll(); } catch (e) { /* ignore */ }
+      }
 
       return { success: true };
     } catch (error) {
+      console.error('[IPC] actors:merge — FAILED:', error.message, error.stack);
+      // Ensure FKs are re-enabled even on error
+      try { currentCaseDb.prepare('PRAGMA foreign_keys = ON').run(); } catch (e) {}
       return { success: false, error: error.message };
     }
   });
@@ -2463,13 +2534,15 @@ function registerIpcHandlers() {
     try {
       const caseDb = currentCaseDb;
 
-      // Delete from all junction tables
-      caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId);
-      caseDb.prepare('DELETE FROM event_documents WHERE event_id = ?').run(eventId);
-      caseDb.prepare('DELETE FROM event_actors WHERE event_id = ?').run(eventId);
+      // Delete from all junction tables (handle both old anchor_id and new event_id column names)
+      try { caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId); } catch (e) {}
+      try { caseDb.prepare('DELETE FROM event_documents WHERE event_id = ?').run(eventId); } catch (e) {}
+      try { caseDb.prepare('DELETE FROM event_actors WHERE event_id = ?').run(eventId); } catch (e) {}
       try { caseDb.prepare('DELETE FROM event_precedents WHERE event_id = ?').run(eventId); } catch (e) {}
+      try { caseDb.prepare('DELETE FROM event_precedents WHERE anchor_id = ?').run(eventId); } catch (e) {}
       try { caseDb.prepare('DELETE FROM event_links WHERE source_event_id = ? OR target_event_id = ?').run(eventId, eventId); } catch (e) {}
       try { caseDb.prepare('DELETE FROM incident_events WHERE event_id = ?').run(eventId); } catch (e) {}
+      try { caseDb.prepare('DELETE FROM timeline_connections WHERE (source_id = ? AND source_type = "event") OR (target_id = ? AND target_type = "event")').run(eventId, eventId); } catch (e) {}
 
       caseDb.prepare('DELETE FROM events WHERE id = ?').run(eventId);
       return { success: true };
@@ -3941,6 +4014,7 @@ function registerIpcHandlers() {
         LEFT JOIN events e1 ON e1.id = tc.source_id
         LEFT JOIN events e2 ON e2.id = tc.target_id
         WHERE tc.case_id = ?
+        AND tc.source_id != tc.target_id
         ORDER BY tc.strength DESC, tc.days_between ASC
       `).all(caseId || currentCaseId);
 
@@ -3997,14 +4071,41 @@ function registerIpcHandlers() {
       const caseDb = currentCaseDb;
       if (!caseDb) return { success: false, error: 'No case open' };
 
-      caseDb.prepare(`
-        UPDATE timeline_connections SET
-          connection_type = ?,
-          strength = ?,
-          description = ?,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND case_id = ?
-      `).run(data.connection_type, data.strength, data.description, connectionId, caseId);
+      // Build dynamic update — always update type/strength/description
+      const fields = [
+        'connection_type = ?', 'strength = ?', 'description = ?',
+        'updated_at = CURRENT_TIMESTAMP'
+      ];
+      const values = [data.connection_type, data.strength, data.description];
+
+      // Optionally update source_id and/or target_id
+      if (data.source_id !== undefined) {
+        fields.splice(fields.length - 1, 0, 'source_id = ?');
+        values.push(data.source_id);
+      }
+      if (data.target_id !== undefined) {
+        fields.splice(fields.length - 1, 0, 'target_id = ?');
+        values.push(data.target_id);
+      }
+
+      // Recalculate days_between if source or target changed
+      if (data.source_id !== undefined || data.target_id !== undefined) {
+        const existing = caseDb.prepare('SELECT source_id, target_id FROM timeline_connections WHERE id = ?').get(connectionId);
+        const srcId = data.source_id || existing.source_id;
+        const tgtId = data.target_id || existing.target_id;
+        const src = caseDb.prepare('SELECT date FROM events WHERE id = ?').get(srcId);
+        const tgt = caseDb.prepare('SELECT date FROM events WHERE id = ?').get(tgtId);
+        if (src?.date && tgt?.date) {
+          const daysBetween = Math.round((new Date(tgt.date) - new Date(src.date)) / 86400000);
+          fields.splice(fields.length - 1, 0, 'days_between = ?');
+          values.push(daysBetween);
+        }
+      }
+
+      values.push(connectionId, caseId);
+      caseDb.prepare(
+        `UPDATE timeline_connections SET ${fields.join(', ')} WHERE id = ? AND case_id = ?`
+      ).run(...values);
 
       const connection = caseDb.prepare('SELECT * FROM timeline_connections WHERE id = ?').get(connectionId);
       return { success: true, connection };
@@ -4063,6 +4164,7 @@ function registerIpcHandlers() {
         LEFT JOIN events e1 ON e1.id = sc.source_id
         LEFT JOIN events e2 ON e2.id = sc.target_id
         WHERE sc.case_id = ?
+        AND sc.source_id != sc.target_id
         ORDER BY sc.strength DESC, sc.days_between ASC
       `).all(caseId || currentCaseId);
 

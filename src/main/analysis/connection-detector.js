@@ -44,28 +44,25 @@ class ConnectionDetector {
    */
   static detectRetaliationChains(events) {
     const connections = [];
-    const protectedTags = ['REPORTED', 'PROTECTED_ACTIVITY', 'COMPLAINT', 'HELP_REQUEST'];
-    const adverseTags = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION', 'PAY_CUT'];
+    const protectedTags = ['REPORTED', 'PROTECTED_ACTIVITY', 'COMPLAINT', 'HELP_REQUEST', 'WHISTLEBLOW'];
+    const adverseTags = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION', 'PAY_CUT', 'RETALIATION'];
+
+    const matchesTags = (event, patterns) => {
+      const eventTags = event.tags ? event.tags.split(',') : [];
+      const evType = (event.event_type || '').toUpperCase();
+      const title = (event.title || '').toUpperCase();
+      return eventTags.some(tag => patterns.some(pt => tag.toUpperCase().includes(pt)))
+        || patterns.some(pt => evType.includes(pt))
+        || (event.event_type || '').toLowerCase() === 'reported';
+    };
 
     for (let i = 0; i < events.length; i++) {
       const protectedEvent = events[i];
-      const protectedEventTags = protectedEvent.tags ? protectedEvent.tags.split(',') : [];
-
-      const isProtected = protectedEventTags.some(tag =>
-        protectedTags.some(pt => tag.toUpperCase().includes(pt))
-      );
-
-      if (!isProtected) continue;
+      if (!matchesTags(protectedEvent, protectedTags)) continue;
 
       for (let j = i + 1; j < events.length; j++) {
         const adverseEvent = events[j];
-        const adverseEventTags = adverseEvent.tags ? adverseEvent.tags.split(',') : [];
-
-        const isAdverse = adverseEventTags.some(tag =>
-          adverseTags.some(at => tag.toUpperCase().includes(at))
-        );
-
-        if (!isAdverse) continue;
+        if (!matchesTags(adverseEvent, adverseTags)) continue;
 
         const daysBetween = this.getDaysBetween(protectedEvent.date, adverseEvent.date);
 

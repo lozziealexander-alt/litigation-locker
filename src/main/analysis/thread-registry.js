@@ -5,16 +5,16 @@ const THREAD_DEFINITIONS = [
   {
     id: 'sexual_harassment',
     name: 'Sexual Harassment',
-    description: 'Unwanted sexual conduct, propositions, or comments',
-    tag_signals: ['sexual_harassment', 'harassment'],
-    precedents: ['harris-v-forklift', 'faragher-ellerth'],
+    description: 'Unwanted sexual conduct, propositions, or sexual comments',
+    tag_signals: ['sexual_harassment'],
+    precedents: ['harris-v-forklift', 'faragher-ellerth', 'meritor'],
     color: '#8B5CF6'
   },
   {
     id: 'gender_harassment',
     name: 'Gender Harassment',
     description: 'Gender-based comments, stereotyping, or discriminatory treatment',
-    tag_signals: ['gender_harassment', 'harassment'],
+    tag_signals: ['gender_harassment'],
     precedents: ['harris-v-forklift'],
     color: '#EC4899'
   },
@@ -23,7 +23,7 @@ const THREAD_DEFINITIONS = [
     name: 'Retaliation',
     description: 'Adverse actions taken after protected activity',
     tag_signals: ['retaliation', 'protected_activity', 'adverse_action'],
-    require_combo: ['protected_activity', 'adverse_action'], // bonus scoring if BOTH present across thread
+    require_combo: ['protected_activity', 'adverse_action'],
     precedents: ['burlington-northern', 'vance'],
     color: '#F59E0B'
   },
@@ -66,15 +66,45 @@ const THREAD_DEFINITIONS = [
 function assignEventsToThreads(events) {
   const assignments = {};
 
+  // Keyword maps for content-based matching
+  const sexualKeywords = ['sexual', 'grope', 'groping', 'unwanted touch', 'unwanted advance', 'inappropriate touch', 'proposition'];
+  const genderKeywords = ['gendered', 'sexist', 'stereotype', 'because she', 'because he', 'boys club', 'gender bias', 'gender discrimination',
+    'for a woman', 'for a man', 'as a woman', 'as a man', 'like a woman', 'like a man', 'too aggressive for a', 'too emotional'];
+
   for (const evt of events) {
+    // Skip context events
+    if (evt.is_context_event) continue;
+
     const tags = evt.tags || [];
     const evtType = evt.evidence_type || '';
+    const evtText = ((evt.title || '') + ' ' + (evt.what_happened || '') + ' ' + (evt.description || '')).toLowerCase();
+
+    // Resolve generic 'harassment' tag into specific sub-type
+    const resolvedTags = new Set(tags);
+    if (resolvedTags.has('harassment') && !resolvedTags.has('sexual_harassment') && !resolvedTags.has('gender_harassment')) {
+      if (sexualKeywords.some(k => evtText.includes(k))) {
+        resolvedTags.add('sexual_harassment');
+      } else if (genderKeywords.some(k => evtText.includes(k))) {
+        resolvedTags.add('gender_harassment');
+      } else {
+        resolvedTags.add('hostile_environment');
+      }
+      resolvedTags.delete('harassment');
+    }
+
+    // Content-based correction: reclassify sexual_harassment to gender_harassment if content is gendered, not sexual
+    if (resolvedTags.has('sexual_harassment') && !sexualKeywords.some(k => evtText.includes(k))) {
+      if (genderKeywords.some(k => evtText.includes(k))) {
+        resolvedTags.delete('sexual_harassment');
+        resolvedTags.add('gender_harassment');
+      }
+    }
 
     for (const thread of THREAD_DEFINITIONS) {
       let matches = false;
 
       // Check tag signals
-      if (thread.tag_signals.some(sig => tags.includes(sig))) {
+      if (thread.tag_signals.some(sig => resolvedTags.has(sig))) {
         matches = true;
       }
 

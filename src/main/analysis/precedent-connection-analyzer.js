@@ -46,6 +46,7 @@ class PrecedentConnectionAnalyzer {
     suggestions.push(...this.analyzeSupervisorLiability(events, actors, caseDb, caseId));
     suggestions.push(...this.analyzeRetaliatoryHarassment(events));
     suggestions.push(...this.analyzeFCRADiscrimination(events, actors));
+    suggestions.push(...this.analyzeAdverseActionChains(events));
 
     console.log(`[PrecedentAnalyzer] Raw suggestions: ${suggestions.length}`);
 
@@ -124,6 +125,22 @@ class PrecedentConnectionAnalyzer {
     );
   }
 
+  /**
+   * Check event against patterns using BOTH tags AND event_type + title.
+   * More robust than hasTags alone — catches events that may not have
+   * the exact tag but whose type or title clearly matches.
+   */
+  static matchesEvent(event, tagPatterns, titlePatterns = []) {
+    if (this.hasTags(event, tagPatterns)) return true;
+    const evType = (event.event_type || '').toUpperCase();
+    if (evType && tagPatterns.some(p => evType.includes(p.toUpperCase()))) return true;
+    if (titlePatterns.length > 0) {
+      const title = (event.title || '').toUpperCase();
+      if (titlePatterns.some(p => title.includes(p.toUpperCase()))) return true;
+    }
+    return false;
+  }
+
   static getMaxSeverity(event) {
     const severityMap = {
       'HARASSMENT': 1, 'GENDER_HARASSMENT': 1,
@@ -141,11 +158,13 @@ class PrecedentConnectionAnalyzer {
 
   static analyzeRetaliationCausalLinks(events) {
     const suggestions = [];
-    const protectedTags = ['REPORTED', 'PROTECTED_ACTIVITY', 'COMPLAINT', 'HELP_REQUEST'];
-    const adverseTags = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION', 'PAY_CUT'];
+    const protectedTags = ['REPORTED', 'PROTECTED_ACTIVITY', 'COMPLAINT', 'HELP_REQUEST', 'WHISTLEBLOW'];
+    const adverseTags = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION', 'PAY_CUT', 'RETALIATION'];
 
-    const protectedEvents = events.filter(e => this.hasTags(e, protectedTags));
-    const adverseEvents = events.filter(e => this.hasTags(e, adverseTags));
+    const protectedTitleWords = ['reported', 'complained', 'filed', 'notified hr', 'escalated'];
+    const adverseTitleWords = ['review', 'pip', 'fired', 'terminated', 'demoted', 'written up', 'warning', 'disciplin', 'bonus', 'pay cut'];
+    const protectedEvents = events.filter(e => this.matchesEvent(e, protectedTags, protectedTitleWords));
+    const adverseEvents = events.filter(e => this.matchesEvent(e, adverseTags, adverseTitleWords));
 
     for (const pe of protectedEvents) {
       for (const ae of adverseEvents) {
@@ -432,11 +451,11 @@ class PrecedentConnectionAnalyzer {
 
   static analyzeWhistleblowerRetaliation(events) {
     const suggestions = [];
-    const whistleblowerTags = ['PROTECTED_ACTIVITY', 'COMPLAINT', 'REPORTED'];
-    const adverseTags = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION', 'PAY_CUT'];
+    const whistleblowerTags = ['PROTECTED_ACTIVITY', 'COMPLAINT', 'REPORTED', 'WHISTLEBLOW'];
+    const adverseTags = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION', 'PAY_CUT', 'RETALIATION'];
 
-    const disclosures = events.filter(e => this.hasTags(e, whistleblowerTags));
-    const adverseEvents = events.filter(e => this.hasTags(e, adverseTags));
+    const disclosures = events.filter(e => this.matchesEvent(e, whistleblowerTags, ['reported', 'complained', 'filed', 'escalated']));
+    const adverseEvents = events.filter(e => this.matchesEvent(e, adverseTags, ['review', 'pip', 'fired', 'terminated', 'demoted', 'bonus', 'pay cut']));
 
     for (const disc of disclosures) {
       for (const ae of adverseEvents) {
@@ -867,6 +886,124 @@ class PrecedentConnectionAnalyzer {
     return suggestions;
   }
 
+  // ─── Pass 12: Adverse Action Chains ───────────────────────────
+
+  /**
+   * Detect chains of adverse actions that compound harm.
+   *
+   * Catches patterns like:
+   *   - Bad review → low bonus / pay cut (performance-to-pay chain)
+   *   - PIP → demotion → termination (escalating adverse actions)
+   *   - Any protected activity → adverse1 → adverse2 (continuing retaliation)
+   *
+   * These establish that adverse actions didn't happen in isolation but
+   * were part of a retaliatory or discriminatory pattern.
+   */
+  static analyzeAdverseActionChains(events) {
+    const suggestions = [];
+
+    const protectedPatterns = ['REPORTED', 'PROTECTED_ACTIVITY', 'COMPLAINT', 'HELP_REQUEST', 'WHISTLEBLOW'];
+    const adversePatterns = ['ADVERSE_ACTION', 'PIP', 'TERMINATION', 'DEMOTION', 'PAY_CUT', 'RETALIATION'];
+    const payPatterns = ['PAY_CUT', 'PAY_DISCRIMINATION', 'BONUS', 'COMPENSATION', 'SALARY'];
+    const performancePatterns = ['PIP', 'PERFORMANCE', 'REVIEW'];
+
+    // Title keywords to catch events not tagged but clearly adverse/pay-related
+    const adverseTitleWords = ['review', 'pip', 'fired', 'terminated', 'demoted', 'written up', 'warning', 'disciplin'];
+    const payTitleWords = ['bonus', 'pay', 'salary', 'compensation', 'raise', 'merit', 'wage'];
+    const performanceTitleWords = ['review', 'evaluation', 'assessment', 'goals', 'objectives', 'rating', 'performance'];
+
+    // Identify event categories using broader matching
+    const isProtected = (e) => this.matchesEvent(e, protectedPatterns);
+    const isAdverse = (e) => this.matchesEvent(e, adversePatterns, adverseTitleWords);
+    const isPay = (e) => this.matchesEvent(e, payPatterns, payTitleWords);
+    const isPerformance = (e) => this.matchesEvent(e, performancePatterns, performanceTitleWords);
+
+    const adverseEvents = events.filter(e => isAdverse(e) || isPay(e) || isPerformance(e));
+
+    // Find protected activity events (anchor for chains)
+    const protectedEvents = events.filter(isProtected);
+
+    // --- Chain 1: Performance → Pay impact ---
+    // Bad review / PIP followed by pay-related action (low bonus, pay cut)
+    for (let i = 0; i < adverseEvents.length; i++) {
+      const perf = adverseEvents[i];
+      if (!isPerformance(perf) && !this.hasTags(perf, ['ADVERSE_ACTION'])) continue;
+
+      for (let j = i + 1; j < adverseEvents.length; j++) {
+        const pay = adverseEvents[j];
+        if (!isPay(pay)) continue;
+
+        const days = this.getDaysBetween(perf.date, pay.date);
+        if (days === null || days < 0 || days > 120) continue;
+
+        // Check if a protected activity happened before this chain
+        const hasUpstreamProtected = protectedEvents.some(pe => {
+          const d = this.getDaysBetween(pe.date, perf.date);
+          return d !== null && d >= 0 && d <= 365;
+        });
+
+        const strength = hasUpstreamProtected
+          ? (days <= 30 ? 0.92 : days <= 60 ? 0.82 : 0.70)
+          : (days <= 30 ? 0.80 : days <= 60 ? 0.70 : 0.55);
+
+        suggestions.push({
+          id: uuidv4(),
+          source_id: perf.id,
+          source_type: 'event',
+          target_id: pay.id,
+          target_type: 'event',
+          connection_type: 'pay_retaliation_chain',
+          precedent_key: hasUpstreamProtected ? 'burlington_northern' : 'ledbetter',
+          legal_element: 'compounding_adverse_action',
+          strength,
+          days_between: days,
+          description: `Performance action followed by pay impact within ${days} days${hasUpstreamProtected ? ' (post-protected activity)' : ''}`,
+          reasoning: hasUpstreamProtected
+            ? `Performance-to-pay retaliation chain: A negative performance action was followed by a pay-impacting action within ${days} days, both occurring after protected activity. Under Burlington Northern, this chain of compounding adverse actions strengthens the causal connection — the employer used the performance mechanism as a pretext for pay retaliation.`
+            : `Performance-to-pay chain: A negative performance action was followed by pay impact within ${days} days. Under the Lilly Ledbetter Fair Pay Act, each subsequent paycheck affected by a discriminatory review constitutes a new violation. This chain suggests the performance evaluation was used to justify discriminatory pay outcomes.`
+        });
+      }
+    }
+
+    // --- Chain 2: Sequential adverse actions after protected activity ---
+    // Protected → Adverse1 → Adverse2 (connect Adverse1 to Adverse2)
+    for (const pe of protectedEvents) {
+      const subsequentAdverse = adverseEvents.filter(ae => {
+        const d = this.getDaysBetween(pe.date, ae.date);
+        return d !== null && d > 0 && d <= 365;
+      });
+
+      // Connect sequential adverse actions to each other
+      for (let i = 0; i < subsequentAdverse.length - 1; i++) {
+        const ae1 = subsequentAdverse[i];
+        const ae2 = subsequentAdverse[i + 1];
+        const days = this.getDaysBetween(ae1.date, ae2.date);
+
+        if (days === null || days < 0 || days > 120) continue;
+
+        const daysSinceProtected = this.getDaysBetween(pe.date, ae2.date);
+        const strength = days <= 14 ? 0.88 : days <= 30 ? 0.80 : days <= 60 ? 0.70 : 0.55;
+
+        suggestions.push({
+          id: uuidv4(),
+          source_id: ae1.id,
+          source_type: 'event',
+          target_id: ae2.id,
+          target_type: 'event',
+          connection_type: 'retaliation_chain',
+          precedent_key: 'burlington_northern',
+          legal_element: 'continuing_retaliation',
+          strength,
+          days_between: days,
+          description: `Compounding adverse action — ${days} days apart, ${daysSinceProtected} days after protected activity`,
+          reasoning: `Continuing retaliation pattern: This adverse action followed a prior adverse action by ${days} days, both occurring after a protected activity (${daysSinceProtected} days prior). Under Burlington Northern, the totality of retaliatory actions is considered — each additional adverse act strengthens the inference that the employer engaged in a pattern of retaliation. Sequential adverse actions that "would dissuade a reasonable worker" from engaging in protected activity are independently actionable.`
+        });
+      }
+    }
+
+    return suggestions;
+  }
+
   // ─── Deduplication & Overlap Detection ───────────────────────
 
   static deduplicateAndCheckOverlaps(suggestions, existingConnections, existingSuggestions) {
@@ -881,6 +1018,9 @@ class PrecedentConnectionAnalyzer {
     );
 
     for (const suggestion of suggestions) {
+      // Skip self-connections (same event as both source and target)
+      if (suggestion.source_id === suggestion.target_id) continue;
+
       // Deduplicate within this batch
       const key = `${suggestion.source_id}:${suggestion.target_id}:${suggestion.precedent_key}:${suggestion.legal_element}`;
       if (seen.has(key)) continue;
@@ -971,17 +1111,30 @@ class PrecedentConnectionAnalyzer {
 
       return { action: 'merged', connectionId: suggestion.overlaps_connection_id };
     } else {
-      // Create new timeline_connection
+      // Create new timeline_connection (use edited source/target if provided)
       const newId = uuidv4();
+      const finalSourceId = edits.source_id || suggestion.source_id;
+      const finalTargetId = edits.target_id || suggestion.target_id;
+
+      // Recalculate days_between if source or target changed
+      let daysBetween = suggestion.days_between;
+      if (edits.source_id || edits.target_id) {
+        const src = caseDb.prepare('SELECT date FROM events WHERE id = ?').get(finalSourceId);
+        const tgt = caseDb.prepare('SELECT date FROM events WHERE id = ?').get(finalTargetId);
+        if (src?.date && tgt?.date) {
+          daysBetween = Math.round((new Date(tgt.date) - new Date(src.date)) / 86400000);
+        }
+      }
+
       caseDb.prepare(`
         INSERT INTO timeline_connections (
           id, case_id, source_type, source_id, target_type, target_id,
           connection_type, strength, days_between, description, auto_detected
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
       `).run(
-        newId, caseId, suggestion.source_type, suggestion.source_id,
-        suggestion.target_type, suggestion.target_id,
-        connType, strength, suggestion.days_between, description
+        newId, caseId, suggestion.source_type, finalSourceId,
+        suggestion.target_type, finalTargetId,
+        connType, strength, daysBetween, description
       );
 
       caseDb.prepare(

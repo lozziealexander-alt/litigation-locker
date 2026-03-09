@@ -192,12 +192,9 @@ function openCase(caseId) {
     caseDb.exec('ALTER TABLE actors ADD COLUMN in_reporting_chain INTEGER DEFAULT 0');
   }
 
-  // Backfill: set in_reporting_chain = 1 for actors with chain-type relationships
-  caseDb.exec(`
-    UPDATE actors SET in_reporting_chain = 1
-    WHERE relationship_to_self IN ('direct_supervisor', 'skip_level', 'senior_leadership', 'supervisor', 'executive')
-    AND in_reporting_chain = 0
-  `);
+  // NOTE: Backfill removed. in_reporting_chain is now managed solely through
+  // the UI toggle in ActorDetail. The one-time backfill in actor-registry.js
+  // handles initial column creation only.
 
   // Add auto_detected column to actor_appearances (document-actor linking)
   const aaColumns = caseDb.prepare("PRAGMA table_info(actor_appearances)").all();

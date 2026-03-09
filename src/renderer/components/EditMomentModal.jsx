@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const TAG_OPTIONS = [
   'protected_activity',
@@ -39,7 +39,11 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
   const [linkingDoc, setLinkingDoc] = useState(false);
   const [selectedDocId, setSelectedDocId] = useState('');
 
+  // Guard: prevent loadMoment from overwriting user edits after initial load
+  const hasLoadedRef = useRef(false);
+
   useEffect(() => {
+    hasLoadedRef.current = false;
     loadMoment();
     loadAllDocs();
   }, [momentId]);
@@ -47,8 +51,12 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
   async function loadMoment() {
     if (!momentId) {
       setLoading(false);
+      hasLoadedRef.current = true;
       return;
     }
+
+    // Don't overwrite user edits if already loaded
+    if (hasLoadedRef.current) return;
 
     setLoading(true);
 
@@ -79,12 +87,13 @@ export default function EditMomentModal({ caseId, momentId, onClose, onSave }) {
       setError(err.message);
     }
 
+    hasLoadedRef.current = true;
     setLoading(false);
   }
 
   async function loadAllDocs() {
     try {
-      const res = await window.api.documents.list();
+      const res = await window.api.documents.list(caseId);
       if (res.success) setAllDocs(res.documents || []);
     } catch (e) {}
   }

@@ -48,19 +48,18 @@ function formatDate(isoStr) {
 
 // ── Tab constants ─────────────────────────────────────────────────────────────
 const TABS = [
-  { id: 'executive', label: 'Executive Summary' },
-  { id: 'threads',   label: 'Thread Breakdown' },
-  { id: 'timeline',  label: 'Timeline' },
-  { id: 'actors',    label: 'Key People' },
-  { id: 'gaps',      label: 'Red Flags' }
+  { id: 'summary', label: 'Case Summary' },
+  { id: 'causal',  label: 'Causal Links' },
+  { id: 'actors',  label: 'Key People' },
+  { id: 'gaps',    label: 'Red Flags' }
 ];
 
 // ═════════════════════════════════════════════════════════════════════════════
-export default function LawyerBrief() {
+export default function LawyerBrief({ onNavigateToThread, onNavigateToConnections }) {
   const [brief, setBrief]               = useState(null);
   const [isLoading, setIsLoading]       = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [activeTab, setActiveTab]       = useState('executive');
+  const [activeTab, setActiveTab]       = useState('summary');
   const [progress, setProgress]         = useState('');
   const [genError, setGenError]         = useState(null);
   const [versions, setVersions]         = useState([]);
@@ -80,7 +79,7 @@ export default function LawyerBrief() {
       const res = await window.api.brief.latest();
       if (res.success && res.brief) setBrief(res.brief);
     } catch (e) {
-      console.error('[LawyerBrief] loadLatest error:', e);
+      console.error('[CaseOverview] loadLatest error:', e);
     }
     setIsLoading(false);
   }
@@ -102,12 +101,12 @@ export default function LawyerBrief() {
       const res = await window.api.brief.generate();
       if (res.success) {
         setBrief(res.brief);
-        setActiveTab('executive');
+        setActiveTab('summary');
       } else {
         setGenError(res.error || 'Generation failed — check that a case is open and try again.');
       }
     } catch (e) {
-      setGenError(e?.message || 'Unexpected error generating brief.');
+      setGenError(e?.message || 'Unexpected error generating overview.');
     }
 
     setProgress('');
@@ -142,7 +141,7 @@ export default function LawyerBrief() {
     return (
       <div style={s.center}>
         <div style={s.spinner} />
-        <p style={s.muted}>Loading brief...</p>
+        <p style={s.muted}>Loading overview...</p>
       </div>
     );
   }
@@ -152,16 +151,16 @@ export default function LawyerBrief() {
       {/* Header */}
       <div style={s.header}>
         <div style={s.headerLeft}>
-          <span style={s.headerIcon}>📄</span>
+          <span style={s.headerIcon}>⚖️</span>
           <div>
-            <h1 style={s.title}>Lawyer Brief</h1>
-            <p style={s.subtitle}>Auto-generated case overview for attorney review</p>
+            <h1 style={s.title}>Case Overview</h1>
+            <p style={s.subtitle}>Auto-generated case summary for attorney review</p>
           </div>
         </div>
         <div style={s.headerRight}>
           {brief?.isStale && (
             <div style={s.staleBanner}>
-              ⚠️ Case updated since last brief
+              ⚠️ Case updated since last overview
             </div>
           )}
           {brief && (
@@ -183,7 +182,7 @@ export default function LawyerBrief() {
             onClick={handleGenerate}
             disabled={isGenerating}
           >
-            {isGenerating ? '⏳ Generating...' : brief ? '🔄 Regenerate' : '✨ Generate Brief'}
+            {isGenerating ? '⏳ Generating...' : brief ? '🔄 Regenerate' : '✨ Generate Overview'}
           </button>
         </div>
       </div>
@@ -207,7 +206,7 @@ export default function LawyerBrief() {
       {/* Version history drawer */}
       {showVersions && versions.length > 0 && (
         <div style={s.versionDrawer}>
-          <strong style={{ color: colors.textPrimary }}>Previous Briefs</strong>
+          <strong style={{ color: colors.textPrimary }}>Previous Overviews</strong>
           {versions.map(v => (
             <div key={v.id} style={s.versionRow}>
               <span style={{ color: colors.textSecondary }}>{formatDate(v.generated_at)}</span>
@@ -221,10 +220,10 @@ export default function LawyerBrief() {
 
       {!brief && !isGenerating && (
         <div style={s.empty}>
-          <div style={s.emptyIcon}>📄</div>
-          <h2 style={s.emptyTitle}>No brief yet</h2>
+          <div style={s.emptyIcon}>⚖️</div>
+          <h2 style={s.emptyTitle}>No overview yet</h2>
           <p style={s.emptyText}>
-            Click <strong>Generate Brief</strong> to auto-build your case overview from all evidence, events, and actors.
+            Click <strong>Generate Overview</strong> to auto-build your case summary from all evidence, events, and actors.
           </p>
         </div>
       )}
@@ -249,11 +248,10 @@ export default function LawyerBrief() {
 
           {/* Tab content */}
           <div style={s.content}>
-            {activeTab === 'executive' && <ExecutiveSummary brief={brief} />}
-            {activeTab === 'threads'   && <ThreadBreakdown brief={brief} />}
-            {activeTab === 'timeline'  && <TimelineView    brief={brief} />}
-            {activeTab === 'actors'    && <ActorSummary    brief={brief} />}
-            {activeTab === 'gaps'      && <RedFlags        brief={brief} />}
+            {activeTab === 'summary' && <CaseSummary brief={brief} onNavigateToThread={onNavigateToThread} />}
+            {activeTab === 'causal'  && <CausalLinks onNavigateToConnections={onNavigateToConnections} />}
+            {activeTab === 'actors'  && <ActorSummary brief={brief} />}
+            {activeTab === 'gaps'    && <RedFlags brief={brief} />}
           </div>
         </>
       )}
@@ -261,53 +259,195 @@ export default function LawyerBrief() {
   );
 }
 
-// ═══════════════ TAB: Executive Summary ════════════════════════════════════════
-function ExecutiveSummary({ brief }) {
+// ═══════════════ TAB: Case Summary ════════════════════════════════════════════
+function CaseSummary({ brief, onNavigateToThread }) {
   const ex = brief.executive || {};
-  const sl = strengthLabel(ex.strength || 0);
+  const score = ex.strength || 0;
+  const sl = strengthLabel(score);
+  const sc = strengthColor(score);
   const s = getStyles();
+  const threads = (brief.threads || []).filter(t => t.eventCount > 0);
+  const paragraphs = buildNarrativeParagraphs(ex, threads, brief);
+
+  // SVG ring gauge dimensions
+  const ringSize = 140;
+  const strokeW = 10;
+  const ringR = (ringSize - strokeW) / 2;
+  const circumference = 2 * Math.PI * ringR;
+  const dashOffset = circumference - (score / 10) * circumference;
+
+  const stats = [
+    { label: 'Time Span', value: ex.timeSpan || 'No dates' },
+    { label: 'Duration', value: ex.timeSpanDays > 0 ? `${ex.timeSpanDays} days` : '\u2014' },
+    { label: 'Documents', value: ex.counts?.documents ?? 0 },
+    { label: 'Events', value: ex.counts?.events ?? 0 },
+    { label: 'Actors', value: ex.counts?.actors ?? 0 }
+  ];
 
   return (
     <div style={s.section}>
-      {/* Strength hero */}
+      {/* Hero: ring gauge + case info */}
       <div style={s.strengthHero}>
-        <div style={{ ...s.strengthScore, color: strengthColor(ex.strength || 0) }}>
-          {(ex.strength || 0).toFixed(1)}
-          <span style={s.strengthDenom}>/10</span>
-        </div>
-        <div>
-          <div style={{ ...s.strengthLabel, color: strengthColor(ex.strength || 0) }}>
-            {sl.icon} {sl.text} Case
+        <div style={{ position: 'relative', width: ringSize, height: ringSize, flexShrink: 0 }}>
+          <svg width={ringSize} height={ringSize} style={{ transform: 'rotate(-90deg)' }}>
+            <circle cx={ringSize/2} cy={ringSize/2} r={ringR} fill="none"
+              stroke={colors.border} strokeWidth={strokeW} opacity={0.35} />
+            <circle cx={ringSize/2} cy={ringSize/2} r={ringR} fill="none"
+              stroke={sc} strokeWidth={strokeW}
+              strokeDasharray={circumference} strokeDashoffset={dashOffset}
+              strokeLinecap="round" style={{ transition: 'stroke-dashoffset 1s ease' }} />
+          </svg>
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ fontSize: 36, fontWeight: 800, color: sc, lineHeight: 1, letterSpacing: '-1px' }}>
+              {score.toFixed(1)}
+            </span>
+            <span style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>/10</span>
           </div>
-          <div style={s.strengthSub}>Overall strength score</div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: sc }}>{sl.text} Case</div>
+          <div style={s.heroCaseType}>{ex.caseType || 'Undetermined'}</div>
+          <div style={{ fontSize: 12, color: colors.textMuted, marginTop: 4 }}>
+            {threads.length} active claim{threads.length !== 1 ? 's' : ''} identified
+          </div>
         </div>
       </div>
 
-      {/* Stats row */}
-      <div style={s.statsRow}>
-        <StatCard label="Case Type"     value={ex.caseType || 'Undetermined'} wide />
-        <StatCard label="Time Span"     value={ex.timeSpan || 'No dates'} />
-        <StatCard label="Duration"      value={ex.timeSpanDays > 0 ? `${ex.timeSpanDays} days` : '—'} />
-        <StatCard label="Documents"     value={ex.counts?.documents ?? 0} />
-        <StatCard label="Events"        value={ex.counts?.events ?? 0} />
-        <StatCard label="Actors"        value={ex.counts?.actors ?? 0} />
-        <StatCard label="Active Claims" value={ex.counts?.activeThreads ?? 0} />
+      {/* Stats bar */}
+      <div style={s.statsBar}>
+        {stats.map((stat, i) => (
+          <React.Fragment key={i}>
+            <div style={s.statItem}>
+              <div style={s.statValue}>{stat.value}</div>
+              <div style={s.statLabel}>{stat.label}</div>
+            </div>
+            {i < stats.length - 1 && <div style={s.statDivider} />}
+          </React.Fragment>
+        ))}
       </div>
 
-      {/* Strength meter */}
-      <div style={s.meterWrap}>
-        <div style={{ ...s.meter, width: `${((ex.strength || 0) / 10) * 100}%`, background: strengthColor(ex.strength || 0) }} />
+      {/* Why Are We Here */}
+      <div style={s.whyCard}>
+        <h2 style={s.whyHeading}>Why Are We Here</h2>
+        {paragraphs.map((p, i) => (
+          <p key={i} style={s.whyPara}>{p}</p>
+        ))}
       </div>
+
+      {/* Active Claims */}
+      {threads.length > 0 && (
+        <div style={s.claimsSection}>
+          <h3 style={s.subHeading}>Active Claims</h3>
+          {threads.map(thread => {
+            const tc = strengthColor(thread.strength);
+            return (
+              <div
+                key={thread.id}
+                style={{ ...s.claimRow, borderLeft: `3px solid ${thread.color}` }}
+                onClick={() => onNavigateToThread?.(thread.id)}
+                title="Click to open this claim in Threads"
+              >
+                <div style={s.claimLeft}>
+                  <div>
+                    <div style={s.claimName}>{thread.name}</div>
+                    <div style={s.claimMeta}>{thread.eventCount} events · {thread.docCount} docs</div>
+                  </div>
+                </div>
+                <div style={s.claimRight}>
+                  <div style={s.claimMeterWrap}>
+                    <div style={{ ...s.claimMeter, width: `${(thread.strength / 10) * 100}%`, background: tc }} />
+                  </div>
+                  <span style={{ ...s.claimScore, color: tc }}>
+                    {thread.strength}/10
+                  </span>
+                  <span style={s.viewArrow}>View \u2192</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Brief meta */}
       {brief.generatedAt && (
         <p style={s.metaLine}>
           Generated {formatDate(brief.generatedAt)}
-          {brief.isStale && <span style={s.staleTag}> · Outdated</span>}
+          {brief.isStale && <span style={s.staleTag}> \u00b7 Outdated</span>}
         </p>
       )}
     </div>
   );
+}
+
+function buildNarrativeParagraphs(ex, threads, brief) {
+  const paras = [];
+  const counts = ex.counts || {};
+  const strength = ex.strength || 0;
+
+  // Para 1 — Setting: scope and evidence base
+  if (counts.events > 0 || threads.length > 0) {
+    let p1 = 'This employment matter';
+    if (ex.timeSpan && ex.timeSpan !== 'No dated events yet') {
+      p1 += ` spans ${ex.timeSpan}`;
+      if (ex.timeSpanDays > 0) p1 += ` (${ex.timeSpanDays} days)`;
+    }
+    p1 += '. The record contains';
+    const parts = [];
+    if (counts.events > 0) parts.push(`${counts.events} documented event${counts.events !== 1 ? 's' : ''}`);
+    if (counts.documents > 0) parts.push(`${counts.documents} supporting document${counts.documents !== 1 ? 's' : ''}`);
+    if (counts.actors > 0) parts.push(`${counts.actors} named individual${counts.actors !== 1 ? 's' : ''}`);
+    p1 += ' ' + parts.join(', ') + '.';
+    paras.push(p1);
+  }
+
+  // Para 2 — The pattern: what the threads reveal
+  if (threads.length > 0) {
+    const sorted = [...threads].sort((a, b) => b.strength - a.strength);
+    const top = sorted[0];
+    const threadNames = sorted.map(t => t.name);
+    let p2 = '';
+    if (threadNames.length === 1) {
+      p2 = `The record establishes a ${top.name} claim`;
+    } else {
+      const rest = threadNames.slice(0, -1).join(', ');
+      const last = threadNames[threadNames.length - 1];
+      p2 = `The record supports ${threadNames.length} concurrent claims — ${rest} and ${last}`;
+    }
+    if (top.eventCount > 1) {
+      p2 += `, with ${top.name} showing the strongest documented pattern across ${top.eventCount} events`;
+    }
+    const gaps = brief.timeline?.gaps || [];
+    if (gaps.length > 0) {
+      p2 += `. ${gaps.length} documentation gap${gaps.length > 1 ? 's' : ''} exist that may require explanation at deposition`;
+    }
+    p2 += '.';
+    paras.push(p2);
+  }
+
+  // Para 3 — Legal significance: what it means for the case
+  if (strength > 0) {
+    const redFlags = brief.redFlags || [];
+    const highFlags = redFlags.filter(f => f.severity === 'high');
+    let p3 = '';
+    if (strength >= 7) {
+      p3 = `With an overall case strength of ${strength.toFixed(1)}/10, the documented record is well-supported for filing`;
+    } else if (strength >= 4) {
+      p3 = `With an overall case strength of ${strength.toFixed(1)}/10, the record provides a moderate foundation — additional corroborating evidence would strengthen the position before filing`;
+    } else {
+      p3 = `With an overall case strength of ${strength.toFixed(1)}/10, significant evidentiary gaps remain`;
+    }
+    if (highFlags.length > 0) {
+      p3 += `. ${highFlags.length} high-severity issue${highFlags.length > 1 ? 's' : ''} require${highFlags.length === 1 ? 's' : ''} attorney review before proceeding`;
+    }
+    p3 += '.';
+    paras.push(p3);
+  }
+
+  if (paras.length === 0) {
+    paras.push('No case data available yet. Add events, documents, and tag them with claim types to generate the narrative summary.');
+  }
+
+  return paras;
 }
 
 function StatCard({ label, value, wide }) {
@@ -320,164 +460,184 @@ function StatCard({ label, value, wide }) {
   );
 }
 
-// ═══════════════ TAB: Thread Breakdown ════════════════════════════════════════
-function ThreadBreakdown({ brief }) {
+// ═══════════════ TAB: Causal Links ═══════════════════════════════════════════
+
+// Precedent labels for all connection types
+const CONNECTION_PRECEDENTS = {
+  // Core retaliation patterns
+  retaliation:                    { label: 'Retaliation', precedents: ['Burlington N. & Santa Fe Ry. Co. v. White (2006)', 'Clark Cty. Sch. Dist. v. Breeden (2001)'], description: 'Protected activity followed by adverse action within a suspect timeframe may establish retaliatory intent.' },
+  retaliation_chain:              { label: 'Retaliation Chain', precedents: ['Burlington N. & Santa Fe Ry. Co. v. White (2006)', 'Clark Cty. Sch. Dist. v. Breeden (2001)'], description: 'A sequence of adverse actions following protected activity establishes a causal chain supporting a retaliation claim.' },
+  whistleblower_retaliation:      { label: 'Whistleblower Retaliation', precedents: ['Burlington N. & Santa Fe Ry. Co. v. White (2006)'], description: 'Adverse action following a protected disclosure or complaint supports a whistleblower retaliation claim.' },
+  retaliatory_harassment:         { label: 'Retaliatory Harassment', precedents: ['Burlington N. & Santa Fe Ry. Co. v. White (2006)', 'Harris v. Forklift Systems (1993)'], description: 'Harassment directed at an employee following protected activity can constitute an adverse employment action under Title VII.' },
+  retaliatory_harassment_pattern: { label: 'Retaliatory Harassment Pattern', precedents: ['Burlington N. & Santa Fe Ry. Co. v. White (2006)', "Nat'l R.R. Passenger Corp. v. Morgan (2002)"], description: 'A systemic post-complaint harassment campaign establishes retaliatory motive and satisfies the adverse action element.' },
+  pay_retaliation_chain:          { label: 'Pay Retaliation', precedents: ['Burlington N. & Santa Fe Ry. Co. v. White (2006)', 'Lilly Ledbetter Fair Pay Act (2009)'], description: 'Compensation reduced or withheld following protected activity supports a pay retaliation claim.' },
+  // Temporal and proximity patterns
+  temporal_proximity:             { label: 'Temporal Proximity', precedents: ['Clark Cty. Sch. Dist. v. Breeden (2001)'], description: 'Courts treat short gaps between protected activity and adverse action as evidence of causation.' },
+  temporal_cluster:               { label: 'Temporal Cluster', precedents: ["Nat'l R.R. Passenger Corp. v. Morgan (2002)"], description: 'Events concentrated in a short time window suggest coordinated conduct and can establish a continuing violation.' },
+  protected_to_adverse:           { label: 'Protected Activity → Adverse Action', precedents: ['Burlington N. & Santa Fe Ry. Co. v. White (2006)'], description: 'A direct causal chain from a protected act to a materially adverse employment action supports a retaliation claim.' },
+  // Escalation and environment patterns
+  escalation:                     { label: 'Pattern Escalation', precedents: ["Nat'l R.R. Passenger Corp. v. Morgan (2002)"], description: 'A series of incidents of increasing severity can establish a hostile work environment claim.' },
+  hostile_environment:            { label: 'Hostile Environment Pattern', precedents: ['Harris v. Forklift Systems (1993)', 'Meritor Savings Bank v. Vinson (1986)'], description: 'Severe or pervasive conduct that alters employment conditions satisfies the hostile environment standard.' },
+  sexual_harassment_pattern:      { label: 'Sexual Harassment Pattern', precedents: ['Harris v. Forklift Systems (1993)', 'Meritor Savings Bank v. Vinson (1986)'], description: 'Repeated unwelcome sexual conduct creating a hostile environment establishes liability under Title VII.' },
+  quid_pro_quo:                   { label: 'Quid Pro Quo', precedents: ['Meritor Savings Bank v. Vinson (1986)', 'Burlington Indus., Inc. v. Ellerth (1998)'], description: 'Conditioning an employment benefit on submission to unwelcome conduct establishes tangible employment action liability.' },
+  // Actor and employer patterns
+  actor_continuity:               { label: 'Same-Actor Pattern', precedents: ['Vance v. Ball State Univ. (2013)'], description: 'Repeated involvement of the same individual across multiple incidents strengthens discriminatory intent.' },
+  supervisor_liability:           { label: 'Supervisor Liability', precedents: ['Vance v. Ball State Univ. (2013)', 'Burlington Indus., Inc. v. Ellerth (1998)'], description: "Employer vicariously liable for a supervisor's tangible employment actions without affirmative defense." },
+  supervisor_pattern:             { label: 'Supervisor Pattern', precedents: ['Vance v. Ball State Univ. (2013)', 'Faragher v. City of Boca Raton (1998)'], description: 'Systematic supervisory conduct establishes employer liability and may negate the Faragher/Ellerth affirmative defense.' },
+  employer_notice:                { label: 'Employer Notice', precedents: ['Faragher v. City of Boca Raton (1998)', 'Burlington Indus., Inc. v. Ellerth (1998)'], description: 'Evidence the employer knew or should have known of misconduct and failed to act defeats the affirmative defense.' },
+  // Continuing and cumulative patterns
+  continuing_violation:           { label: 'Continuing Violation', precedents: ["Nat'l R.R. Passenger Corp. v. Morgan (2002)"], description: 'An ongoing series of related acts is treated as a single unlawful violation, extending the limitations period (Morgan).' },
+  convincing_mosaic:              { label: 'Convincing Mosaic', precedents: ['Lewis v. Union City Sch. Dist. (11th Cir. 2019)', 'Smith v. Lockheed-Martin Corp. (11th Cir. 2011)'], description: 'A cumulative circumstantial pattern of discriminatory conduct can establish intent without a single smoking-gun fact.' },
+  // Pay and FCRA
+  pay_discrimination:             { label: 'Pay Discrimination', precedents: ['Lilly Ledbetter Fair Pay Act (2009)', 'County of Washington v. Gunther (1981)'], description: 'Each discriminatory paycheck constitutes a fresh violation under the Ledbetter Act, preserving timeliness.' },
+  fcra_discrimination:            { label: 'FCRA Discrimination', precedents: ['Trans Union Corp. v. FTC (D.C. Cir. 2001)'], description: 'Discriminatory or retaliatory use of consumer report information may violate both the FCRA and Title VII.' },
+  discrimination_some_harm:       { label: 'Discriminatory Harm', precedents: ['Muldrow v. City of St. Louis (2024)'], description: 'An adverse action need only cause some harm to a term or condition of employment, not serious or significant harm (Muldrow).' },
+  exclusion_pattern:              { label: 'Systematic Exclusion', precedents: ['Meritor Savings Bank v. Vinson (1986)'], description: 'Repeated exclusion from meetings, communications, or opportunities can constitute discriminatory terms.' },
+  // Fallback
+  general:                        { label: 'Causal Connection', precedents: [], description: 'A documented link between two events that may be relevant to one or more claims.' }
+};
+
+function CausalLinks({ onNavigateToConnections }) {
+  const [connections, setConnections] = useState([]);
+  const [loading, setLoading] = useState(true);
   const s = getStyles();
-  const threads = brief.threads || [];
 
-  if (threads.length === 0) {
-    return <EmptyState text="No active legal threads detected. Tag events with claim types to populate threads." />;
-  }
+  useEffect(() => {
+    loadConnections();
+  }, []);
 
-  return (
-    <div style={s.section}>
-      {threads.map(thread => (
-        <div key={thread.id} style={s.threadCard}>
-          <div style={s.threadHeader}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: spacing.sm }}>
-              <div style={{ ...s.threadDot, background: thread.color }} />
-              <span style={s.threadName}>🧵 {thread.name}</span>
-            </div>
-            <div style={s.threadMeta}>
-              <span style={s.threadCount}>{thread.eventCount} events · {thread.docCount} docs</span>
-              <span style={{ ...s.threadStrength, color: strengthColor(thread.strength) }}>
-                {thread.strength}/10
-              </span>
-            </div>
-          </div>
+  // Connection types that represent genuine cause-and-effect relationships
+  const CAUSAL_TYPES = new Set([
+    'retaliation_chain', 'protected_to_adverse', 'whistleblower_retaliation',
+    'pay_retaliation_chain', 'retaliatory_harassment', 'retaliatory_harassment_pattern',
+    'quid_pro_quo', 'employer_notice'
+  ]);
 
-          {/* Strength bar */}
-          <div style={s.meterWrapSm}>
-            <div style={{ ...s.meterSm, width: `${(thread.strength / 10) * 100}%`, background: thread.color }} />
-          </div>
-
-          {/* Elements */}
-          <div style={s.elementGrid}>
-            {(thread.elements || []).map(el => {
-              const ei = elementIcon(el.status);
-              return (
-                <div key={el.key} style={s.elementRow}>
-                  <span style={{ ...s.elementIcon, color: ei.color }}>{ei.icon}</span>
-                  <span style={{ ...s.elementLabel, color: el.status === 'missing' ? colors.textMuted : colors.textPrimary }}>
-                    {el.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Precedents */}
-          {thread.precedents?.length > 0 && (
-            <div style={s.precedentsRow}>
-              <span style={s.precedentsLabel}>Precedents:</span>
-              {thread.precedents.map(p => (
-                <span key={p} style={s.precedentBadge}>{p}</span>
-              ))}
-            </div>
-          )}
-
-          {/* Key evidence */}
-          {thread.keyEvidence?.length > 0 && (
-            <div style={s.evidenceSection}>
-              <div style={s.sectionSubLabel}>Key Evidence</div>
-              {thread.keyEvidence.map(e => (
-                <div key={e.id} style={s.evidenceRow}>
-                  <span style={s.evidenceFile}>{e.filename || e.id}</span>
-                  <span style={s.evidenceDate}>{e.date ? formatDate(e.date) : 'undated'}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Gaps */}
-          {thread.gaps?.length > 0 && (
-            <div style={s.gapsSection}>
-              <div style={s.sectionSubLabel}>Gaps</div>
-              {thread.gaps.map((g, i) => (
-                <div key={i} style={s.gapRow}>⚠ {g}</div>
-              ))}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ═══════════════ TAB: Timeline ════════════════════════════════════════════════
-function TimelineView({ brief }) {
-  const s = getStyles();
-  const tl = brief.timeline || {};
-  const moments = tl.criticalMoments || [];
-  const gaps    = tl.gaps || [];
-
-  if (moments.length === 0 && gaps.length === 0) {
-    return <EmptyState text="No dated events found. Add dates to events to see the timeline." />;
-  }
-
-  // Build a merged sorted list of moments + gaps for display
-  const items = [];
-  let gapIdx = 0;
-  for (let i = 0; i < moments.length; i++) {
-    items.push({ type: 'event', data: moments[i] });
-    // Insert gap after this moment if applicable
-    while (gapIdx < gaps.length && new Date(gaps[gapIdx].from) <= new Date(moments[i].date)) {
-      if (i === moments.length - 1 || new Date(gaps[gapIdx].to) <= new Date(moments[i + 1]?.date)) {
-        items.push({ type: 'gap', data: gaps[gapIdx] });
-        gapIdx++;
-      } else {
-        break;
+  async function loadConnections() {
+    setLoading(true);
+    try {
+      const res = await window.api.connections.list();
+      if (res.success) {
+        // Only show causal connection types (cause → effect), exclude self-connections
+        const causal = (res.connections || []).filter(
+          c => c.source_type === 'event' && c.target_type === 'event'
+            && CAUSAL_TYPES.has(c.connection_type)
+            && c.source_id !== c.target_id
+        );
+        setConnections(causal);
       }
+    } catch (e) {
+      console.error('[CausalLinks] load error:', e);
     }
+    setLoading(false);
+  }
+
+  if (loading) {
+    return (
+      <div style={{ padding: '60px', textAlign: 'center', color: colors.textMuted }}>
+        Loading causal links...
+      </div>
+    );
+  }
+
+  if (connections.length === 0) {
+    return (
+      <div style={s.emptyState}>
+        <p style={s.emptyStateText}>
+          No causal links found. Use the Connections view to add or auto-detect links between events.
+        </p>
+      </div>
+    );
+  }
+
+  // Group by connection_type
+  const groups = {};
+  for (const c of connections) {
+    const type = c.connection_type || 'general';
+    if (!groups[type]) groups[type] = [];
+    groups[type].push(c);
   }
 
   return (
     <div style={s.section}>
-      <div style={s.timelineSpan}>
-        <span style={s.timelineDate}>{tl.start ? formatDate(tl.start) : '?'}</span>
-        <div style={s.timelineTrack} />
-        <span style={s.timelineDate}>{tl.end ? formatDate(tl.end) : '?'}</span>
-      </div>
+      <p style={{ color: colors.textSecondary, fontSize: typography.fontSize.sm, margin: 0 }}>
+        Causal connections between documented events, with supporting case precedent.
+      </p>
 
-      {gaps.length > 0 && (
-        <div style={s.gapSummary}>
-          ⚠ {gaps.length} documentation gap{gaps.length > 1 ? 's' : ''} detected
+      {onNavigateToConnections && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            onClick={onNavigateToConnections}
+            style={{
+              background: 'none',
+              border: `1px solid ${colors.border}`,
+              borderRadius: radius.sm,
+              padding: `${spacing.xs} ${spacing.md}`,
+              fontSize: typography.fontSize.sm,
+              color: colors.textSecondary,
+              cursor: 'pointer'
+            }}
+          >
+            View all in Connections →
+          </button>
         </div>
       )}
 
-      <div style={s.timelineList}>
-        {moments.map((m, i) => (
-          <div key={m.id || i} style={s.timelineMoment}>
-            <div style={s.momentDot} />
-            <div style={s.momentContent}>
-              <div style={s.momentDate}>{formatDate(m.date)}</div>
-              <div style={s.momentTitle}>{m.title}</div>
-              {m.tags?.length > 0 && (
-                <div style={s.momentTags}>
-                  {m.tags.map(t => (
-                    <span key={t} style={s.tagPill}>{t.replace(/_/g, ' ')}</span>
-                  ))}
+      {Object.entries(groups).map(([type, conns]) => {
+        const meta = CONNECTION_PRECEDENTS[type] || CONNECTION_PRECEDENTS.general;
+        return (
+          <div key={type} style={s.causalGroup}>
+            <div style={s.causalGroupHeader}>
+              <span style={s.causalTypeLabel}>{meta.label}</span>
+              <span style={s.causalCount}>{conns.length} link{conns.length !== 1 ? 's' : ''}</span>
+            </div>
+            <p style={s.causalDescription}>{meta.description}</p>
+            {meta.precedents.length > 0 && (
+              <div style={s.precedentsRow}>
+                <span style={s.precedentsLabel}>Precedent:</span>
+                {meta.precedents.map(p => (
+                  <span key={p} style={s.precedentBadge}>{p}</span>
+                ))}
+              </div>
+            )}
+            <div style={s.causalLinks}>
+              {conns.map(c => (
+                <div key={c.id} style={s.causalLink}>
+                  <div style={s.causalLinkMain}>
+                    <div style={s.causalNode}>
+                      <div style={s.causalNodeLabel}>
+                        {c.source_date ? formatDate(c.source_date) : 'undated'}
+                      </div>
+                      <div style={s.causalNodeTitle}>{c.source_title || c.source_id}</div>
+                    </div>
+                    <div style={s.causalArrow}>
+                      <div style={s.causalArrowLine} />
+                      {c.days_between != null && c.days_between >= 0 && (
+                        <span style={s.causalDays}>{c.days_between}d</span>
+                      )}
+                      <span style={s.causalArrowHead}>→</span>
+                    </div>
+                    <div style={s.causalNode}>
+                      <div style={s.causalNodeLabel}>
+                        {c.target_date ? formatDate(c.target_date) : 'undated'}
+                      </div>
+                      <div style={s.causalNodeTitle}>{c.target_title || c.target_id}</div>
+                    </div>
+                    {c.strength != null && (
+                      <div style={{ ...s.causalStrength, color: strengthColor(c.strength * 10) }}>
+                        {Math.round(c.strength * 100)}%
+                      </div>
+                    )}
+                  </div>
+                  {c.description && (
+                    <div style={s.causalLinkDesc}>{c.description}</div>
+                  )}
                 </div>
-              )}
+              ))}
             </div>
           </div>
-        ))}
-      </div>
-
-      {gaps.length > 0 && (
-        <>
-          <h3 style={s.subHeading}>Documentation Gaps</h3>
-          {gaps.map((g, i) => (
-            <div key={i} style={s.gapCard}>
-              <span style={s.gapIcon}>🕳</span>
-              <div>
-                <div style={s.gapLabel}>{g.label}</div>
-                <div style={s.gapSub}>Missing {g.days} days of documentation</div>
-              </div>
-            </div>
-          ))}
-        </>
-      )}
+        );
+      })}
     </div>
   );
 }
@@ -820,42 +980,49 @@ function getStyles() {
       margin: '0 auto'
     },
 
-    // Executive summary
+    // Executive summary — ring gauge hero
     strengthHero: {
       display: 'flex',
       alignItems: 'center',
-      gap: spacing.xl,
-      padding: spacing.xl,
-      background: colors.surface,
+      gap: '32px',
+      padding: '32px',
+      background: `linear-gradient(135deg, ${colors.surface} 0%, ${colors.surfaceAlt} 100%)`,
       borderRadius: radius.lg,
-      boxShadow: shadows.sm
+      border: `1px solid ${colors.border}`,
+      boxShadow: shadows.md
     },
-    strengthScore: {
-      fontSize: 64,
-      fontWeight: 800,
-      lineHeight: 1,
-      letterSpacing: '-2px'
+    heroCaseType: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: '0.06em',
+      fontWeight: typography.fontWeight.medium
     },
-    strengthDenom: { fontSize: 28, fontWeight: 400, opacity: 0.6 },
-    strengthLabel: { fontSize: typography.fontSize.xl, fontWeight: typography.fontWeight.semibold },
-    strengthSub: { color: colors.textMuted, fontSize: typography.fontSize.sm, marginTop: 4 },
 
-    statsRow: {
+    // Unified stats bar
+    statsBar: {
       display: 'flex',
-      flexWrap: 'wrap',
-      gap: spacing.md
-    },
-    statCard: {
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '16px 24px',
       background: colors.surface,
       borderRadius: radius.md,
-      padding: `${spacing.md} ${spacing.lg}`,
-      border: `1px solid ${colors.border}`,
-      minWidth: 110,
-      flex: '1 1 110px'
+      border: `1px solid ${colors.border}`
     },
-    statCardWide: { flex: '2 1 220px' },
-    statValue: { fontSize: typography.fontSize.lg, fontWeight: typography.fontWeight.semibold, color: colors.textPrimary },
-    statLabel: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.05em' },
+    statItem: {
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      flex: 1
+    },
+    statDivider: {
+      width: 1,
+      height: 32,
+      background: colors.border,
+      flexShrink: 0
+    },
+    statValue: { fontSize: typography.fontSize.md, fontWeight: typography.fontWeight.semibold, color: colors.textPrimary, textAlign: 'center' },
+    statLabel: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center' },
 
     meterWrap: {
       height: 8,
@@ -868,92 +1035,162 @@ function getStyles() {
     metaLine: { fontSize: typography.fontSize.sm, color: colors.textMuted, margin: 0 },
     staleTag: { color: '#F59E0B', fontWeight: typography.fontWeight.medium },
 
-    // Thread cards
-    threadCard: {
+    // Why Are We Here
+    whyCard: {
+      background: colors.surface,
+      borderRadius: radius.lg,
+      padding: '28px 28px 20px',
+      border: `1px solid ${colors.border}`,
+      boxShadow: shadows.sm
+    },
+    whyHeading: {
+      margin: '0 0 16px 0',
+      fontSize: typography.fontSize.md,
+      fontWeight: typography.fontWeight.semibold,
+      color: colors.textPrimary,
+      letterSpacing: '-0.01em'
+    },
+    whyPara: {
+      fontSize: typography.fontSize.base,
+      color: colors.textSecondary,
+      lineHeight: 1.8,
+      margin: '0 0 12px 0'
+    },
+
+    // Active claims
+    claimsSection: { display: 'flex', flexDirection: 'column', gap: spacing.sm },
+    claimRow: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.md,
+      padding: '14px 16px',
+      background: colors.surface,
+      border: `1px solid ${colors.border}`,
+      borderRadius: radius.md,
+      cursor: 'pointer',
+      transition: 'box-shadow 0.15s, transform 0.1s'
+    },
+    claimLeft: { display: 'flex', alignItems: 'center', gap: spacing.md, flex: 1, minWidth: 0 },
+    claimName: { fontSize: typography.fontSize.sm, fontWeight: typography.fontWeight.semibold, color: colors.textPrimary },
+    claimMeta: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginTop: 2 },
+    claimRight: { display: 'flex', alignItems: 'center', gap: spacing.sm, flexShrink: 0 },
+    claimMeterWrap: { width: 100, height: 7, background: colors.border, borderRadius: 99, overflow: 'hidden' },
+    claimMeter: { height: '100%', borderRadius: 99, transition: 'width 0.6s ease' },
+    claimScore: { fontSize: typography.fontSize.sm, fontWeight: typography.fontWeight.bold, minWidth: 36, textAlign: 'right' },
+    viewArrow: { fontSize: 11, color: colors.textMuted, marginLeft: 4, opacity: 0.7 },
+
+    // Causal links
+    causalGroup: {
       background: colors.surface,
       borderRadius: radius.lg,
       padding: spacing.xl,
       border: `1px solid ${colors.border}`,
+      boxShadow: shadows.sm,
       display: 'flex',
       flexDirection: 'column',
-      gap: spacing.md,
-      boxShadow: shadows.sm
+      gap: spacing.md
     },
-    threadHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm },
-    threadDot: { width: 10, height: 10, borderRadius: '50%', flexShrink: 0 },
-    threadName: { fontSize: typography.fontSize.lg, fontWeight: typography.fontWeight.semibold, color: colors.textPrimary },
-    threadMeta: { display: 'flex', gap: spacing.md, alignItems: 'center' },
-    threadCount: { fontSize: typography.fontSize.sm, color: colors.textMuted },
-    threadStrength: { fontSize: typography.fontSize.lg, fontWeight: typography.fontWeight.bold },
-    meterWrapSm: { height: 6, background: colors.border, borderRadius: 99, overflow: 'hidden' },
-    meterSm: { height: '100%', borderRadius: 99 },
-
-    elementGrid: { display: 'flex', flexDirection: 'column', gap: spacing.xs },
-    elementRow: { display: 'flex', alignItems: 'flex-start', gap: spacing.sm },
-    elementIcon: { fontSize: 14, fontWeight: 700, flexShrink: 0, marginTop: 1 },
-    elementLabel: { fontSize: typography.fontSize.sm },
-
+    causalGroupHeader: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between'
+    },
+    causalTypeLabel: {
+      fontSize: typography.fontSize.base,
+      fontWeight: typography.fontWeight.semibold,
+      color: colors.textPrimary
+    },
+    causalCount: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      background: colors.surfaceAlt,
+      padding: '2px 8px',
+      borderRadius: 99,
+      border: `1px solid ${colors.border}`
+    },
+    causalDescription: {
+      margin: 0,
+      fontSize: typography.fontSize.sm,
+      color: colors.textSecondary,
+      lineHeight: 1.6
+    },
     precedentsRow: { display: 'flex', flexWrap: 'wrap', gap: spacing.xs, alignItems: 'center' },
     precedentsLabel: { fontSize: typography.fontSize.xs, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' },
     precedentBadge: {
       padding: '2px 8px',
-      background: colors.surfaceAlt,
+      background: '#EFF6FF',
       borderRadius: radius.sm,
       fontSize: typography.fontSize.xs,
-      color: colors.textSecondary,
-      border: `1px solid ${colors.border}`
+      color: '#1D4ED8',
+      border: `1px solid #BFDBFE`
     },
-
-    evidenceSection: { display: 'flex', flexDirection: 'column', gap: spacing.xs },
-    gapsSection: { display: 'flex', flexDirection: 'column', gap: spacing.xs },
-    sectionSubLabel: { fontSize: typography.fontSize.xs, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: typography.fontWeight.medium },
-    evidenceRow: { display: 'flex', justifyContent: 'space-between', fontSize: typography.fontSize.sm, color: colors.textSecondary },
-    evidenceFile: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-    evidenceDate: { flexShrink: 0, marginLeft: spacing.sm, color: colors.textMuted },
-    gapRow: { fontSize: typography.fontSize.sm, color: '#F59E0B' },
-
-    // Timeline
-    timelineSpan: {
+    causalLinks: { display: 'flex', flexDirection: 'column', gap: spacing.sm },
+    causalLink: {
+      padding: spacing.md,
+      background: colors.bg,
+      borderRadius: radius.md,
+      border: `1px solid ${colors.border}`,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: spacing.xs
+    },
+    causalLinkMain: {
       display: 'flex',
       alignItems: 'center',
-      gap: spacing.md
+      gap: spacing.sm,
+      flexWrap: 'wrap'
     },
-    timelineDate: { fontSize: typography.fontSize.sm, color: colors.textSecondary, flexShrink: 0 },
-    timelineTrack: { flex: 1, height: 2, background: colors.border },
-    gapSummary: {
-      padding: `${spacing.sm} ${spacing.md}`,
-      background: '#FEF9C3',
-      borderRadius: radius.md,
-      color: '#854D0E',
-      fontSize: typography.fontSize.sm
+    causalNode: {
+      flex: '1 1 160px',
+      minWidth: 120
     },
-    timelineList: { display: 'flex', flexDirection: 'column', gap: 0, paddingLeft: spacing.md },
-    timelineMoment: { display: 'flex', gap: spacing.md, position: 'relative', paddingBottom: spacing.lg },
-    momentDot: { width: 10, height: 10, borderRadius: '50%', background: colors.primary, flexShrink: 0, marginTop: 4 },
-    momentContent: { flex: 1, paddingBottom: spacing.md, borderBottom: `1px solid ${colors.borderLight}` },
-    momentDate: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginBottom: 2 },
-    momentTitle: { fontSize: typography.fontSize.base, fontWeight: typography.fontWeight.medium, color: colors.textPrimary },
-    momentTags: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 },
-    tagPill: {
-      padding: '1px 6px',
-      background: colors.surfaceAlt,
-      borderRadius: 99,
+    causalNodeLabel: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      marginBottom: 2
+    },
+    causalNodeTitle: {
+      fontSize: typography.fontSize.sm,
+      fontWeight: typography.fontWeight.medium,
+      color: colors.textPrimary,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    },
+    causalArrow: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4,
+      flexShrink: 0,
+      color: colors.textMuted
+    },
+    causalArrowLine: {
+      width: 24,
+      height: 1,
+      background: colors.border
+    },
+    causalDays: {
       fontSize: 10,
-      color: colors.textSecondary,
+      color: colors.textMuted,
+      background: colors.surfaceAlt,
+      padding: '1px 4px',
+      borderRadius: 4,
       border: `1px solid ${colors.border}`
     },
-    gapCard: {
-      display: 'flex',
-      gap: spacing.md,
-      alignItems: 'flex-start',
-      padding: spacing.md,
-      background: '#FFF7ED',
-      borderRadius: radius.md,
-      border: '1px solid #FED7AA'
+    causalArrowHead: { fontSize: 14, color: colors.textMuted },
+    causalStrength: {
+      fontSize: typography.fontSize.xs,
+      fontWeight: typography.fontWeight.bold,
+      flexShrink: 0,
+      marginLeft: 'auto'
     },
-    gapIcon: { fontSize: '1.5em' },
-    gapLabel: { fontWeight: typography.fontWeight.medium, color: '#9A3412', fontSize: typography.fontSize.sm },
-    gapSub: { color: '#C2410C', fontSize: typography.fontSize.xs, marginTop: 2 },
+    causalLinkDesc: {
+      fontSize: typography.fontSize.xs,
+      color: colors.textMuted,
+      fontStyle: 'italic',
+      paddingLeft: 0
+    },
 
     subHeading: {
       margin: `${spacing.md} 0 0 0`,

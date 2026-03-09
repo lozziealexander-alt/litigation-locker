@@ -452,6 +452,44 @@ function isValidName(name) {
   return true;
 }
 
+// Common nickname → canonical first name mappings
+const NICKNAME_MAP = {
+  ken: 'kenneth', kenny: 'kenneth',
+  bob: 'robert', rob: 'robert', bobby: 'robert',
+  bill: 'william', will: 'william', billy: 'william', willy: 'william',
+  jim: 'james', jimmy: 'james',
+  tom: 'thomas', tommy: 'thomas',
+  mike: 'michael', mick: 'michael', mickey: 'michael',
+  dave: 'david', davy: 'david',
+  steve: 'steven', steph: 'stephanie',
+  chris: 'christopher',
+  matt: 'matthew', matty: 'matthew',
+  nick: 'nicholas', nicky: 'nicholas',
+  joe: 'joseph', joey: 'joseph',
+  dan: 'daniel', danny: 'daniel',
+  liz: 'elizabeth', beth: 'elizabeth', betty: 'elizabeth', lisa: 'elizabeth',
+  sue: 'susan', susie: 'susan',
+  pam: 'pamela',
+  jen: 'jennifer', jenny: 'jennifer',
+  kate: 'katherine', kathy: 'katherine', kat: 'katherine',
+  pat: 'patricia',
+  sam: 'samuel',
+  alex: 'alexander',
+  andy: 'andrew',
+  tony: 'anthony',
+  ron: 'ronald', ronnie: 'ronald',
+  ed: 'edward', eddie: 'edward', ted: 'edward',
+  rick: 'richard', rich: 'richard', dick: 'richard',
+  chuck: 'charles', charlie: 'charles',
+  ben: 'benjamin', benny: 'benjamin',
+  tim: 'timothy', timmy: 'timothy',
+  greg: 'gregory',
+};
+
+function canonicalFirstName(first) {
+  return NICKNAME_MAP[first] || first;
+}
+
 /**
  * Check if two actor names might be the same person
  */
@@ -462,16 +500,25 @@ function mightBeSamePerson(name1, name2) {
   // Exact match
   if (n1 === n2) return true;
 
-  // One is substring of other (e.g., "John" vs "John Smith")
+  // One is substring of other (e.g., "Ken" vs "Ken Smith")
   if (n1.includes(n2) || n2.includes(n1)) return true;
 
-  // Same first name or last name
-  const parts1 = n1.split(' ');
-  const parts2 = n2.split(' ');
+  const parts1 = n1.split(/\s+/);
+  const parts2 = n2.split(/\s+/);
+  const first1 = parts1[0];
+  const first2 = parts2[0];
+  const last1 = parts1[parts1.length - 1];
+  const last2 = parts2[parts2.length - 1];
 
-  if (parts1[0] === parts2[0]) return true; // Same first name
+  // Same canonical first name (handles Ken/Kenneth, Bob/Robert, etc.)
+  if (canonicalFirstName(first1) === canonicalFirstName(first2)) return true;
+
+  // Same last name (only flag if both have last names)
+  if (parts1.length > 1 && parts2.length > 1 && last1 === last2) return true;
+
+  // First name of one matches last name of other (display name reordering)
   if (parts1.length > 1 && parts2.length > 1) {
-    if (parts1[parts1.length - 1] === parts2[parts2.length - 1]) return true; // Same last name
+    if (first1 === last2 && last1 === first2) return true;
   }
 
   return false;
@@ -485,12 +532,23 @@ function findPotentialDuplicates(actors) {
 
   for (let i = 0; i < actors.length; i++) {
     for (let j = i + 1; j < actors.length; j++) {
-      if (mightBeSamePerson(actors[i].name, actors[j].name)) {
-        duplicates.push({
-          actor1: actors[i],
-          actor2: actors[j],
-          reason: 'Similar names'
-        });
+      const a1 = actors[i];
+      const a2 = actors[j];
+      if (mightBeSamePerson(a1.name, a2.name)) {
+        // Build a descriptive reason
+        let reason = 'Similar names';
+        const n1 = a1.name.toLowerCase().trim();
+        const n2 = a2.name.toLowerCase().trim();
+        if (n1 === n2) reason = 'Identical names';
+        else if (n1.includes(n2) || n2.includes(n1)) reason = 'One name contains the other';
+        else {
+          const p1 = n1.split(/\s+/), p2 = n2.split(/\s+/);
+          const c1 = canonicalFirstName(p1[0]), c2 = canonicalFirstName(p2[0]);
+          if (c1 === c2 && c1 !== p1[0]) reason = `Nickname match (${p1[0]} / ${p2[0]})`;
+          else if (p1[0] === p2[0]) reason = 'Same first name';
+          else if (p1.length > 1 && p2.length > 1 && p1[p1.length-1] === p2[p2.length-1]) reason = 'Same last name';
+        }
+        duplicates.push({ actor1: a1, actor2: a2, reason });
       }
     }
   }

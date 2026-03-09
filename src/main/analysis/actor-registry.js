@@ -162,19 +162,22 @@ class ActorRegistry {
     if (!names.includes('aliases')) {
       this.db.exec("ALTER TABLE actors ADD COLUMN aliases TEXT DEFAULT '[]'");
     }
-    if (!names.includes('in_reporting_chain')) {
+    const needsBackfill = !names.includes('in_reporting_chain');
+    if (needsBackfill) {
       this.db.exec('ALTER TABLE actors ADD COLUMN in_reporting_chain INTEGER DEFAULT 0');
-    }
 
-    // Backfill: set in_reporting_chain for actors with chain-type relationships
-    // that were created before the registry existed
-    const chainRelationships = Array.from(IN_CHAIN_RELATIONSHIPS);
-    const placeholders = chainRelationships.map(() => '?').join(', ');
-    this.db.prepare(
-      `UPDATE actors SET in_reporting_chain = 1
-       WHERE relationship_to_self IN (${placeholders})
-       AND in_reporting_chain = 0`
-    ).run(...chainRelationships);
+      // One-time backfill only when column is first added:
+      // set in_reporting_chain for actors with chain-type relationships
+      // that were created before the registry existed.
+      // This does NOT run on every load, so manual corrections persist.
+      const chainRelationships = Array.from(IN_CHAIN_RELATIONSHIPS);
+      const placeholders = chainRelationships.map(() => '?').join(', ');
+      this.db.prepare(
+        `UPDATE actors SET in_reporting_chain = 1
+         WHERE relationship_to_self IN (${placeholders})
+         AND in_reporting_chain = 0`
+      ).run(...chainRelationships);
+    }
   }
 
   /** Load all actors from the database into memory. */

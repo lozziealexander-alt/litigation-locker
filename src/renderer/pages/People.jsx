@@ -73,7 +73,18 @@ export default function People({ onSelectActor }) {
   useEffect(() => {
     loadActors();
     loadComparators();
+    autoCheckDuplicates();
   }, []);
+
+  async function autoCheckDuplicates() {
+    try {
+      const result = await window.api.actors.checkDuplicates();
+      if (result.success && result.duplicates.length > 0) {
+        setDuplicates(result.duplicates);
+        // Don't auto-open panel, just surface the banner
+      }
+    } catch (e) {}
+  }
 
   async function loadActors() {
     const result = await window.api.actors.list();
@@ -156,17 +167,23 @@ export default function People({ onSelectActor }) {
   }
 
   async function handleMerge(keepId, mergeId) {
-    const result = await window.api.actors.merge(keepId, mergeId);
-    if (result.success) {
-      // Remove merged pair from list, close panel if none remain
-      setDuplicates(prev => {
-        const remaining = prev.filter(d => !(d.actor1.id === mergeId || d.actor2.id === mergeId));
-        if (remaining.length === 0) {
-          setShowMergePanel(false);
-        }
-        return remaining;
-      });
-      await loadActors();
+    try {
+      const result = await window.api.actors.merge(keepId, mergeId);
+      if (result.success) {
+        // Remove merged pair from list, close panel if none remain
+        setDuplicates(prev => {
+          const remaining = prev.filter(d => !(d.actor1.id === mergeId || d.actor2.id === mergeId));
+          if (remaining.length === 0) {
+            setShowMergePanel(false);
+          }
+          return remaining;
+        });
+        await loadActors();
+      } else {
+        alert('Merge failed: ' + (result.error || 'Unknown error'));
+      }
+    } catch (err) {
+      alert('Merge failed: ' + err.message);
     }
   }
 
@@ -205,6 +222,31 @@ export default function People({ onSelectActor }) {
 
   return (
     <div style={styles.container}>
+      {/* Duplicate banner */}
+      {duplicates.length > 0 && !showMergePanel && (
+        <div style={{
+          background: '#FEF3C7', borderBottom: '1px solid #FCD34D',
+          padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12,
+          fontFamily: 'system-ui, sans-serif', fontSize: 13
+        }}>
+          <span style={{ fontWeight: 600, color: '#92400E' }}>
+            ⚠ {duplicates.length} possible duplicate{duplicates.length !== 1 ? 's' : ''} detected
+          </span>
+          <span style={{ color: '#78350F' }}>
+            {duplicates.map(d => `${d.actor1.name} / ${d.actor2.name}`).slice(0, 3).join(' · ')}
+            {duplicates.length > 3 ? ` + ${duplicates.length - 3} more` : ''}
+          </span>
+          <button
+            onClick={() => setShowMergePanel(true)}
+            style={{
+              marginLeft: 'auto', padding: '4px 14px', background: '#D97706',
+              color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer',
+              fontSize: 12, fontWeight: 600, fontFamily: 'system-ui, sans-serif'
+            }}
+          >Review & Merge</button>
+        </div>
+      )}
+
       {/* Header */}
       <div style={styles.header}>
         <div>

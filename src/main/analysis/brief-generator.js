@@ -163,15 +163,38 @@ function buildEventTagMap(events) {
 }
 
 function assignToThreads(events, tagMap, documents) {
+  const sexualKeywords = ['sexual', 'grope', 'groping', 'unwanted touch', 'unwanted advance', 'inappropriate touch', 'proposition'];
+  const genderKeywords = ['gendered', 'sexist', 'stereotype', 'because she', 'because he', 'boys club', 'gender bias', 'gender discrimination',
+    'for a woman', 'for a man', 'as a woman', 'as a man', 'like a woman', 'like a man', 'too aggressive for a', 'too emotional'];
+
   const assignments = {};
   for (const thread of THREAD_DEFINITIONS) {
     assignments[thread.id] = [];
   }
   for (const evt of events) {
-    const tags = tagMap[evt.id] || [];
+    const rawTags = tagMap[evt.id] || [];
+    const tags = new Set(rawTags);
     const evtType = evt.evidence_type || '';
+    const evtText = ((evt.title || '') + ' ' + (evt.what_happened || '') + ' ' + (evt.description || '')).toLowerCase();
+
+    // Resolve generic harassment
+    if (tags.has('harassment') && !tags.has('sexual_harassment') && !tags.has('gender_harassment')) {
+      if (sexualKeywords.some(k => evtText.includes(k))) { tags.add('sexual_harassment'); }
+      else if (genderKeywords.some(k => evtText.includes(k))) { tags.add('gender_harassment'); }
+      else { tags.add('hostile_environment'); }
+      tags.delete('harassment');
+    }
+
+    // Content-based correction: reclassify sexual_harassment to gender if content is gendered, not sexual
+    if (tags.has('sexual_harassment') && !sexualKeywords.some(k => evtText.includes(k))) {
+      if (genderKeywords.some(k => evtText.includes(k))) {
+        tags.delete('sexual_harassment');
+        tags.add('gender_harassment');
+      }
+    }
+
     for (const thread of THREAD_DEFINITIONS) {
-      const tagMatch  = thread.tag_signals.some(s => tags.includes(s));
+      const tagMatch  = thread.tag_signals.some(s => tags.has(s));
       const typeMatch = thread.evidence_type_signals && thread.evidence_type_signals.includes(evtType);
       if (tagMatch || typeMatch) {
         assignments[thread.id].push(evt);
@@ -331,25 +354,68 @@ function buildActorSummary(actors, events, documents, tagMap) {
 function calcOverallStrength(threadBreakdown, sortedEvents, documents, gaps) {
   if (threadBreakdown.length === 0) return 0;
 
-  // Documentation density (40%)
+  // Primary signal: thread strength (70%)
+  // Use weighted average — stronger threads matter more
+  const sorted = [...threadBreakdown].sort((a, b) => b.strength - a.strength);
+  let weightedSum = 0, weightTotal = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const weight = sorted.length - i; // top thread gets highest weight
+    weightedSum += sorted[i].strength * weight;
+    weightTotal += weight;
+  }
+  const threadScore = weightTotal > 0 ? weightedSum / weightTotal : 0;
+
+  // Documentation support (20%)
   const docsPerEvent = sortedEvents.length > 0 ? documents.length / sortedEvents.length : 0;
   const densityScore = Math.min(docsPerEvent * 2.5, 10);
 
-  // Thread avg strength (40%)
-  const avgThread = threadBreakdown.length > 0
-    ? threadBreakdown.reduce((s, t) => s + t.strength, 0) / threadBreakdown.length
-    : 0;
+  // Timeline continuity (10%): fewer gaps = higher
+  const continuityScore = Math.max(10 - gaps.length * 1.5, 0);
 
-  // Timeline continuity (20%): fewer gaps = higher
-  const continuityScore = Math.max(10 - gaps.length * 2, 0);
-
-  const raw = densityScore * 0.4 + avgThread * 0.4 + continuityScore * 0.2;
+  const raw = threadScore * 0.70 + densityScore * 0.20 + continuityScore * 0.10;
   return Math.round(Math.min(raw, 10) * 10) / 10;
 }
 
 function detectCaseType(activeThreads) {
   if (activeThreads.length === 0) return 'Undetermined';
-  return activeThreads.map(t => t.name).join(' + ');
+
+  const ids = new Set(activeThreads.map(t => t.id));
+
+  // Determine primary classification based on which threads are active
+  const hasSexual = ids.has('sexual_harassment');
+  const hasGender = ids.has('gender_harassment');
+  const hasRetaliation = ids.has('retaliation');
+  const hasHostile = ids.has('hostile_environment');
+  const hasPay = ids.has('pay_discrimination');
+  const hasExclusion = ids.has('exclusion');
+  const hasHR = ids.has('hr_failure');
+
+  // Build a concise legal classification
+  const parts = [];
+
+  if (hasSexual || hasGender) {
+    parts.push(hasSexual && hasGender ? 'Sex/Gender Discrimination' : hasSexual ? 'Sexual Harassment' : 'Gender Discrimination');
+  }
+  if (hasHostile && !hasSexual && !hasGender) {
+    parts.push('Hostile Work Environment');
+  }
+  if (hasRetaliation) {
+    parts.push('Retaliation');
+  }
+  if (hasPay) {
+    parts.push('Pay Discrimination');
+  }
+
+  if (parts.length === 0) {
+    // Fallback: use the top thread name
+    parts.push(activeThreads[0].name);
+  }
+
+  // Cap at 2 named claims + "& more" for readability
+  if (parts.length > 2) {
+    return parts.slice(0, 2).join(' + ') + ` (+${activeThreads.length - 2} more)`;
+  }
+  return parts.join(' + ');
 }
 
 function buildRedFlags(gaps, documents, events, caseContext) {
