@@ -115,8 +115,12 @@ export default function LawyerBrief() {
   }
 
   async function handleLoadVersions() {
-    const res = await window.api.brief.versions();
-    if (res.success) setVersions(res.versions);
+    try {
+      const res = await window.api.brief.versions();
+      if (res.success) setVersions(res.versions);
+    } catch (e) {
+      console.error('[LawyerBrief] loadVersions error:', e);
+    }
     setShowVersions(v => !v);
   }
 
@@ -341,7 +345,7 @@ function ThreadBreakdown({ brief }) {
             <div style={s.threadMeta}>
               <span style={s.threadCount}>{thread.eventCount} events · {thread.docCount} docs</span>
               <span style={{ ...s.threadStrength, color: strengthColor(thread.strength) }}>
-                {thread.strength}/10
+                {(thread.strength || 0).toFixed(1)}/10
               </span>
             </div>
           </div>
@@ -415,20 +419,21 @@ function TimelineView({ brief }) {
     return <EmptyState text="No dated events found. Add dates to events to see the timeline." />;
   }
 
-  // Build a merged sorted list of moments + gaps for display
+  // Build a merged sorted list of moments + gaps for interleaved display
   const items = [];
   let gapIdx = 0;
   for (let i = 0; i < moments.length; i++) {
-    items.push({ type: 'event', data: moments[i] });
-    // Insert gap after this moment if applicable
+    // Insert any gaps that start before or at this moment
     while (gapIdx < gaps.length && new Date(gaps[gapIdx].from) <= new Date(moments[i].date)) {
-      if (i === moments.length - 1 || new Date(gaps[gapIdx].to) <= new Date(moments[i + 1]?.date)) {
-        items.push({ type: 'gap', data: gaps[gapIdx] });
-        gapIdx++;
-      } else {
-        break;
-      }
+      items.push({ type: 'gap', data: gaps[gapIdx] });
+      gapIdx++;
     }
+    items.push({ type: 'event', data: moments[i] });
+  }
+  // Append any remaining gaps after the last event
+  while (gapIdx < gaps.length) {
+    items.push({ type: 'gap', data: gaps[gapIdx] });
+    gapIdx++;
   }
 
   return (
@@ -446,38 +451,39 @@ function TimelineView({ brief }) {
       )}
 
       <div style={s.timelineList}>
-        {moments.map((m, i) => (
-          <div key={m.id || i} style={s.timelineMoment}>
-            <div style={s.momentDot} />
-            <div style={s.momentContent}>
-              <div style={s.momentDate}>{formatDate(m.date)}</div>
-              <div style={s.momentTitle}>{m.title}</div>
-              {m.tags?.length > 0 && (
-                <div style={s.momentTags}>
-                  {m.tags.map(t => (
-                    <span key={t} style={s.tagPill}>{t.replace(/_/g, ' ')}</span>
-                  ))}
+        {items.map((item, i) => {
+          if (item.type === 'event') {
+            const m = item.data;
+            return (
+              <div key={m.id || `evt-${i}`} style={s.timelineMoment}>
+                <div style={s.momentDot} />
+                <div style={s.momentContent}>
+                  <div style={s.momentDate}>{formatDate(m.date)}</div>
+                  <div style={s.momentTitle}>{m.title}</div>
+                  {m.tags?.length > 0 && (
+                    <div style={s.momentTags}>
+                      {m.tags.map(t => (
+                        <span key={t} style={s.tagPill}>{t.replace(/_/g, ' ')}</span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {gaps.length > 0 && (
-        <>
-          <h3 style={s.subHeading}>Documentation Gaps</h3>
-          {gaps.map((g, i) => (
-            <div key={i} style={s.gapCard}>
+              </div>
+            );
+          }
+          // Gap item
+          const g = item.data;
+          return (
+            <div key={`gap-${i}`} style={s.gapCard}>
               <span style={s.gapIcon}>🕳</span>
               <div>
                 <div style={s.gapLabel}>{g.label}</div>
                 <div style={s.gapSub}>Missing {g.days} days of documentation</div>
               </div>
             </div>
-          ))}
-        </>
-      )}
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -4068,7 +4068,6 @@ function registerIpcHandlers() {
       });
       if (result.canceled || !result.filePath) return { success: false, error: 'Cancelled' };
       fs.writeFileSync(result.filePath, html, 'utf8');
-      shell.openPath(result.filePath);
       return { success: true, path: result.filePath };
     } catch (error) {
       return { success: false, error: error.message };
@@ -4174,6 +4173,9 @@ function buildHTMLExport(brief) {
     .replace(/^- (.+)$/gm, '<li>$1</li>')
     .replace(/^---$/gm, '<hr>')
     .replace(/\n\n/g, '</p><p>');
+
+  // Wrap consecutive <li> runs in <ul> tags
+  html = html.replace(/((?:<li>.*?<\/li>\n?)+)/g, '<ul>$1</ul>');
 
   return `<!DOCTYPE html>
 <html lang="en">
