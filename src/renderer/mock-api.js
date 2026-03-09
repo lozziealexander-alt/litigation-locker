@@ -300,6 +300,7 @@ window.api = {
       return Promise.resolve({ success: true, tags: tagMap[eventId] || [] });
     },
     updateTags: () => Promise.resolve({ success: true }),
+    updateContextStatus: () => Promise.resolve({ success: true }),
     getLinkedDocuments: (caseId, eventId) => Promise.resolve({ success: true, documents: [] })
   },
   eventTags: {

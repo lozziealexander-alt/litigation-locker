@@ -319,17 +319,18 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
                   }}
                 />
               ) : (
-                <h2
-                  style={styles.title}
-                  onClick={() => {
-                    setEditName(displayDoc.filename);
-                    setIsEditingName(true);
-                  }}
-                  title="Click to rename"
-                >
-                  {displayDoc.filename}
-                  <span style={styles.editHint}>{'\u270E'}</span>
-                </h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <h2 style={styles.title}>{displayDoc.filename}</h2>
+                  <button
+                    onClick={() => { setEditName(displayDoc.filename); setIsEditingName(true); }}
+                    title="Rename"
+                    style={{
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      fontSize: 15, color: colors.textMuted, padding: '2px 4px',
+                      borderRadius: 4, flexShrink: 0
+                    }}
+                  >✏️</button>
+                </div>
               )}
             </div>
             <button style={styles.closeButton} onClick={onClose}>
@@ -394,25 +395,6 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
             </select>
           </div>
 
-          {/* Document subtype classification */}
-          <div style={styles.section}>
-            <label style={styles.recapLabel}>Document Subtype</label>
-            <select
-              style={styles.typeSelect}
-              value={displayDoc.document_subtype || ''}
-              onChange={async (e) => {
-                const newVal = e.target.value || null;
-                await window.api.documents.updateDocumentSubtype(displayDoc.id, newVal);
-                setFullDoc(prev => prev ? { ...prev, document_subtype: newVal, is_recap: newVal ? 1 : 0 } : prev);
-                onDocumentUpdated?.();
-              }}
-            >
-              {DOCUMENT_SUBTYPE_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          </div>
-
           {/* Primary date with editing */}
           <div style={styles.section}>
             <h3 style={styles.sectionTitle}>Document Date</h3>
@@ -456,112 +438,6 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
                 {displayDoc.document_date_confidence || 'undated'}
               </span>
             </div>
-          </div>
-
-          {/* Content dates with pin buttons */}
-          {contentDates.length > 0 && (
-            <div style={styles.section}>
-              <h3 style={styles.sectionTitle}>
-                Dates Found in Content
-                <span style={styles.countBadge}>{contentDates.length}</span>
-              </h3>
-              <div style={styles.datesList}>
-                {contentDates.slice(0, 8).map((d, i) => {
-                  const dateKey = d.date?.split('T')[0];
-                  const isPinned = dateEntries.some(e => e.entry_date?.split('T')[0] === dateKey);
-                  return (
-                    <div key={i} style={styles.dateRow}>
-                      <span style={styles.dateText}>"{d.text}"</span>
-                      <span style={styles.dateValue}>
-                        {new Date(d.date).toLocaleDateString()}
-                      </span>
-                      <button
-                        style={{
-                          ...styles.pinBtn,
-                          opacity: isPinned ? 1 : 0.5,
-                          color: isPinned ? colors.primary : colors.textMuted
-                        }}
-                        onClick={() => {
-                          if (isPinned) {
-                            const entry = dateEntries.find(e => e.entry_date?.split('T')[0] === dateKey);
-                            if (entry) handleUnpinDate(entry.id);
-                          } else {
-                            handlePinDate(dateKey, d.text);
-                          }
-                        }}
-                        title={isPinned ? 'Unpin from timeline' : 'Pin to timeline'}
-                      >
-                        {isPinned ? '\uD83D\uDCCC' : '\uD83D\uDCCC'}
-                      </button>
-                    </div>
-                  );
-                })}
-                {contentDates.length > 8 && (
-                  <div style={styles.moreText}>
-                    +{contentDates.length - 8} more dates
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Pinned date entries / manual timeline dates */}
-          <div style={styles.section}>
-            <h3 style={styles.sectionTitle}>
-              Timeline Pins
-              {dateEntries.length > 0 && <span style={styles.countBadge}>{dateEntries.length}</span>}
-            </h3>
-            {dateEntries.length > 0 ? (
-              <div style={styles.datesList}>
-                {dateEntries.map(entry => (
-                  <div key={entry.id} style={styles.dateRow}>
-                    <span style={{ ...styles.dateText, fontStyle: 'normal' }}>
-                      {'\uD83D\uDCCC'} {entry.label || 'Pinned date'}
-                    </span>
-                    <span style={styles.dateValue}>
-                      {new Date(entry.entry_date).toLocaleDateString()}
-                    </span>
-                    <button
-                      style={styles.unpinBtn}
-                      onClick={() => handleUnpinDate(entry.id)}
-                      title="Remove pin"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={styles.emptyHint}>
-                No pinned dates. Pin content dates above or add manually below.
-              </div>
-            )}
-            {addingDateEntry ? (
-              <div style={styles.addEntryRow}>
-                <input
-                  type="date"
-                  style={styles.dateInput}
-                  value={newEntryDate}
-                  onChange={e => setNewEntryDate(e.target.value)}
-                  autoFocus
-                />
-                <input
-                  style={styles.labelInput}
-                  value={newEntryLabel}
-                  onChange={e => setNewEntryLabel(e.target.value)}
-                  placeholder="Label (optional)"
-                />
-                <button style={styles.saveBtn} onClick={handleAddDateEntry}>Add</button>
-                <button style={styles.cancelBtn} onClick={() => { setAddingDateEntry(false); setNewEntryDate(''); setNewEntryLabel(''); }}>✕</button>
-              </div>
-            ) : (
-              <button
-                style={styles.addDateBtn}
-                onClick={() => setAddingDateEntry(true)}
-              >
-                + Add date to timeline
-              </button>
-            )}
           </div>
 
           {/* Document linking / groups */}
@@ -722,21 +598,6 @@ export default function DocumentPanel({ document: doc, onClose, onDocumentUpdate
                 + Add person to document
               </button>
             )}
-          </div>
-
-          {/* Metadata */}
-          <div style={styles.section}>
-            <h3 style={styles.sectionTitle}>File Details</h3>
-            <div style={styles.metaGrid}>
-              <MetaRow label="Type" value={displayDoc.file_type} styles={styles} />
-              <MetaRow label="Size" value={formatBytes(displayDoc.file_size)} styles={styles} />
-              {displayDoc.sha256_hash && (
-                <MetaRow label="Hash" value={displayDoc.sha256_hash.slice(0, 20) + '...'} mono styles={styles} />
-              )}
-              {metadata.from && <MetaRow label="From" value={metadata.from} styles={styles} />}
-              {metadata.to && <MetaRow label="To" value={metadata.to} styles={styles} />}
-              {metadata.subject && <MetaRow label="Subject" value={metadata.subject} styles={styles} />}
-            </div>
           </div>
 
           {/* Extracted text */}
