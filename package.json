@@ -7,7 +7,8 @@
     "bundle": "esbuild src/renderer/index.jsx --bundle --outfile=src/renderer/bundle.js --platform=browser --target=chrome120 --define:process.env.NODE_ENV=\\\"production\\\"",
     "start": "npm run bundle && electron .",
     "dev": "npm run bundle && electron . --dev",
-    "build": "npm run bundle && electron-builder"
+    "build": "npm run bundle && electron-builder",
+    "publish": "npm run bundle && electron-builder --publish always"
   },
   "keywords": [],
   "author": "",
@@ -32,7 +33,20 @@
     "appId": "com.litigation-locker.app",
     "productName": "Litigation Locker",
     "mac": {
-      "icon": "build/icon.icns"
+      "icon": "build/icon.icns",
+      "category": "public.app-category.business"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "lozziealexander-alt",
+      "repo": "litigation-locker",
+      "private": true
     }
   },
   "devDependencies": {
