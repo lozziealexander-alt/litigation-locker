@@ -12957,12 +12957,18 @@
     const [isSubmitting, setIsSubmitting] = (0, import_react2.useState)(false);
     const styles5 = getStyles();
     (0, import_react2.useEffect)(() => {
-      if (isReadOnly) {
-        onUnlock();
-        return;
-      }
-      checkVaultExists();
-    }, [isReadOnly]);
+      (async () => {
+        try {
+          const unlocked = await window.api.vault.isUnlocked();
+          if (unlocked) {
+            onUnlock();
+            return;
+          }
+        } catch (e) {
+        }
+        checkVaultExists();
+      })();
+    }, []);
     async function checkVaultExists() {
       try {
         const exists = await window.api.vault.exists();

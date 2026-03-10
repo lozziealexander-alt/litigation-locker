@@ -14,13 +14,18 @@ export default function Unlock({ onUnlock, isReadOnly }) {
   const styles = getStyles();
 
   useEffect(() => {
-    // Bundled read-only vault: skip login entirely
-    if (isReadOnly) {
-      onUnlock();
-      return;
-    }
-    checkVaultExists();
-  }, [isReadOnly]);
+    // Check if vault is already unlocked (e.g. bundled unencrypted data)
+    (async () => {
+      try {
+        const unlocked = await window.api.vault.isUnlocked();
+        if (unlocked) {
+          onUnlock();
+          return;
+        }
+      } catch (e) { /* continue to password prompt */ }
+      checkVaultExists();
+    })();
+  }, []);
 
   async function checkVaultExists() {
     try {
