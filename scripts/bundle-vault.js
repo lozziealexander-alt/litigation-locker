@@ -20,11 +20,11 @@ function getUserDataPath() {
   const home = os.homedir();
 
   if (platform === 'darwin') {
-    return path.join(home, 'Library', 'Application Support', 'Litigation Locker');
+    return path.join(home, 'Library', 'Application Support', 'litigation-locker');
   } else if (platform === 'win32') {
-    return path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Litigation Locker');
+    return path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'litigation-locker');
   } else {
-    return path.join(home, '.config', 'Litigation Locker');
+    return path.join(home, '.config', 'litigation-locker');
   }
 }
 
