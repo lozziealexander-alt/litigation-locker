@@ -947,7 +947,7 @@
       "use strict";
       var Scheduler = require_scheduler();
       var React16 = require_react();
-      var ReactDOM = require_react_dom();
+      var ReactDOM2 = require_react_dom();
       function formatProdErrorMessage(code) {
         var url = "https://react.dev/errors/" + code;
         if (1 < arguments.length) {
@@ -1138,7 +1138,7 @@
       }
       var isArrayImpl = Array.isArray;
       var ReactSharedInternals = React16.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
-      var ReactDOMSharedInternals = ReactDOM.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+      var ReactDOMSharedInternals = ReactDOM2.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
       var sharedNotPendingObject = {
         pending: false,
         data: null,
@@ -13601,6 +13601,7 @@
     const [sortedKeys, setSortedKeys] = (0, import_react4.useState)([]);
     const [selectedPeriod, setSelectedPeriod] = (0, import_react4.useState)(null);
     const [viewMode, setViewMode] = (0, import_react4.useState)("all");
+    const [pendingDeleteId, setPendingDeleteId] = (0, import_react4.useState)(null);
     const [docMeta, setDocMeta] = (0, import_react4.useState)({ eventCounts: {}, notifMap: {} });
     const [notifyDocId, setNotifyDocId] = (0, import_react4.useState)(null);
     const itemsPanelRef = (0, import_react4.useRef)(null);
@@ -13608,16 +13609,18 @@
     const scrollPosRef = (0, import_react4.useRef)(0);
     const chartScrollRef = (0, import_react4.useRef)(0);
     const isInitialLoad = (0, import_react4.useRef)(true);
+    const needsScrollRestore = (0, import_react4.useRef)(false);
     const saveScrollPos = (0, import_react4.useCallback)(() => {
       if (itemsPanelRef.current) scrollPosRef.current = itemsPanelRef.current.scrollTop;
       if (chartPanelRef.current) chartScrollRef.current = chartPanelRef.current.scrollLeft;
     }, []);
-    const restoreScrollPos = (0, import_react4.useCallback)(() => {
-      requestAnimationFrame(() => {
+    (0, import_react4.useLayoutEffect)(() => {
+      if (needsScrollRestore.current) {
         if (itemsPanelRef.current) itemsPanelRef.current.scrollTop = scrollPosRef.current;
         if (chartPanelRef.current) chartPanelRef.current.scrollLeft = chartScrollRef.current;
-      });
-    }, []);
+        needsScrollRestore.current = false;
+      }
+    }, [timelineItems]);
     (0, import_react4.useEffect)(() => {
       loadTimeline();
       const handleCaseChange = () => {
@@ -13630,6 +13633,7 @@
     (0, import_react4.useEffect)(() => {
       if (refreshSignal) {
         saveScrollPos();
+        needsScrollRestore.current = true;
         loadTimeline();
       }
     }, [refreshSignal]);
@@ -13689,7 +13693,6 @@
         });
         setTimelineItems(merged);
         setLoading(false);
-        if (!isInitialLoad.current) restoreScrollPos();
         isInitialLoad.current = false;
       } catch (err) {
         console.error("[Timeline] Load failed:", err);
@@ -13729,17 +13732,19 @@
       }
     };
     const handleDelete = async (item) => {
-      const label = item._label;
-      if (!confirm(`Delete "${label}"?
-
-Cannot be undone.`)) return;
+      if (pendingDeleteId !== item.id) {
+        setPendingDeleteId(item.id);
+        setTimeout(() => setPendingDeleteId(null), 4e3);
+        return;
+      }
+      setPendingDeleteId(null);
       const { caseId } = await window.api.cases.current();
-      const res = item._type === "moment" ? await window.api.events.delete(caseId, item.id) : await window.api.documents.delete(caseId, item.id);
-      if (res.success) {
+      const res = item._type === "moment" ? await window.api.events.delete(caseId, item.id) : await window.api.documents.delete(item.id);
+      if (res?.success) {
         saveScrollPos();
         onDataChanged?.();
         loadTimeline();
-      } else alert(`Delete failed: ${res.error}`);
+      } else console.error("[Timeline] Delete failed:", res?.error);
     };
     const handleNotified = (docId, actors) => {
       setDocMeta((prev) => ({
@@ -13842,7 +13847,8 @@ Cannot be undone.`)) return;
       color: "#888"
     } }, "Show all")), (selectedPeriod ? selectedItems : filteredItems).map((item) => {
       const isMoment = item._type === "moment";
-      const typeColor = isMoment ? "#e74c3c" : "#2196f3";
+      const isContext = isMoment && item.is_context_event;
+      const typeColor = isContext ? "#6B7280" : isMoment ? "#e74c3c" : "#2196f3";
       const tags = isMoment ? item.tags || [] : item.evidence_type ? [item.evidence_type] : [];
       const linkedEventCount = !isMoment ? docMeta.eventCounts[item.id] || 0 : 0;
       const notifiedActors = !isMoment ? docMeta.notifMap[item.id] || [] : [];
@@ -13861,17 +13867,17 @@ Cannot be undone.`)) return;
         height: 32,
         borderRadius: "50%",
         flexShrink: 0,
-        background: isMoment ? "#ffeef0" : "#e8f4fd",
+        background: isContext ? "#f3f4f6" : isMoment ? "#ffeef0" : "#e8f4fd",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         fontSize: 14
-      } }, isMoment ? "\u{1F534}" : "\u{1F4C4}"), /* @__PURE__ */ import_react4.default.createElement("div", { style: { flex: 1, minWidth: 0, overflow: "hidden" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontWeight: 500, fontSize: 13, color: "#2c3e50", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, item._label), /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontSize: 11, color: "#aaa", marginTop: 2, whiteSpace: "nowrap" } }, item._date ? new Date(item._date).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "No date", !isMoment && item.file_size ? ` \xB7 ${(item.file_size / 1024).toFixed(0)} KB` : ""), tags.length > 0 && /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" } }, tags.slice(0, 4).map((tag) => /* @__PURE__ */ import_react4.default.createElement("span", { key: tag, style: {
+      } }, isContext ? "\u25EF" : isMoment ? "\u{1F534}" : "\u{1F4C4}"), /* @__PURE__ */ import_react4.default.createElement("div", { style: { flex: 1, minWidth: 0, overflow: "hidden" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontWeight: 500, fontSize: 13, color: isContext ? "#6B7280" : "#2c3e50", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6 } }, item._label, isContext && /* @__PURE__ */ import_react4.default.createElement("span", { style: { fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#e5e7eb", color: "#6B7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, flexShrink: 0 } }, "Context")), /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontSize: 11, color: "#aaa", marginTop: 2, whiteSpace: "nowrap" } }, item._date ? new Date(item._date).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "No date", !isMoment && item.file_size ? ` \xB7 ${(item.file_size / 1024).toFixed(0)} KB` : ""), tags.length > 0 && /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" } }, tags.slice(0, 4).map((tag) => /* @__PURE__ */ import_react4.default.createElement("span", { key: tag, style: {
         padding: "1px 6px",
         fontSize: 10,
         borderRadius: 3,
-        background: isMoment ? "#ffeef0" : "#e8f4fd",
-        color: typeColor,
+        background: isContext ? "#f3f4f6" : isMoment ? "#ffeef0" : "#e8f4fd",
+        color: isContext ? "#9CA3AF" : typeColor,
         fontWeight: 500,
         textTransform: "uppercase",
         letterSpacing: 0.3
@@ -13914,10 +13920,11 @@ Cannot be undone.`)) return;
         fontSize: 11,
         cursor: "pointer",
         borderRadius: 4,
-        background: "#fff",
-        color: "#e74c3c",
-        border: "1px solid #ffd0d0"
-      } }, "\u{1F5D1}")));
+        background: pendingDeleteId === item.id ? "#e74c3c" : "#fff",
+        color: pendingDeleteId === item.id ? "#fff" : "#e74c3c",
+        border: "1px solid #ffd0d0",
+        fontWeight: pendingDeleteId === item.id ? 600 : 400
+      } }, pendingDeleteId === item.id ? "Sure?" : "\u{1F5D1}")));
     })), notifyDocId && /* @__PURE__ */ import_react4.default.createElement(
       NotifyModal,
       {
@@ -14505,7 +14512,17 @@ Cannot be undone.`)) return;
     (0, import_react7.useEffect)(() => {
       loadActors();
       loadComparators();
+      autoCheckDuplicates();
     }, []);
+    async function autoCheckDuplicates() {
+      try {
+        const result = await window.api.actors.checkDuplicates();
+        if (result.success && result.duplicates.length > 0) {
+          setDuplicates(result.duplicates);
+        }
+      } catch (e) {
+      }
+    }
     async function loadActors() {
       const result = await window.api.actors.list();
       if (result.success) {
@@ -14577,16 +14594,22 @@ Cannot be undone.`)) return;
       }
     }
     async function handleMerge(keepId, mergeId) {
-      const result = await window.api.actors.merge(keepId, mergeId);
-      if (result.success) {
-        setDuplicates((prev) => {
-          const remaining = prev.filter((d) => !(d.actor1.id === mergeId || d.actor2.id === mergeId));
-          if (remaining.length === 0) {
-            setShowMergePanel(false);
-          }
-          return remaining;
-        });
-        await loadActors();
+      try {
+        const result = await window.api.actors.merge(keepId, mergeId);
+        if (result.success) {
+          setDuplicates((prev) => {
+            const remaining = prev.filter((d) => !(d.actor1.id === mergeId || d.actor2.id === mergeId));
+            if (remaining.length === 0) {
+              setShowMergePanel(false);
+            }
+            return remaining;
+          });
+          await loadActors();
+        } else {
+          alert("Merge failed: " + (result.error || "Unknown error"));
+        }
+      } catch (err) {
+        alert("Merge failed: " + err.message);
       }
     }
     function getInitials(name) {
@@ -14620,7 +14643,34 @@ Cannot be undone.`)) return;
       pip: "Put on PIP",
       excluded: "Excluded"
     };
-    return /* @__PURE__ */ import_react7.default.createElement("div", { style: styles5.container }, /* @__PURE__ */ import_react7.default.createElement("div", { style: styles5.header }, /* @__PURE__ */ import_react7.default.createElement("div", null, /* @__PURE__ */ import_react7.default.createElement("h1", { style: styles5.title }, "People"), /* @__PURE__ */ import_react7.default.createElement("p", { style: styles5.subtitle }, peopleTab === "actors" ? `${actors.length} people in this case` : `${comparators.length} comparators tracked`)), /* @__PURE__ */ import_react7.default.createElement("div", { style: styles5.headerActions }, /* @__PURE__ */ import_react7.default.createElement("div", { style: { display: "flex", border: `1px solid ${colors.border}`, borderRadius: radius.md, overflow: "hidden" } }, /* @__PURE__ */ import_react7.default.createElement(
+    return /* @__PURE__ */ import_react7.default.createElement("div", { style: styles5.container }, duplicates.length > 0 && !showMergePanel && /* @__PURE__ */ import_react7.default.createElement("div", { style: {
+      background: "#FEF3C7",
+      borderBottom: "1px solid #FCD34D",
+      padding: "10px 24px",
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      fontFamily: "system-ui, sans-serif",
+      fontSize: 13
+    } }, /* @__PURE__ */ import_react7.default.createElement("span", { style: { fontWeight: 600, color: "#92400E" } }, "\u26A0 ", duplicates.length, " possible duplicate", duplicates.length !== 1 ? "s" : "", " detected"), /* @__PURE__ */ import_react7.default.createElement("span", { style: { color: "#78350F" } }, duplicates.map((d) => `${d.actor1.name} / ${d.actor2.name}`).slice(0, 3).join(" \xB7 "), duplicates.length > 3 ? ` + ${duplicates.length - 3} more` : ""), /* @__PURE__ */ import_react7.default.createElement(
+      "button",
+      {
+        onClick: () => setShowMergePanel(true),
+        style: {
+          marginLeft: "auto",
+          padding: "4px 14px",
+          background: "#D97706",
+          color: "#fff",
+          border: "none",
+          borderRadius: 6,
+          cursor: "pointer",
+          fontSize: 12,
+          fontWeight: 600,
+          fontFamily: "system-ui, sans-serif"
+        }
+      },
+      "Review & Merge"
+    )), /* @__PURE__ */ import_react7.default.createElement("div", { style: styles5.header }, /* @__PURE__ */ import_react7.default.createElement("div", null, /* @__PURE__ */ import_react7.default.createElement("h1", { style: styles5.title }, "People"), /* @__PURE__ */ import_react7.default.createElement("p", { style: styles5.subtitle }, peopleTab === "actors" ? `${actors.length} people in this case` : `${comparators.length} comparators tracked`)), /* @__PURE__ */ import_react7.default.createElement("div", { style: styles5.headerActions }, /* @__PURE__ */ import_react7.default.createElement("div", { style: { display: "flex", border: `1px solid ${colors.border}`, borderRadius: radius.md, overflow: "hidden" } }, /* @__PURE__ */ import_react7.default.createElement(
       "button",
       {
         style: { ...styles5.tabBtn, ...peopleTab === "actors" ? styles5.tabBtnActive : {} },
@@ -15211,20 +15261,76 @@ Cannot be undone.`)) return;
     (evt.documents || []).forEach((d) => {
       (DOC_TYPE_SIGNALS[d.evidence_type] || []).forEach((s) => signals.add(s));
     });
+    const text = ((evt.title || "") + " " + (evt.what_happened || "") + " " + (evt.description || "")).toLowerCase();
+    const sexualKeywords = ["sexual", "grope", "groping", "unwanted touch", "unwanted advance", "inappropriate touch", "proposition"];
+    const genderKeywords = [
+      "gendered",
+      "sexist",
+      "stereotype",
+      "because she",
+      "because he",
+      "boys club",
+      "gender bias",
+      "gender discrimination",
+      "for a woman",
+      "for a man",
+      "as a woman",
+      "as a man",
+      "like a woman",
+      "like a man",
+      "too aggressive for a",
+      "too emotional"
+    ];
+    if (signals.has("harassment") && !signals.has("sexual_harassment") && !signals.has("gender_harassment")) {
+      if (sexualKeywords.some((k) => text.includes(k))) {
+        signals.add("sexual_harassment");
+      } else if (genderKeywords.some((k) => text.includes(k))) {
+        signals.add("gender_harassment");
+      } else {
+        signals.add("hostile_environment");
+      }
+      signals.delete("harassment");
+    }
+    if (signals.has("sexual_harassment") && !sexualKeywords.some((k) => text.includes(k))) {
+      if (genderKeywords.some((k) => text.includes(k))) {
+        signals.delete("sexual_harassment");
+        signals.add("gender_harassment");
+      }
+    }
     return signals;
   }
   function assignEventsToThreads(events) {
     const assignments = {};
+    console.group("[Threads] Event \u2192 Thread Assignment");
     for (const evt of events) {
+      if (evt.is_context_event) {
+        continue;
+      }
       const signals = buildEffectiveSignals(evt);
+      const evtText = ((evt.title || "") + " " + (evt.what_happened || "") + " " + (evt.description || "")).toLowerCase();
+      const matchedThreads = [];
       for (const thread of THREAD_DEFINITIONS) {
-        if (thread.tag_signals.some((sig) => signals.has(sig))) {
+        let matches = thread.tag_signals.some((sig) => signals.has(sig));
+        let matchReason = matches ? "tag_signal" : "";
+        if (!matches && thread.title_keywords) {
+          const kw = thread.title_keywords.find((kw2) => evtText.includes(kw2.toLowerCase()));
+          if (kw) {
+            matches = true;
+            matchReason = `title_keyword: "${kw}"`;
+          }
+        }
+        if (matches) {
+          matchedThreads.push(`${thread.name} (${matchReason})`);
           if (!assignments[thread.id]) assignments[thread.id] = { thread, events: [], documents: /* @__PURE__ */ new Set() };
           assignments[thread.id].events.push(evt);
           (evt.documents || []).forEach((d) => assignments[thread.id].documents.add(d.id));
         }
       }
+      if (matchedThreads.length > 0) {
+        console.log(`"${evt.title}" | tags=[${(evt.tags || []).join(",")}] type=${evt.event_type || "?"} | signals=[${[...signals].join(",")}] \u2192 ${matchedThreads.join(", ")}`);
+      }
     }
+    console.groupEnd();
     for (const id in assignments) assignments[id].documents = Array.from(assignments[id].documents);
     return assignments;
   }
@@ -15253,6 +15359,74 @@ Cannot be undone.`)) return;
     if (assignment.events.length < 2) gaps.push("More corroborating events strengthen this thread");
     return gaps;
   }
+  function DocPreviewItem({ doc, onSelectDocument }) {
+    const [hoverPos, setHoverPos] = import_react8.default.useState(null);
+    const preview = doc.extracted_text ? doc.extracted_text.slice(0, 600).trim() : null;
+    return /* @__PURE__ */ import_react8.default.createElement(
+      "div",
+      {
+        style: {
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
+          padding: "5px 8px",
+          borderRadius: "5px",
+          background: colors.surfaceAlt,
+          border: `1px solid ${colors.border}`,
+          fontSize: typography.fontSize.xs,
+          color: colors.textSecondary,
+          cursor: onSelectDocument ? "pointer" : "default"
+        },
+        onMouseEnter: (e) => {
+          if (!preview) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          setHoverPos({ top: rect.top, left: rect.left, bottom: rect.bottom });
+        },
+        onMouseLeave: () => setHoverPos(null),
+        onClick: () => onSelectDocument?.(doc)
+      },
+      /* @__PURE__ */ import_react8.default.createElement("span", { style: {
+        padding: "1px 5px",
+        borderRadius: "3px",
+        fontSize: 10,
+        background: `${colors.primary}22`,
+        color: colors.primary,
+        flexShrink: 0
+      } }, (doc.evidence_type || "DOC").replace(/_/g, " ")),
+      /* @__PURE__ */ import_react8.default.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 } }, doc.filename || doc.id),
+      hoverPos && preview && import_react_dom.default.createPortal(
+        /* @__PURE__ */ import_react8.default.createElement(
+          "div",
+          {
+            style: {
+              position: "fixed",
+              top: hoverPos.top > 280 ? hoverPos.top - 280 : hoverPos.bottom + 8,
+              left: Math.max(8, Math.min(hoverPos.left, window.innerWidth - 356)),
+              zIndex: 9999,
+              width: 340,
+              maxHeight: 260,
+              overflow: "hidden",
+              background: "#1E293B",
+              color: "#E2E8F0",
+              borderRadius: "8px",
+              padding: "12px",
+              fontSize: "12px",
+              lineHeight: "1.6",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+              pointerEvents: "none",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word"
+            }
+          },
+          /* @__PURE__ */ import_react8.default.createElement("div", { style: { fontSize: 10, color: "#94A3B8", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" } }, doc.filename || "Document"),
+          preview,
+          doc.extracted_text && doc.extracted_text.length > 600 && /* @__PURE__ */ import_react8.default.createElement("div", { style: { color: "#64748B", marginTop: 6, fontStyle: "italic" } }, "\u2026click to view full document")
+        ),
+        document.body
+      )
+    );
+  }
   function Dashboard({ onNavigateToTimeline, onNavigateToPeople, onSelectDocument, onSelectActor }) {
     const [loading, setLoading] = (0, import_react8.useState)(true);
     const [stats, setStats] = (0, import_react8.useState)(null);
@@ -15269,7 +15443,6 @@ Cannot be undone.`)) return;
     const [selectedAlert, setSelectedAlert] = (0, import_react8.useState)(null);
     const [causalityLinks, setCausalityLinks] = (0, import_react8.useState)([]);
     const [suggestedIncidents, setSuggestedIncidents] = (0, import_react8.useState)([]);
-    const [activeTab, setActiveTab] = (0, import_react8.useState)("overview");
     const [threads, setThreads] = (0, import_react8.useState)({});
     const [events, setEvents] = (0, import_react8.useState)([]);
     function toggleSection(section) {
@@ -15319,7 +15492,12 @@ Cannot be undone.`)) return;
         }
         const evts = eventsResult.success ? eventsResult.events || [] : [];
         setEvents(evts);
-        setThreads(assignEventsToThreads(evts));
+        const docLookup = new Map((docsResult.documents || []).map((d) => [d.id, d]));
+        const threadAssignments = assignEventsToThreads(evts);
+        for (const tid in threadAssignments) {
+          threadAssignments[tid].documents = threadAssignments[tid].documents.map((docId) => docLookup.get(docId) || { id: docId }).filter(Boolean);
+        }
+        setThreads(threadAssignments);
         try {
           const chainResult = await window.api.categorizer.analyzeDocuments();
           if (chainResult.success && chainResult.summary) {
@@ -15420,12 +15598,12 @@ Cannot be undone.`)) return;
       return documents.find((d) => d.id === docId);
     }
     function getAlerts() {
-      const alerts2 = [];
+      const alerts = [];
       if (escalation?.hasEscalation) {
         const incidentDocs = documents.filter(
           (d) => ["INCIDENT", "ADVERSE_ACTION"].includes(d.evidence_type)
         );
-        alerts2.push({
+        alerts.push({
           type: "escalation",
           severity: "warning",
           title: "Escalating Pattern",
@@ -15442,7 +15620,7 @@ Cannot be undone.`)) return;
         const targetDoc = findDoc(conn.targetId);
         const relatedDocs = [sourceDoc, targetDoc].filter(Boolean);
         if (conn.daysBetween <= 14) {
-          alerts2.push({
+          alerts.push({
             type: "retaliation",
             severity: "critical",
             title: `${conn.daysBetween} Days After Protected Activity`,
@@ -15453,7 +15631,7 @@ Cannot be undone.`)) return;
             detail: `Only ${conn.daysBetween} days elapsed between the protected activity${sourceDoc ? ` (${sourceDoc.filename})` : ""} and the adverse action${targetDoc ? ` (${targetDoc.filename})` : ""}. Courts have consistently held that temporal proximity of this closeness is sufficient to establish a prima facie case of retaliation under Burlington Northern v. White.`
           });
         } else if (conn.daysBetween <= 30) {
-          alerts2.push({
+          alerts.push({
             type: "retaliation",
             severity: "warning",
             title: `${conn.daysBetween} Days After Protected Activity`,
@@ -15469,7 +15647,7 @@ Cannot be undone.`)) return;
       clusterConns.forEach((conn) => {
         const sourceDoc = findDoc(conn.sourceId);
         const targetDoc = findDoc(conn.targetId);
-        alerts2.push({
+        alerts.push({
           type: "cluster",
           severity: "info",
           title: "Event Cluster Detected",
@@ -15480,7 +15658,7 @@ Cannot be undone.`)) return;
           detail: `Multiple events occurring in close temporal proximity suggest a continuing pattern of conduct. Under National Railroad Passenger Corp. v. Morgan, incidents that are part of a continuing violation may be considered together, even if some fall outside the statute of limitations filing window.`
         });
       });
-      return alerts2;
+      return alerts;
     }
     function getPatternInsights() {
       const insights = [];
@@ -15593,7 +15771,6 @@ Cannot be undone.`)) return;
     if (loading) {
       return /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.loading }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.loadingSpinner }), /* @__PURE__ */ import_react8.default.createElement("span", null, "Loading dashboard..."));
     }
-    const alerts = getAlerts();
     const gaps = getGaps();
     const topActors = actors.filter((a) => a.classification === "bad_actor" || a.classification === "enabler" || !!a.in_reporting_chain).sort((a, b) => {
       const classPriority = { bad_actor: 0, enabler: 1 };
@@ -15601,244 +15778,11 @@ Cannot be undone.`)) return;
       const pb = classPriority[b.classification] ?? (b.in_reporting_chain ? 2 : 3);
       return pa - pb;
     }).slice(0, 8);
-    return /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.container }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.header }, /* @__PURE__ */ import_react8.default.createElement("h1", { style: styles3.title }, "Dashboard"), /* @__PURE__ */ import_react8.default.createElement("p", { style: styles3.subtitle }, "Fresh eyes view of your case")), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.tabBar }, /* @__PURE__ */ import_react8.default.createElement("button", { style: activeTab === "overview" ? { ...styles3.tab, ...styles3.tabActive } : styles3.tab, onClick: () => setActiveTab("overview") }, "Overview"), /* @__PURE__ */ import_react8.default.createElement("button", { style: activeTab === "threads" ? { ...styles3.tab, ...styles3.tabActive } : styles3.tab, onClick: () => setActiveTab("threads") }, "Threads (", THREAD_DEFINITIONS.length, ")")), activeTab === "overview" && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.content }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.summaryCard }, /* @__PURE__ */ import_react8.default.createElement("h2", { style: styles3.cardTitle }, "Case Summary"), /* @__PURE__ */ import_react8.default.createElement("p", { style: styles3.summaryText }, generateSummary())), (() => {
-      const insights = getPatternInsights();
-      if (insights.length === 0) return null;
-      return /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.card }, /* @__PURE__ */ import_react8.default.createElement(
-        "h3",
-        {
-          style: styles3.collapsibleTitle,
-          onClick: () => toggleSection("insights")
-        },
-        /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.chevron }, collapsedSections.insights ? "\u25B6" : "\u25BC"),
-        "Pattern Insights",
-        /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.badge }, insights.length)
-      ), !collapsedSections.insights && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.insightsGrid }, insights.map((insight, i) => /* @__PURE__ */ import_react8.default.createElement("div", { key: i, style: styles3.insightItem }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.insightTop }, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.insightIcon }, insight.icon), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.insightCount }, insight.count), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.insightLabel }, insight.label)), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.insightLegal }, insight.legal)))));
-    })(), protectedClasses.length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.card, borderLeft: `3px solid ${colors.primary}`, marginBottom: spacing.md } }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" } }, /* @__PURE__ */ import_react8.default.createElement("span", { style: { fontSize: "14px", fontWeight: 600, color: colors.textPrimary } }, "Protected Class Status:"), protectedClasses.map((pc, i) => /* @__PURE__ */ import_react8.default.createElement("span", { key: i, style: {
-      padding: "2px 10px",
-      borderRadius: radius.full,
-      fontSize: "12px",
-      fontWeight: 500,
-      background: colors.primary + "14",
-      color: colors.primary,
-      border: `1px solid ${colors.primary}30`
-    } }, pc.type, ": ", pc.value)))), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.statsRow }, /* @__PURE__ */ import_react8.default.createElement(
-      StatCard,
-      {
-        icon: "\u{1F4C4}",
-        value: stats?.documentCount || 0,
-        label: "Documents",
-        onClick: () => onNavigateToTimeline?.()
-      }
-    ), /* @__PURE__ */ import_react8.default.createElement(
-      StatCard,
-      {
-        icon: "\u{1F534}",
-        value: stats?.momentCount || 0,
-        label: "Moments",
-        sublabel: stats?.incidentCount > 0 ? `${stats.incidentCount} incidents` : null,
-        onClick: () => onNavigateToTimeline?.()
-      }
-    ), /* @__PURE__ */ import_react8.default.createElement(
-      StatCard,
-      {
-        icon: "\u{1F465}",
-        value: stats?.actorCount || 0,
-        label: "People",
-        sublabel: [
-          stats?.badActorCount > 0 ? `${stats.badActorCount} bad actor${stats.badActorCount !== 1 ? "s" : ""}` : null,
-          stats?.chainCount > 0 ? `${stats.chainCount} in chain` : null
-        ].filter(Boolean).join(" \xB7 ") || null,
-        onClick: () => onNavigateToPeople?.()
-      }
-    ), /* @__PURE__ */ import_react8.default.createElement(
-      StatCard,
-      {
-        icon: "\u{1F4C5}",
-        value: stats?.timelineSpanDays || 0,
-        label: "Days Span"
-      }
-    ), /* @__PURE__ */ import_react8.default.createElement(
-      StatCard,
-      {
-        icon: "\u{1F525}",
-        value: causalityLinks.length,
-        label: "Causality Links",
-        sublabel: causalityLinks.length > 0 ? `${causalityLinks.filter((l) => l.link_type === "caused").length} causal` : "none yet"
-      }
-    ), suggestedIncidents.length > 0 && /* @__PURE__ */ import_react8.default.createElement(
-      StatCard,
-      {
-        icon: "\u{1F6A8}",
-        value: suggestedIncidents.length,
-        label: "Suggested Incidents",
-        sublabel: "Auto-detected patterns"
-      }
-    )), precedentAnalysis && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.card }, /* @__PURE__ */ import_react8.default.createElement(
-      "h3",
-      {
-        style: styles3.collapsibleTitle,
-        onClick: () => toggleSection("strength")
-      },
-      /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.chevron }, collapsedSections.strength ? "\u25B6" : "\u25BC"),
-      "Case Strength",
-      /* @__PURE__ */ import_react8.default.createElement("span", { style: {
-        ...styles3.strengthBadge,
-        background: precedentAnalysis.caseStrength >= 70 ? colors.success : precedentAnalysis.caseStrength >= 40 ? colors.warning : colors.error
-      } }, precedentAnalysis.caseStrength, "%")
-    ), !collapsedSections.strength && /* @__PURE__ */ import_react8.default.createElement(
-      "div",
-      {
-        style: { cursor: "pointer" },
-        onClick: () => setShowCaseStrength(true),
-        title: "Click for detailed precedent analysis"
-      },
-      /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.strengthMeter }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.strengthBarOuter }, /* @__PURE__ */ import_react8.default.createElement(
-        "div",
-        {
-          style: {
-            ...styles3.strengthBarInner,
-            width: `${precedentAnalysis.caseStrength}%`,
-            background: precedentAnalysis.caseStrength >= 70 ? colors.success : precedentAnalysis.caseStrength >= 40 ? colors.warning : colors.error
-          }
-        }
-      )), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.strengthValue }, precedentAnalysis.caseStrength, "%")),
-      /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.precedentRow }, Object.entries(precedentAnalysis.precedents).slice(0, 3).map(([key, prec]) => /* @__PURE__ */ import_react8.default.createElement("div", { key, style: styles3.precedentMini }, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.precedentName }, prec.name.split(" v.")[0]), /* @__PURE__ */ import_react8.default.createElement("span", { style: {
-        ...styles3.precedentScore,
-        color: prec.alignmentPercent >= 70 ? colors.success : prec.alignmentPercent >= 40 ? colors.warning : colors.error
-      } }, prec.alignmentPercent, "%"))))
-    )), chainAnalysis && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.card }, /* @__PURE__ */ import_react8.default.createElement(
-      "h3",
-      {
-        style: styles3.collapsibleTitle,
-        onClick: () => toggleSection("chain")
-      },
-      /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.chevron }, collapsedSections.chain ? "\u25B6" : "\u25BC"),
-      "Employer Liability Analysis",
-      /* @__PURE__ */ import_react8.default.createElement("span", { style: {
-        ...styles3.strengthBadge,
-        background: chainAnalysis.employerLiability?.level === "critical" ? colors.error : chainAnalysis.employerLiability?.level === "high" ? "#F97316" : chainAnalysis.employerLiability?.level === "moderate" ? colors.warning : colors.success
-      } }, chainAnalysis.employerLiability?.level?.toUpperCase())
-    ), !collapsedSections.chain && /* @__PURE__ */ import_react8.default.createElement("div", { style: { padding: `0 ${spacing.md} ${spacing.md}` } }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { display: "flex", gap: spacing.md, marginBottom: spacing.md, flexWrap: "wrap" } }, /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metric }, /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metricValue }, chainAnalysis.incidentSeverity || "N/A"), /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metricLabel }, "Incident Severity")), /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metric }, /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metricValue }, chainAnalysis.documentationStrength || "N/A"), /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metricLabel }, "Documentation")), /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metric }, /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metricValue }, chainAnalysis.reports?.length || 0), /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metricLabel }, "Reports Filed")), /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metric }, /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metricValue }, chainAnalysis.retaliationEntries || 0), /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.metricLabel }, "Retaliation"))), chainAnalysis.reports?.length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: { marginBottom: spacing.md } }, /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.sectionLabel }, "Notice History"), chainAnalysis.reports.map((r, i) => /* @__PURE__ */ import_react8.default.createElement("div", { key: i, style: chainStyles.reportRow }, /* @__PURE__ */ import_react8.default.createElement("span", { style: chainStyles.reportBadge }, "#", r.noticeSequence), /* @__PURE__ */ import_react8.default.createElement("span", { style: chainStyles.reportCategory }, r.category?.replace("REPORT_", "").replace("_", " ")), /* @__PURE__ */ import_react8.default.createElement("span", { style: chainStyles.reportTo }, r.reportedTo ? `to ${r.reportedTo}` : ""), r.date && /* @__PURE__ */ import_react8.default.createElement("span", { style: chainStyles.reportDate }, r.date), r.flags?.map((f, fi) => /* @__PURE__ */ import_react8.default.createElement("span", { key: fi, style: {
-      ...chainStyles.flag,
-      background: f.includes("no_action") ? "#FEE2E2" : f.includes("verbal") ? "#FEF3C7" : f.includes("continued") ? "#FEE2E2" : "#F3F4F6",
-      color: f.includes("no_action") ? "#DC2626" : f.includes("verbal") ? "#92400E" : f.includes("continued") ? "#DC2626" : "#6B7280"
-    } }, f.replace(/_/g, " ")))))), chainAnalysis.employerLiability?.signals?.length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", null, /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.sectionLabel }, "Liability Signals (Faragher/Ellerth)"), /* @__PURE__ */ import_react8.default.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: spacing.xs } }, chainAnalysis.employerLiability.signals.map((signal, i) => /* @__PURE__ */ import_react8.default.createElement("span", { key: i, style: chainStyles.signalTag }, signal.replace(/_/g, " ")))), chainAnalysis.employerLiability.conductContinuedPostReport && /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.continuedWarning }, "Conduct continued after employer was put on notice")), chainAnalysis.employerLiability?.noticeByRecipient && Object.keys(chainAnalysis.employerLiability.noticeByRecipient).length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: { marginTop: spacing.md } }, /* @__PURE__ */ import_react8.default.createElement("div", { style: chainStyles.sectionLabel }, "Notice by Recipient"), Object.entries(chainAnalysis.employerLiability.noticeByRecipient).map(([recipient, data]) => {
-      const importance = data.recipientImportance || {};
-      const importanceColors = {
-        critical: { bg: "#FEE2E2", color: "#DC2626", border: "#FECACA" },
-        high: { bg: "#FEF3C7", color: "#92400E", border: "#FDE68A" },
-        moderate: { bg: "#DBEAFE", color: "#1E40AF", border: "#BFDBFE" },
-        external: { bg: "#F3F4F6", color: "#6B7280", border: "#E5E7EB" },
-        low: { bg: "#F3F4F6", color: "#9CA3AF", border: "#E5E7EB" }
-      };
-      const ic = importanceColors[importance.level] || importanceColors.low;
-      const actionStatus = data.actionStatus || (data.actionTaken ? "yes" : "no");
-      const actionColor = actionStatus === "yes" ? colors.success : actionStatus === "no" ? colors.error : "#92400E";
-      const actionLabel = actionStatus === "yes" ? "action taken" : actionStatus === "no" ? "no action taken" : "no remedy documented";
-      return /* @__PURE__ */ import_react8.default.createElement("div", { key: recipient, style: { ...chainStyles.recipientRow, flexDirection: "column", alignItems: "flex-start", gap: "4px", padding: `${spacing.sm} ${spacing.md}`, marginBottom: spacing.xs, border: `1px solid ${ic.border}`, borderRadius: radius.sm, background: ic.bg + "40" } }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: spacing.sm, width: "100%", flexWrap: "wrap" } }, /* @__PURE__ */ import_react8.default.createElement("span", { style: { ...chainStyles.recipientName, fontWeight: 600 } }, importance.label || recipient), /* @__PURE__ */ import_react8.default.createElement("span", { style: chainStyles.recipientCount }, "notified ", data.timesNotified, "x"), /* @__PURE__ */ import_react8.default.createElement("span", { style: { ...chainStyles.recipientAction, color: actionColor, fontWeight: 600 } }, actionLabel), data.allVerbalOnly && /* @__PURE__ */ import_react8.default.createElement("span", { style: chainStyles.verbalTag }, "verbal only")), importance.note && /* @__PURE__ */ import_react8.default.createElement("div", { style: { fontSize: "11px", color: ic.color, lineHeight: "1.3" } }, importance.note));
-    })))), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.twoColumn }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.column }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.card }, /* @__PURE__ */ import_react8.default.createElement(
-      "h3",
-      {
-        style: styles3.collapsibleTitle,
-        onClick: () => toggleSection("alerts")
-      },
-      /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.chevron }, collapsedSections.alerts ? "\u25B6" : "\u25BC"),
-      "Pattern Alerts",
-      alerts.length > 0 && /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.badge }, alerts.length)
-    ), !collapsedSections.alerts && (alerts.length === 0 ? /* @__PURE__ */ import_react8.default.createElement("p", { style: styles3.emptyText }, "No patterns detected yet. Add more evidence to identify patterns.") : /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.alertList }, alerts.map((alert2, i) => /* @__PURE__ */ import_react8.default.createElement(
-      "div",
-      {
-        key: i,
-        style: {
-          ...styles3.alertItem,
-          ...styles3.clickableItem,
-          borderLeftColor: alert2.severity === "critical" ? colors.error : alert2.severity === "warning" ? colors.warning : colors.primary
-        },
-        onClick: () => setSelectedAlert(alert2),
-        title: "View details"
-      },
-      /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.alertTitle }, alert2.title),
-      /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.alertDesc }, alert2.description),
-      /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.alertLegal }, alert2.legal)
-    ))))), stats?.fchrDaysRemaining && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.card }, /* @__PURE__ */ import_react8.default.createElement(
-      "h3",
-      {
-        style: styles3.collapsibleTitle,
-        onClick: () => toggleSection("deadlines")
-      },
-      /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.chevron }, collapsedSections.deadlines ? "\u25B6" : "\u25BC"),
-      "Filing Deadlines"
-    ), !collapsedSections.deadlines && /* @__PURE__ */ import_react8.default.createElement(import_react8.default.Fragment, null, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.deadlineList }, /* @__PURE__ */ import_react8.default.createElement(
-      DeadlineItem,
-      {
-        agency: "FCHR (Florida)",
-        days: stats.fchrDaysRemaining,
-        total: 365
-      }
-    ), /* @__PURE__ */ import_react8.default.createElement(
-      DeadlineItem,
-      {
-        agency: "EEOC (Federal)",
-        days: stats.eeocDaysRemaining,
-        total: 300
-      }
-    )), /* @__PURE__ */ import_react8.default.createElement("p", { style: styles3.deadlineNote }, "Based on most recent documented incident")))), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.column }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.card }, /* @__PURE__ */ import_react8.default.createElement(
-      "h3",
-      {
-        style: styles3.collapsibleTitle,
-        onClick: () => toggleSection("gaps")
-      },
-      /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.chevron }, collapsedSections.gaps ? "\u25B6" : "\u25BC"),
-      "Evidence Gaps",
-      gaps.length > 0 && /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.badge }, gaps.length)
-    ), !collapsedSections.gaps && (gaps.length === 0 ? /* @__PURE__ */ import_react8.default.createElement("p", { style: styles3.emptyText }, "No critical gaps identified. Keep documenting!") : /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.gapList }, gaps.map((gap, i) => /* @__PURE__ */ import_react8.default.createElement(
-      "div",
-      {
-        key: i,
-        style: { ...styles3.gapItem, ...styles3.clickableItem },
-        onClick: () => setShowCaseStrength(true),
-        title: `${gap.recommendation}
-
-Precedent: ${gap.precedent}`
-      },
-      /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.gapElement }, gap.element),
-      /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.gapRec }, gap.recommendation),
-      /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.gapPrecedent }, gap.precedent)
-    ))))), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.card }, /* @__PURE__ */ import_react8.default.createElement(
-      "h3",
-      {
-        style: styles3.collapsibleTitle,
-        onClick: () => toggleSection("players")
-      },
-      /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.chevron }, collapsedSections.players ? "\u25B6" : "\u25BC"),
-      "Key Players",
-      topActors.length > 0 && /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.badge }, topActors.length)
-    ), !collapsedSections.players && (topActors.length === 0 ? /* @__PURE__ */ import_react8.default.createElement("p", { style: styles3.emptyText }, "No bad actors, enablers, or reporting chain actors identified yet.") : /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.actorList }, topActors.map((actor) => {
-      const isBadActor = actor.classification === "bad_actor";
-      const isEnabler = actor.classification === "enabler";
-      const isChain = !!actor.in_reporting_chain;
-      return /* @__PURE__ */ import_react8.default.createElement(
-        "div",
-        {
-          key: actor.id,
-          style: { ...styles3.actorItem, ...styles3.clickableItem },
-          onClick: () => onSelectActor?.(actor),
-          title: "Click to view details"
-        },
-        /* @__PURE__ */ import_react8.default.createElement("div", { style: {
-          ...styles3.actorBadge,
-          background: isBadActor ? "#DC262610" : isEnabler ? "#F9731610" : isChain ? "#3B82F610" : "#6B728010",
-          color: isBadActor ? "#DC2626" : isEnabler ? "#F97316" : isChain ? "#3B82F6" : "#6B7280"
-        } }, actor.name.split(" ").map((p) => p[0]).join("").slice(0, 2)),
-        /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.actorInfo }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px" } }, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.actorName }, actor.name), isChain && /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.dashboardChainTag }, "Chain")), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.actorRole }, actor.role || actor.relationship_to_self?.replace(/_/g, " ") || actor.classification?.replace("_", " "))),
-        actor.appearance_count > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.actorCount }, actor.appearance_count, " doc", actor.appearance_count !== 1 ? "s" : "")
-      );
-    }))))))), " ", activeTab === "threads" && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadsContent }, THREAD_DEFINITIONS.map((thread) => {
+    return /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.container }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.header }, /* @__PURE__ */ import_react8.default.createElement("h1", { style: styles3.title }, "Threads"), /* @__PURE__ */ import_react8.default.createElement("p", { style: styles3.subtitle }, "Legal claim threads built from your timeline")), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadsContent }, THREAD_DEFINITIONS.map((thread) => {
       const assignment = threads[thread.id] || { events: [], documents: [] };
       const strength = calculateThreadStrength(assignment);
       const gaps2 = getThreadGaps(assignment, thread);
-      return /* @__PURE__ */ import_react8.default.createElement("div", { key: thread.id, style: styles3.threadCard }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadCardHeader }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.threadDot, backgroundColor: thread.color } }), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadHeaderText }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadName }, thread.name), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadDesc }, thread.description)), /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.threadStrengthPill, borderColor: thread.color, color: thread.color } }, strength, "%")), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.strengthBarBg }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.strengthBarFill, width: `${strength}%`, backgroundColor: thread.color } })), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadStats }, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStat }, /* @__PURE__ */ import_react8.default.createElement("strong", null, assignment.events.length), " event", assignment.events.length !== 1 ? "s" : ""), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStatDivider }, "\xB7"), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStat }, /* @__PURE__ */ import_react8.default.createElement("strong", null, assignment.documents.length), " doc", assignment.documents.length !== 1 ? "s" : ""), thread.precedents.length > 0 && /* @__PURE__ */ import_react8.default.createElement(import_react8.default.Fragment, null, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStatDivider }, "\xB7"), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadPrecedent }, "\u2696\uFE0F ", thread.precedents[0]))), gaps2.length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadGaps }, gaps2.slice(0, 2).map((gap, i) => /* @__PURE__ */ import_react8.default.createElement("div", { key: i, style: styles3.threadGap }, "\u26A0 ", gap))), assignment.events.length === 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadEmpty }, "No events tagged for this thread yet"));
+      return /* @__PURE__ */ import_react8.default.createElement("div", { key: thread.id, style: styles3.threadCard }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadCardHeader }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.threadDot, backgroundColor: thread.color } }), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadHeaderText }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadName }, thread.name), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadDesc }, thread.description)), /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.threadStrengthPill, borderColor: thread.color, color: thread.color } }, strength, "%")), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.strengthBarBg }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.strengthBarFill, width: `${strength}%`, backgroundColor: thread.color } })), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadStats }, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStat }, /* @__PURE__ */ import_react8.default.createElement("strong", null, assignment.events.length), " event", assignment.events.length !== 1 ? "s" : ""), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStatDivider }, "\xB7"), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStat }, /* @__PURE__ */ import_react8.default.createElement("strong", null, assignment.documents.length), " doc", assignment.documents.length !== 1 ? "s" : ""), thread.precedents.length > 0 && /* @__PURE__ */ import_react8.default.createElement(import_react8.default.Fragment, null, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStatDivider }, "\xB7"), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadPrecedent }, "\u2696\uFE0F ", thread.precedents[0]))), assignment.documents.length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: { marginTop: spacing.xs } }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { fontSize: typography.fontSize.xs, color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: spacing.xs } }, "Key Evidence (", assignment.documents.length, ")"), /* @__PURE__ */ import_react8.default.createElement("div", { style: { display: "flex", flexDirection: "column", gap: spacing.xs, maxHeight: 160, overflowY: "auto" } }, assignment.documents.map((doc) => /* @__PURE__ */ import_react8.default.createElement(DocPreviewItem, { key: doc.id || doc, doc, onSelectDocument })))), gaps2.length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadGaps }, gaps2.slice(0, 2).map((gap, i) => /* @__PURE__ */ import_react8.default.createElement("div", { key: i, style: styles3.threadGap }, "\u26A0 ", gap))), assignment.events.length === 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadEmpty }, "No events tagged for this thread yet"));
     })), selectedAlert && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.overlay, onClick: () => setSelectedAlert(null) }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.overlayPanel, width: "650px" }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.overlayHeader }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: spacing.sm } }, /* @__PURE__ */ import_react8.default.createElement("span", { style: {
       display: "inline-block",
       padding: `${spacing.xs} ${spacing.sm}`,
@@ -15871,7 +15815,7 @@ Precedent: ${gap.precedent}`
         },
         onClick: () => {
           setSelectedAlert(null);
-          onSelectDocument?.(doc.id);
+          onSelectDocument?.(doc);
         }
       },
       /* @__PURE__ */ import_react8.default.createElement("span", { style: {
@@ -15952,35 +15896,44 @@ Precedent: ${gap.precedent}`
       color: el.satisfied ? colors.success : colors.error
     } }, el.satisfied ? "\u2713" : "\u2717"), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.elementName }, el.element), el.note && /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.elementNote }, el.note))))))))));
   }
-  function StatCard({ icon, value, label, sublabel, onClick }) {
-    return /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.statCard, cursor: onClick ? "pointer" : "default" }, onClick }, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.statIcon }, icon), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.statValue }, value), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.statLabel }, label), sublabel && /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.statSublabel }, sublabel));
-  }
-  function DeadlineItem({ agency, days, total }) {
-    const percent = Math.max(0, Math.min(100, days / total * 100));
-    const isUrgent = days <= 30;
-    const isWarning = days <= 90;
-    return /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.deadlineItem }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.deadlineHeader }, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.deadlineAgency }, agency), /* @__PURE__ */ import_react8.default.createElement("span", { style: {
-      ...styles3.deadlineDays,
-      color: isUrgent ? colors.error : isWarning ? colors.warning : colors.textPrimary
-    } }, days > 0 ? `${days} days` : "EXPIRED")), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.deadlineBar }, /* @__PURE__ */ import_react8.default.createElement("div", { style: {
-      ...styles3.deadlineProgress,
-      width: `${percent}%`,
-      background: isUrgent ? colors.error : isWarning ? colors.warning : colors.success
-    } })));
-  }
   function formatDate(date) {
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   }
-  var import_react8, THREAD_DEFINITIONS, EVENT_TYPE_SIGNALS, DOC_TYPE_SIGNALS, styles3, chainStyles;
+  var import_react8, import_react_dom, THREAD_DEFINITIONS, EVENT_TYPE_SIGNALS, DOC_TYPE_SIGNALS, styles3, chainStyles;
   var init_Dashboard = __esm({
     "src/renderer/pages/Dashboard.jsx"() {
       import_react8 = __toESM(require_react());
+      import_react_dom = __toESM(require_react_dom());
       init_tokens();
       THREAD_DEFINITIONS = [
-        { id: "sexual_harassment", name: "Sexual Harassment", description: "Unwanted sexual conduct, propositions, or comments", tag_signals: ["sexual_harassment", "harassment"], precedents: ["harris-v-forklift", "faragher-ellerth"], color: "#8B5CF6" },
-        { id: "gender_harassment", name: "Gender Harassment", description: "Gender-based comments, stereotyping, or discriminatory treatment", tag_signals: ["gender_harassment", "harassment"], precedents: ["harris-v-forklift"], color: "#EC4899" },
+        {
+          id: "sexual_harassment",
+          name: "Sexual Harassment",
+          description: "Unwanted sexual conduct, propositions, or sexual comments",
+          tag_signals: ["sexual_harassment"],
+          precedents: ["harris-v-forklift", "faragher-ellerth", "meritor"],
+          color: "#8B5CF6",
+          title_keywords: ["sexual", "inappropriate touch", "inappropriate contact", "groped", "groping", "unwanted advance", "proposition", "unwanted sexual"]
+        },
+        {
+          id: "gender_harassment",
+          name: "Gender Harassment",
+          description: "Gender-based comments, stereotyping, or discriminatory treatment",
+          tag_signals: ["gender_harassment"],
+          precedents: ["harris-v-forklift"],
+          color: "#EC4899",
+          title_keywords: ["gendered", "sexist", "stereotype", "because she", "because he", "boys club", "gender bias", "gender discrimination"]
+        },
         { id: "retaliation", name: "Retaliation", description: "Adverse actions taken after protected activity", tag_signals: ["retaliation", "protected_activity", "adverse_action"], precedents: ["burlington-northern", "vance"], color: "#F59E0B" },
-        { id: "exclusion", name: "Exclusion & Isolation", description: "Systematic exclusion from meetings, decisions, or team activities", tag_signals: ["exclusion", "isolation"], precedents: ["harris-v-forklift"], color: "#10B981" },
+        {
+          id: "exclusion",
+          name: "Exclusion & Isolation",
+          description: "Systematic exclusion from meetings, decisions, or team activities",
+          tag_signals: ["exclusion", "isolation"],
+          precedents: ["harris-v-forklift"],
+          color: "#10B981",
+          title_keywords: ["excluded", "left out", "not invited", "removed from", "cut out", "isolated", "sidelined", "marginalized", "shut out"]
+        },
         { id: "pay_discrimination", name: "Pay Discrimination", description: "Unequal compensation or benefits based on protected characteristics", tag_signals: ["pay_discrimination"], precedents: ["lilly-ledbetter"], color: "#3B82F6" },
         { id: "hostile_environment", name: "Hostile Environment", description: "Pervasive conduct creating an abusive or intimidating workplace", tag_signals: ["hostile_environment"], precedents: ["harris-v-forklift", "meritor"], color: "#6366F1" },
         { id: "hr_failure", name: "HR Failure to Act", description: "HR ignored complaints, failed to investigate, or enabled misconduct", tag_signals: ["help_request", "hr_failure", "ignored_complaint"], precedents: ["faragher-ellerth", "vance"], color: "#A855F7" }
@@ -16002,7 +15955,7 @@ Precedent: ${gap.precedent}`
         "REQUEST_FOR_HELP": ["help_request"],
         "RESPONSE": ["help_request"],
         "PAY_RECORD": ["pay_discrimination"],
-        "INCIDENT": ["harassment"],
+        // NOTE: 'INCIDENT' deliberately omitted — too broad, incidents can be any type
         "CLAIM_YOU_MADE": ["protected_activity"],
         "CLAIM_AGAINST_YOU": ["retaliation"]
       };
@@ -16970,6 +16923,12 @@ Precedent: ${gap.precedent}`
   });
 
   // src/renderer/pages/Connections.jsx
+  function ctLabel(type) {
+    return (CONNECTION_TYPE_LABELS[type] || {}).label || (type ? type.replace(/_/g, " ") : "Unknown");
+  }
+  function ctDesc(type) {
+    return (CONNECTION_TYPE_LABELS[type] || {}).desc || "";
+  }
   function Connections() {
     const [connections, setConnections] = (0, import_react10.useState)([]);
     const [suggestions, setSuggestions] = (0, import_react10.useState)([]);
@@ -16991,8 +16950,8 @@ Precedent: ${gap.precedent}`
           window.api.connections.listSuggested(caseId)
         ]);
         if (eventsRes.success) setEvents(eventsRes.events);
-        if (connectionsRes.success) setConnections(connectionsRes.connections);
-        if (suggestionsRes.success) setSuggestions(suggestionsRes.suggestions);
+        if (connectionsRes.success) setConnections(connectionsRes.connections.filter((c) => c.source_id !== c.target_id));
+        if (suggestionsRes.success) setSuggestions(suggestionsRes.suggestions.filter((s) => s.source_id !== s.target_id));
         setLoading(false);
       } catch (err) {
         console.error("[Connections] Load failed:", err);
@@ -17012,7 +16971,7 @@ Precedent: ${gap.precedent}`
           result.connections.forEach((c) => {
             byType[c.connection_type] = (byType[c.connection_type] || 0) + 1;
           });
-          const breakdown = Object.entries(byType).map(([t, n]) => `${t.replace(/_/g, " ")}: ${n}`).join("\n");
+          const breakdown = Object.entries(byType).map(([t, n]) => `${ctLabel(t)}: ${n}`).join("\n");
           alert(`Auto-Detect Complete!
 
 Found ${result.count} connections:
@@ -17250,7 +17209,60 @@ Found ${result.count} new suggestions based on legal precedents.`);
         }
       },
       "Run Precedent Analysis"
-    ))), connections.length > 0 && /* @__PURE__ */ import_react10.default.createElement(import_react10.default.Fragment, null, /* @__PURE__ */ import_react10.default.createElement("h3", { style: { margin: "0 0 16px 0", fontSize: "16px" } }, "Approved Connections (", connections.length, ")"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))", gap: "16px" } }, connections.map((conn) => /* @__PURE__ */ import_react10.default.createElement(
+    ))), connections.length > 0 && /* @__PURE__ */ import_react10.default.createElement(import_react10.default.Fragment, null, /* @__PURE__ */ import_react10.default.createElement("h3", { style: { margin: "0 0 16px 0", fontSize: "16px" } }, "Approved Connections (", connections.length, ")"), (() => {
+      const typeGroups = {};
+      for (const c of connections) {
+        const t = c.connection_type || "general";
+        if (!typeGroups[t]) typeGroups[t] = [];
+        typeGroups[t].push(c);
+      }
+      const ranked = Object.entries(typeGroups).map(([type, conns]) => ({
+        type,
+        count: conns.length,
+        meanStrength: conns.reduce((sum, c) => sum + (c.strength || 0), 0) / conns.length
+      })).sort((a, b) => b.meanStrength - a.meanStrength);
+      return /* @__PURE__ */ import_react10.default.createElement("div", { style: {
+        marginBottom: "24px",
+        padding: "16px",
+        background: "#1e2028",
+        border: "1px solid #2d323e",
+        borderRadius: "10px"
+      } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "13px", fontWeight: 600, marginBottom: "4px" } }, "Chain Assessment"), /* @__PURE__ */ import_react10.default.createElement("p", { style: { fontSize: "12px", color: "#8b92a8", margin: "0 0 12px 0" } }, "Connection patterns ranked by evidential strength"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } }, ranked.map((g, i) => {
+        const pct = Math.round(g.meanStrength * 100);
+        const barColor = CONNECTION_TYPE_COLORS[g.type] || "#6b7280";
+        return /* @__PURE__ */ import_react10.default.createElement("div", { key: g.type, style: {
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          padding: "8px 12px",
+          background: "#252932",
+          borderRadius: "6px",
+          border: "1px solid #2d323e"
+        } }, /* @__PURE__ */ import_react10.default.createElement("span", { style: {
+          width: "22px",
+          height: "22px",
+          borderRadius: "50%",
+          background: barColor,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: "11px",
+          fontWeight: 700,
+          flexShrink: 0
+        } }, i + 1), /* @__PURE__ */ import_react10.default.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px", marginBottom: "3px" } }, /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "13px", fontWeight: 600 } }, ctLabel(g.type)), /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "11px", color: "#6b7280" } }, g.count, " link", g.count !== 1 ? "s" : "")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: {
+          flex: 1,
+          height: "5px",
+          background: "#1a1d24",
+          borderRadius: "3px",
+          overflow: "hidden"
+        } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: {
+          width: `${pct}%`,
+          height: "100%",
+          background: barColor,
+          borderRadius: "3px"
+        } })), /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "11px", fontWeight: 600, color: barColor, minWidth: "32px" } }, pct, "%")), /* @__PURE__ */ import_react10.default.createElement("p", { style: { fontSize: "11px", color: "#6b7280", margin: "3px 0 0 0" } }, ctDesc(g.type))));
+      })));
+    })(), /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(400px, 1fr))", gap: "16px" } }, connections.map((conn) => /* @__PURE__ */ import_react10.default.createElement(
       "div",
       {
         key: conn.id,
@@ -17266,17 +17278,33 @@ Found ${result.count} new suggestions based on legal precedents.`);
         alignItems: "center",
         gap: "8px",
         marginBottom: "12px"
-      } }, /* @__PURE__ */ import_react10.default.createElement("span", { style: {
-        padding: "4px 8px",
-        background: CONNECTION_TYPE_COLORS[conn.connection_type] || "#6b7280",
-        borderRadius: "4px",
-        fontSize: "11px",
-        fontWeight: 600,
-        textTransform: "uppercase"
-      } }, conn.connection_type ? conn.connection_type.replace(/_/g, " ") : "unknown"), conn.auto_detected === 1 && /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "11px", color: "#6b7280" } }, "Auto-detected"), conn.strength != null && /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "11px", color: "#6b7280", marginLeft: "auto" } }, Math.round(conn.strength * 100), "% strength")),
-      /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "8px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "14px", fontWeight: 600, marginBottom: "2px" } }, conn.source_title || conn.source_id), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "12px", color: "#8b92a8" } }, conn.source_date ? new Date(conn.source_date).toLocaleDateString() : "")),
-      /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "18px", color: "#6b7280", textAlign: "center", margin: "6px 0" } }, "\u2193"),
-      /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "12px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "14px", fontWeight: 600, marginBottom: "2px" } }, conn.target_title || conn.target_id), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "12px", color: "#8b92a8" } }, conn.target_date ? new Date(conn.target_date).toLocaleDateString() : "")),
+      } }, /* @__PURE__ */ import_react10.default.createElement(
+        "span",
+        {
+          title: ctDesc(conn.connection_type),
+          style: {
+            padding: "4px 8px",
+            background: CONNECTION_TYPE_COLORS[conn.connection_type] || "#6b7280",
+            borderRadius: "4px",
+            fontSize: "11px",
+            fontWeight: 600,
+            textTransform: "uppercase",
+            cursor: "help"
+          }
+        },
+        ctLabel(conn.connection_type)
+      ), conn.auto_detected === 1 && /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "11px", color: "#6b7280" } }, "Auto-detected"), conn.strength != null && /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "11px", color: "#6b7280", marginLeft: "auto" } }, Math.round(conn.strength * 100), "% strength")),
+      (() => {
+        const srcDate = conn.source_date ? new Date(conn.source_date) : null;
+        const tgtDate = conn.target_date ? new Date(conn.target_date) : null;
+        const reversed = srcDate && tgtDate && srcDate > tgtDate;
+        const firstTitle = reversed ? conn.target_title || conn.target_id : conn.source_title || conn.source_id;
+        const firstDate = reversed ? conn.target_date : conn.source_date;
+        const secondTitle = reversed ? conn.source_title || conn.source_id : conn.target_title || conn.target_id;
+        const secondDate = reversed ? conn.source_date : conn.target_date;
+        const absDays = conn.days_between != null ? Math.abs(conn.days_between) : null;
+        return /* @__PURE__ */ import_react10.default.createElement(import_react10.default.Fragment, null, /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "8px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "10px", color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "3px" } }, "Triggering Event"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "14px", fontWeight: 600, marginBottom: "2px" } }, firstTitle), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "12px", color: "#8b92a8" } }, firstDate ? new Date(firstDate).toLocaleDateString() : "")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px", margin: "6px 0" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { flex: 1, height: "1px", background: "#3d4450" } }), /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "11px", color: "#6b7280", whiteSpace: "nowrap" } }, absDays != null ? `${absDays}d later` : "led to"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#6b7280", fontSize: "14px" } }, "\u2193")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "12px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "10px", color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "3px" } }, "Resulting Action"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "14px", fontWeight: 600, marginBottom: "2px" } }, secondTitle), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "12px", color: "#8b92a8" } }, secondDate ? new Date(secondDate).toLocaleDateString() : "")));
+      })(),
       /* @__PURE__ */ import_react10.default.createElement("div", { style: {
         fontSize: "13px",
         color: "#d1d5db",
@@ -17284,7 +17312,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
         background: "#1a1d24",
         borderRadius: "6px",
         marginTop: "12px"
-      } }, conn.description, conn.days_between != null && /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginTop: "4px", fontSize: "12px", color: "#8b92a8" } }, /* @__PURE__ */ import_react10.default.createElement("strong", null, conn.days_between, " days"), " between events")),
+      } }, conn.description),
       /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "flex", gap: "8px", marginTop: "12px" } }, /* @__PURE__ */ import_react10.default.createElement(
         "button",
         {
@@ -17329,6 +17357,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
       EditApproveModal,
       {
         suggestion: editModal,
+        events,
         onApprove: (edits) => {
           handleApprove(editModal, edits);
           setEditModal(null);
@@ -17339,6 +17368,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
       EditConnectionModal,
       {
         connection: editConnectionModal,
+        events,
         onSave: (edits) => handleEditConnection(editConnectionModal, edits),
         onClose: () => setEditConnectionModal(null)
       }
@@ -17366,14 +17396,25 @@ Found ${result.count} new suggestions based on legal precedents.`);
       borderRadius: "4px",
       fontSize: "11px",
       fontWeight: 700
-    } }, precedentLabel), /* @__PURE__ */ import_react10.default.createElement("span", { style: {
+    } }, precedentLabel), s.legal_element && /* @__PURE__ */ import_react10.default.createElement("span", { style: {
       padding: "3px 6px",
       background: "#1a1d24",
       borderRadius: "3px",
       fontSize: "10px",
       color: "#8b92a8",
-      textTransform: "uppercase"
-    } }, (s.legal_element || "").replace(/_/g, " ")), /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "12px", color: "#6b7280", marginLeft: "auto" } }, Math.round((s.strength || 0) * 100), "%")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "13px", marginBottom: "8px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontWeight: 600 } }, s.source_title || s.source_id, /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontWeight: 400, color: "#8b92a8", marginLeft: "6px", fontSize: "12px" } }, s.source_date ? new Date(s.source_date).toLocaleDateString() : "")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#6b7280", fontSize: "12px", margin: "2px 0", paddingLeft: "8px" } }, "\u2014 ", s.days_between != null ? `${s.days_between} days` : "?", " \u2192"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontWeight: 600 } }, s.target_title || s.target_id, /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontWeight: 400, color: "#8b92a8", marginLeft: "6px", fontSize: "12px" } }, s.target_date ? new Date(s.target_date).toLocaleDateString() : ""))), /* @__PURE__ */ import_react10.default.createElement("div", { style: {
+      textTransform: "uppercase",
+      letterSpacing: "0.04em"
+    } }, s.legal_element.replace(/_/g, " ")), /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "12px", color: "#6b7280", marginLeft: "auto" } }, Math.round((s.strength || 0) * 100), "%")), (() => {
+      const srcDate = s.source_date ? new Date(s.source_date) : null;
+      const tgtDate = s.target_date ? new Date(s.target_date) : null;
+      const reversed = srcDate && tgtDate && srcDate > tgtDate;
+      const fTitle = reversed ? s.target_title || s.target_id : s.source_title || s.source_id;
+      const fDate = reversed ? s.target_date : s.source_date;
+      const sTitle = reversed ? s.source_title || s.source_id : s.target_title || s.target_id;
+      const sDate = reversed ? s.source_date : s.target_date;
+      const absDays = s.days_between != null ? Math.abs(s.days_between) : null;
+      return /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "13px", marginBottom: "8px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontWeight: 600 } }, fTitle, /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontWeight: 400, color: "#8b92a8", marginLeft: "6px", fontSize: "12px" } }, fDate ? new Date(fDate).toLocaleDateString() : "")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#6b7280", fontSize: "12px", margin: "2px 0", paddingLeft: "8px" } }, "\u2014 ", absDays != null ? `${absDays} days` : "?", " \u2192"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontWeight: 600 } }, sTitle, /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontWeight: 400, color: "#8b92a8", marginLeft: "6px", fontSize: "12px" } }, sDate ? new Date(sDate).toLocaleDateString() : "")));
+    })(), /* @__PURE__ */ import_react10.default.createElement("div", { style: {
       fontSize: "12px",
       color: "#d1d5db",
       padding: "8px 10px",
@@ -17445,11 +17486,45 @@ Found ${result.count} new suggestions based on legal precedents.`);
       "Dismiss"
     )));
   }
-  function EditApproveModal({ suggestion, onApprove, onClose }) {
+  function recalcStrength(newType, daysBetween) {
+    const d = daysBetween ?? 0;
+    switch (newType) {
+      case "retaliation_chain":
+      case "whistleblower_retaliation":
+      case "retaliatory_harassment":
+      case "retaliatory_harassment_pattern":
+      case "pay_retaliation_chain":
+        if (d <= 7) return 1;
+        if (d <= 14) return 0.9;
+        if (d <= 21) return 0.8;
+        if (d <= 30) return 0.7;
+        return 0.5;
+      case "temporal_cluster":
+        return Math.max(0.1, parseFloat((1 - d / 14).toFixed(2)));
+      case "actor_continuity":
+      case "supervisor_pattern":
+      case "supervisor_liability":
+        return 0.7;
+      case "escalation":
+      case "hostile_environment":
+      case "sexual_harassment_pattern":
+      case "continuing_violation":
+        return 0.65;
+      case "convincing_mosaic":
+      case "employer_notice":
+        return 0.6;
+      default:
+        return 0.6;
+    }
+  }
+  function EditApproveModal({ suggestion, events = [], onApprove, onClose }) {
     const [connectionType, setConnectionType] = (0, import_react10.useState)(suggestion.connection_type);
     const [strength, setStrength] = (0, import_react10.useState)(suggestion.strength || 0.5);
     const [description, setDescription] = (0, import_react10.useState)(suggestion.description || "");
+    const [sourceId, setSourceId] = (0, import_react10.useState)(suggestion.source_id);
+    const [targetId, setTargetId] = (0, import_react10.useState)(suggestion.target_id);
     const precedentLabel = PRECEDENT_LABELS[suggestion.precedent_key] || suggestion.precedent_key;
+    const sortedEvents = [...events].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     return /* @__PURE__ */ import_react10.default.createElement("div", { style: {
       position: "fixed",
       top: 0,
@@ -17475,7 +17550,39 @@ Found ${result.count} new suggestions based on legal precedents.`);
       color: "#6b7280",
       fontSize: "18px",
       cursor: "pointer"
-    } }, "x")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "16px", fontSize: "13px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#8b92a8", marginBottom: "4px" } }, "Source"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontWeight: 600 } }, suggestion.source_title || suggestion.source_id), /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#8b92a8", fontSize: "12px" } }, suggestion.source_date ? new Date(suggestion.source_date).toLocaleDateString() : ""), /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#6b7280", textAlign: "center", margin: "8px 0" } }, suggestion.days_between != null ? `${suggestion.days_between} days` : "", " \u2193"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#8b92a8", marginBottom: "4px" } }, "Target"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontWeight: 600 } }, suggestion.target_title || suggestion.target_id), /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#8b92a8", fontSize: "12px" } }, suggestion.target_date ? new Date(suggestion.target_date).toLocaleDateString() : "")), /* @__PURE__ */ import_react10.default.createElement("div", { style: {
+    } }, "x")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "16px", fontSize: "13px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "8px" } }, /* @__PURE__ */ import_react10.default.createElement("label", { style: { display: "block", fontSize: "10px", color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "3px" } }, "Triggering Event"), /* @__PURE__ */ import_react10.default.createElement(
+      "select",
+      {
+        value: sourceId,
+        onChange: (e) => setSourceId(e.target.value),
+        style: {
+          width: "100%",
+          padding: "8px",
+          background: "#1a1d24",
+          border: "1px solid #3d4450",
+          borderRadius: "4px",
+          color: "#fff",
+          fontSize: "12px"
+        }
+      },
+      sortedEvents.map((ev) => /* @__PURE__ */ import_react10.default.createElement("option", { key: ev.id, value: ev.id }, ev.date ? new Date(ev.date).toLocaleDateString() + " \u2014 " : "", ev.title || ev.id))
+    )), /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#6b7280", textAlign: "center", margin: "4px 0", fontSize: "12px" } }, "\u2193"), /* @__PURE__ */ import_react10.default.createElement("div", null, /* @__PURE__ */ import_react10.default.createElement("label", { style: { display: "block", fontSize: "10px", color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "3px" } }, "Resulting Action"), /* @__PURE__ */ import_react10.default.createElement(
+      "select",
+      {
+        value: targetId,
+        onChange: (e) => setTargetId(e.target.value),
+        style: {
+          width: "100%",
+          padding: "8px",
+          background: "#1a1d24",
+          border: "1px solid #3d4450",
+          borderRadius: "4px",
+          color: "#fff",
+          fontSize: "12px"
+        }
+      },
+      sortedEvents.map((ev) => /* @__PURE__ */ import_react10.default.createElement("option", { key: ev.id, value: ev.id }, ev.date ? new Date(ev.date).toLocaleDateString() + " \u2014 " : "", ev.title || ev.id))
+    ))), /* @__PURE__ */ import_react10.default.createElement("div", { style: {
       padding: "8px 12px",
       background: "#1a1d24",
       borderRadius: "6px",
@@ -17486,7 +17593,11 @@ Found ${result.count} new suggestions based on legal precedents.`);
       "select",
       {
         value: connectionType,
-        onChange: (e) => setConnectionType(e.target.value),
+        onChange: (e) => {
+          const newType = e.target.value;
+          setConnectionType(newType);
+          setStrength(recalcStrength(newType, suggestion.days_between));
+        },
         style: {
           width: "100%",
           padding: "8px",
@@ -17497,7 +17608,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
           fontSize: "13px"
         }
       },
-      CONNECTION_TYPES.map((t) => /* @__PURE__ */ import_react10.default.createElement("option", { key: t, value: t }, t.replace(/_/g, " ")))
+      CONNECTION_TYPES.map((t) => /* @__PURE__ */ import_react10.default.createElement("option", { key: t, value: t }, ctLabel(t)))
     )), /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "12px" } }, /* @__PURE__ */ import_react10.default.createElement("label", { style: { display: "block", fontSize: "12px", color: "#8b92a8", marginBottom: "4px" } }, "Strength: ", Math.round(strength * 100), "%"), /* @__PURE__ */ import_react10.default.createElement(
       "input",
       {
@@ -17538,7 +17649,13 @@ Found ${result.count} new suggestions based on legal precedents.`);
     } }, "Cancel"), /* @__PURE__ */ import_react10.default.createElement(
       "button",
       {
-        onClick: () => onApprove({ connection_type: connectionType, strength, description }),
+        onClick: () => onApprove({
+          connection_type: connectionType,
+          strength,
+          description,
+          source_id: sourceId !== suggestion.source_id ? sourceId : void 0,
+          target_id: targetId !== suggestion.target_id ? targetId : void 0
+        }),
         style: {
           padding: "8px 16px",
           background: "#059669",
@@ -17552,10 +17669,13 @@ Found ${result.count} new suggestions based on legal precedents.`);
       "Approve"
     ))));
   }
-  function EditConnectionModal({ connection, onSave, onClose }) {
+  function EditConnectionModal({ connection, events = [], onSave, onClose }) {
     const [connectionType, setConnectionType] = (0, import_react10.useState)(connection.connection_type);
     const [strength, setStrength] = (0, import_react10.useState)(connection.strength || 0.5);
     const [description, setDescription] = (0, import_react10.useState)(connection.description || "");
+    const [sourceId, setSourceId] = (0, import_react10.useState)(connection.source_id);
+    const [targetId, setTargetId] = (0, import_react10.useState)(connection.target_id);
+    const sortedEvents = [...events].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     return /* @__PURE__ */ import_react10.default.createElement("div", { style: {
       position: "fixed",
       top: 0,
@@ -17579,11 +17699,47 @@ Found ${result.count} new suggestions based on legal precedents.`);
       color: "#6b7280",
       fontSize: "18px",
       cursor: "pointer"
-    } }, "x")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "16px", fontSize: "13px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontWeight: 600 } }, connection.source_title || connection.source_id), /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#6b7280", textAlign: "center", margin: "4px 0" } }, "\u2193"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontWeight: 600 } }, connection.target_title || connection.target_id)), /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "12px" } }, /* @__PURE__ */ import_react10.default.createElement("label", { style: { display: "block", fontSize: "12px", color: "#8b92a8", marginBottom: "4px" } }, "Type"), /* @__PURE__ */ import_react10.default.createElement(
+    } }, "x")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "16px", fontSize: "13px" } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "8px" } }, /* @__PURE__ */ import_react10.default.createElement("label", { style: { display: "block", fontSize: "10px", color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "3px" } }, "Triggering Event"), /* @__PURE__ */ import_react10.default.createElement(
+      "select",
+      {
+        value: sourceId,
+        onChange: (e) => setSourceId(e.target.value),
+        style: {
+          width: "100%",
+          padding: "8px",
+          background: "#1a1d24",
+          border: "1px solid #3d4450",
+          borderRadius: "4px",
+          color: "#fff",
+          fontSize: "12px"
+        }
+      },
+      sortedEvents.map((ev) => /* @__PURE__ */ import_react10.default.createElement("option", { key: ev.id, value: ev.id }, ev.date ? new Date(ev.date).toLocaleDateString() + " \u2014 " : "", ev.title || ev.id))
+    )), /* @__PURE__ */ import_react10.default.createElement("div", { style: { color: "#6b7280", textAlign: "center", margin: "4px 0", fontSize: "12px" } }, "\u2193"), /* @__PURE__ */ import_react10.default.createElement("div", null, /* @__PURE__ */ import_react10.default.createElement("label", { style: { display: "block", fontSize: "10px", color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "3px" } }, "Resulting Action"), /* @__PURE__ */ import_react10.default.createElement(
+      "select",
+      {
+        value: targetId,
+        onChange: (e) => setTargetId(e.target.value),
+        style: {
+          width: "100%",
+          padding: "8px",
+          background: "#1a1d24",
+          border: "1px solid #3d4450",
+          borderRadius: "4px",
+          color: "#fff",
+          fontSize: "12px"
+        }
+      },
+      sortedEvents.map((ev) => /* @__PURE__ */ import_react10.default.createElement("option", { key: ev.id, value: ev.id }, ev.date ? new Date(ev.date).toLocaleDateString() + " \u2014 " : "", ev.title || ev.id))
+    ))), /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "12px" } }, /* @__PURE__ */ import_react10.default.createElement("label", { style: { display: "block", fontSize: "12px", color: "#8b92a8", marginBottom: "4px" } }, "Type"), /* @__PURE__ */ import_react10.default.createElement(
       "select",
       {
         value: connectionType,
-        onChange: (e) => setConnectionType(e.target.value),
+        onChange: (e) => {
+          const newType = e.target.value;
+          setConnectionType(newType);
+          setStrength(recalcStrength(newType, connection.days_between));
+        },
         style: {
           width: "100%",
           padding: "8px",
@@ -17594,7 +17750,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
           fontSize: "13px"
         }
       },
-      CONNECTION_TYPES.map((t) => /* @__PURE__ */ import_react10.default.createElement("option", { key: t, value: t }, t.replace(/_/g, " ")))
+      CONNECTION_TYPES.map((t) => /* @__PURE__ */ import_react10.default.createElement("option", { key: t, value: t }, ctLabel(t)))
     )), /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginBottom: "12px" } }, /* @__PURE__ */ import_react10.default.createElement("label", { style: { display: "block", fontSize: "12px", color: "#8b92a8", marginBottom: "4px" } }, "Strength: ", Math.round(strength * 100), "%"), /* @__PURE__ */ import_react10.default.createElement(
       "input",
       {
@@ -17635,7 +17791,13 @@ Found ${result.count} new suggestions based on legal precedents.`);
     } }, "Cancel"), /* @__PURE__ */ import_react10.default.createElement(
       "button",
       {
-        onClick: () => onSave({ connection_type: connectionType, strength, description }),
+        onClick: () => onSave({
+          connection_type: connectionType,
+          strength,
+          description,
+          source_id: sourceId !== connection.source_id ? sourceId : void 0,
+          target_id: targetId !== connection.target_id ? targetId : void 0
+        }),
         style: {
           padding: "8px 16px",
           background: "#3b82f6",
@@ -17649,7 +17811,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
       "Save"
     ))));
   }
-  var import_react10, PRECEDENT_COLORS, PRECEDENT_LABELS, CONNECTION_TYPE_COLORS, CONNECTION_TYPES;
+  var import_react10, PRECEDENT_COLORS, PRECEDENT_LABELS, CONNECTION_TYPE_COLORS, CONNECTION_TYPES, CONNECTION_TYPE_LABELS;
   var init_Connections = __esm({
     "src/renderer/pages/Connections.jsx"() {
       import_react10 = __toESM(require_react());
@@ -17725,6 +17887,27 @@ Found ${result.count} new suggestions based on legal precedents.`);
         "fcra_discrimination",
         "discrimination_some_harm"
       ];
+      CONNECTION_TYPE_LABELS = {
+        retaliation_chain: { label: "Retaliation Chain", desc: "Sequence of adverse actions following protected activity, establishing causation" },
+        escalation: { label: "Escalation Pattern", desc: "Progressive intensification of adverse treatment over time" },
+        temporal_cluster: { label: "Temporal Cluster", desc: "Events concentrated in a short time window, suggesting coordinated conduct" },
+        actor_continuity: { label: "Same-Actor Pattern", desc: "Repeated involvement of the same individual across multiple incidents" },
+        hostile_environment: { label: "Hostile Work Environment", desc: "Pattern of conduct creating an abusive or intimidating workplace" },
+        continuing_violation: { label: "Continuing Violation", desc: "Ongoing series of related acts treated as a single unlawful violation (Morgan)" },
+        employer_notice: { label: "Employer Notice", desc: "Evidence the employer knew or should have known of misconduct and failed to act" },
+        convincing_mosaic: { label: "Convincing Mosaic", desc: "Cumulative circumstantial pattern establishing discriminatory intent (Lewis v. Union City)" },
+        whistleblower_retaliation: { label: "Whistleblower Retaliation", desc: "Adverse action following a protected disclosure or complaint" },
+        quid_pro_quo: { label: "Quid Pro Quo", desc: "Employment benefit conditioned on submission to unwelcome conduct" },
+        sexual_harassment_pattern: { label: "Sexual Harassment Pattern", desc: "Repeated unwelcome sexual conduct creating a hostile environment" },
+        pay_discrimination: { label: "Pay Discrimination", desc: "Unequal compensation based on a protected characteristic" },
+        pay_retaliation_chain: { label: "Pay Retaliation", desc: "Compensation reduced or withheld following protected activity" },
+        supervisor_liability: { label: "Supervisor Liability", desc: "Employer vicariously liable for supervisor's tangible employment actions (Vance)" },
+        supervisor_pattern: { label: "Supervisor Pattern", desc: "Systematic conduct by supervisors establishing employer liability" },
+        retaliatory_harassment: { label: "Retaliatory Harassment", desc: "Harassment directed at an employee following protected activity" },
+        retaliatory_harassment_pattern: { label: "Retaliatory Harassment Pattern", desc: "Systemic post-complaint harassment campaign establishing retaliatory motive" },
+        fcra_discrimination: { label: "FCRA Discrimination", desc: "Discriminatory or retaliatory use of consumer report information" },
+        discrimination_some_harm: { label: "Discriminatory Harm", desc: "Adverse action causing material harm based on a protected characteristic (Muldrow)" }
+      };
     }
   });
 
@@ -17739,11 +17922,6 @@ Found ${result.count} new suggestions based on legal precedents.`);
     if (score >= 7) return "#16A34A";
     if (score >= 4) return "#F59E0B";
     return "#DC2626";
-  }
-  function elementIcon(status) {
-    if (status === "satisfied") return { icon: "\u2713", color: "#16A34A" };
-    if (status === "partial") return { icon: "\u26A0", color: "#F59E0B" };
-    return { icon: "\u2717", color: "#DC2626" };
   }
   function classificationLabel(cls) {
     const map = {
@@ -17767,11 +17945,11 @@ Found ${result.count} new suggestions based on legal precedents.`);
       return isoStr;
     }
   }
-  function LawyerBrief() {
+  function LawyerBrief({ onNavigateToThread, onNavigateToConnections }) {
     const [brief, setBrief] = (0, import_react11.useState)(null);
     const [isLoading, setIsLoading] = (0, import_react11.useState)(false);
     const [isGenerating, setIsGenerating] = (0, import_react11.useState)(false);
-    const [activeTab, setActiveTab] = (0, import_react11.useState)("executive");
+    const [activeTab, setActiveTab] = (0, import_react11.useState)("summary");
     const [progress, setProgress] = (0, import_react11.useState)("");
     const [genError, setGenError] = (0, import_react11.useState)(null);
     const [versions, setVersions] = (0, import_react11.useState)([]);
@@ -17787,7 +17965,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
         const res = await window.api.brief.latest();
         if (res.success && res.brief) setBrief(res.brief);
       } catch (e) {
-        console.error("[LawyerBrief] loadLatest error:", e);
+        console.error("[CaseOverview] loadLatest error:", e);
       }
       setIsLoading(false);
     }
@@ -17807,12 +17985,12 @@ Found ${result.count} new suggestions based on legal precedents.`);
         const res = await window.api.brief.generate();
         if (res.success) {
           setBrief(res.brief);
-          setActiveTab("executive");
+          setActiveTab("summary");
         } else {
           setGenError(res.error || "Generation failed \u2014 check that a case is open and try again.");
         }
       } catch (e) {
-        setGenError(e?.message || "Unexpected error generating brief.");
+        setGenError(e?.message || "Unexpected error generating overview.");
       }
       setProgress("");
       setIsGenerating(false);
@@ -17837,17 +18015,17 @@ Found ${result.count} new suggestions based on legal precedents.`);
       setTimeout(() => setExportStatus(""), 2500);
     }
     if (isLoading) {
-      return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.center }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.spinner }), /* @__PURE__ */ import_react11.default.createElement("p", { style: s.muted }, "Loading brief..."));
+      return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.center }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.spinner }), /* @__PURE__ */ import_react11.default.createElement("p", { style: s.muted }, "Loading overview..."));
     }
-    return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.page }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.header }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.headerLeft }, /* @__PURE__ */ import_react11.default.createElement("span", { style: s.headerIcon }, "\u{1F4C4}"), /* @__PURE__ */ import_react11.default.createElement("div", null, /* @__PURE__ */ import_react11.default.createElement("h1", { style: s.title }, "Lawyer Brief"), /* @__PURE__ */ import_react11.default.createElement("p", { style: s.subtitle }, "Auto-generated case overview for attorney review"))), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.headerRight }, brief?.isStale && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.staleBanner }, "\u26A0\uFE0F Case updated since last brief"), brief && /* @__PURE__ */ import_react11.default.createElement(import_react11.default.Fragment, null, /* @__PURE__ */ import_react11.default.createElement("button", { style: s.btnSecondary, onClick: handleLoadVersions }, "\u{1F550} History"), /* @__PURE__ */ import_react11.default.createElement("button", { style: s.btnSecondary, onClick: handleExportMarkdown }, "\u2193 Markdown"), /* @__PURE__ */ import_react11.default.createElement("button", { style: s.btnSecondary, onClick: handleExportHTML }, "\u2193 HTML")), exportStatus && /* @__PURE__ */ import_react11.default.createElement("span", { style: s.exportStatus }, exportStatus), /* @__PURE__ */ import_react11.default.createElement(
+    return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.page }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.header }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.headerLeft }, /* @__PURE__ */ import_react11.default.createElement("span", { style: s.headerIcon }, "\u2696\uFE0F"), /* @__PURE__ */ import_react11.default.createElement("div", null, /* @__PURE__ */ import_react11.default.createElement("h1", { style: s.title }, "Case Overview"), /* @__PURE__ */ import_react11.default.createElement("p", { style: s.subtitle }, "Auto-generated case summary for attorney review"))), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.headerRight }, brief?.isStale && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.staleBanner }, "\u26A0\uFE0F Case updated since last overview"), brief && /* @__PURE__ */ import_react11.default.createElement(import_react11.default.Fragment, null, /* @__PURE__ */ import_react11.default.createElement("button", { style: s.btnSecondary, onClick: handleLoadVersions }, "\u{1F550} History"), /* @__PURE__ */ import_react11.default.createElement("button", { style: s.btnSecondary, onClick: handleExportMarkdown }, "\u2193 Markdown"), /* @__PURE__ */ import_react11.default.createElement("button", { style: s.btnSecondary, onClick: handleExportHTML }, "\u2193 HTML")), exportStatus && /* @__PURE__ */ import_react11.default.createElement("span", { style: s.exportStatus }, exportStatus), /* @__PURE__ */ import_react11.default.createElement(
       "button",
       {
         style: { ...s.btnPrimary, opacity: isGenerating ? 0.7 : 1 },
         onClick: handleGenerate,
         disabled: isGenerating
       },
-      isGenerating ? "\u23F3 Generating..." : brief ? "\u{1F504} Regenerate" : "\u2728 Generate Brief"
-    ))), isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.progressBar }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.progressInner }), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.progressText }, progress)), genError && !isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.errorBanner }, /* @__PURE__ */ import_react11.default.createElement("span", null, "\u26A0 ", genError), /* @__PURE__ */ import_react11.default.createElement("button", { style: s.errorDismiss, onClick: () => setGenError(null) }, "\u2715")), showVersions && versions.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.versionDrawer }, /* @__PURE__ */ import_react11.default.createElement("strong", { style: { color: colors.textPrimary } }, "Previous Briefs"), versions.map((v) => /* @__PURE__ */ import_react11.default.createElement("div", { key: v.id, style: s.versionRow }, /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: colors.textSecondary } }, formatDate2(v.generated_at)), /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: strengthColor(v.strength_score || 0) } }, (v.strength_score || 0).toFixed(1), "/10")))), !brief && !isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.empty }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.emptyIcon }, "\u{1F4C4}"), /* @__PURE__ */ import_react11.default.createElement("h2", { style: s.emptyTitle }, "No brief yet"), /* @__PURE__ */ import_react11.default.createElement("p", { style: s.emptyText }, "Click ", /* @__PURE__ */ import_react11.default.createElement("strong", null, "Generate Brief"), " to auto-build your case overview from all evidence, events, and actors.")), brief && !isGenerating && /* @__PURE__ */ import_react11.default.createElement(import_react11.default.Fragment, null, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.tabBar }, TABS.map((tab) => /* @__PURE__ */ import_react11.default.createElement(
+      isGenerating ? "\u23F3 Generating..." : brief ? "\u{1F504} Regenerate" : "\u2728 Generate Overview"
+    ))), isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.progressBar }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.progressInner }), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.progressText }, progress)), genError && !isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.errorBanner }, /* @__PURE__ */ import_react11.default.createElement("span", null, "\u26A0 ", genError), /* @__PURE__ */ import_react11.default.createElement("button", { style: s.errorDismiss, onClick: () => setGenError(null) }, "\u2715")), showVersions && versions.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.versionDrawer }, /* @__PURE__ */ import_react11.default.createElement("strong", { style: { color: colors.textPrimary } }, "Previous Overviews"), versions.map((v) => /* @__PURE__ */ import_react11.default.createElement("div", { key: v.id, style: s.versionRow }, /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: colors.textSecondary } }, formatDate2(v.generated_at)), /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: strengthColor(v.strength_score || 0) } }, (v.strength_score || 0).toFixed(1), "/10")))), !brief && !isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.empty }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.emptyIcon }, "\u2696\uFE0F"), /* @__PURE__ */ import_react11.default.createElement("h2", { style: s.emptyTitle }, "No overview yet"), /* @__PURE__ */ import_react11.default.createElement("p", { style: s.emptyText }, "Click ", /* @__PURE__ */ import_react11.default.createElement("strong", null, "Generate Overview"), " to auto-build your case summary from all evidence, events, and actors.")), brief && !isGenerating && /* @__PURE__ */ import_react11.default.createElement(import_react11.default.Fragment, null, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.tabBar }, TABS.map((tab) => /* @__PURE__ */ import_react11.default.createElement(
       "button",
       {
         key: tab.id,
@@ -17856,51 +18034,193 @@ Found ${result.count} new suggestions based on legal precedents.`);
       },
       tab.label,
       tab.id === "gaps" && brief.redFlags?.length > 0 && /* @__PURE__ */ import_react11.default.createElement("span", { style: s.badge }, brief.redFlags.length)
-    ))), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.content }, activeTab === "executive" && /* @__PURE__ */ import_react11.default.createElement(ExecutiveSummary, { brief }), activeTab === "threads" && /* @__PURE__ */ import_react11.default.createElement(ThreadBreakdown, { brief }), activeTab === "timeline" && /* @__PURE__ */ import_react11.default.createElement(TimelineView, { brief }), activeTab === "actors" && /* @__PURE__ */ import_react11.default.createElement(ActorSummary, { brief }), activeTab === "gaps" && /* @__PURE__ */ import_react11.default.createElement(RedFlags, { brief }))));
+    ))), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.content }, activeTab === "summary" && /* @__PURE__ */ import_react11.default.createElement(CaseSummary, { brief, onNavigateToThread }), activeTab === "causal" && /* @__PURE__ */ import_react11.default.createElement(CausalLinks, { onNavigateToConnections }), activeTab === "actors" && /* @__PURE__ */ import_react11.default.createElement(ActorSummary, { brief }), activeTab === "gaps" && /* @__PURE__ */ import_react11.default.createElement(RedFlags, { brief }))));
   }
-  function ExecutiveSummary({ brief }) {
+  function CaseSummary({ brief, onNavigateToThread }) {
     const ex = brief.executive || {};
-    const sl = strengthLabel(ex.strength || 0);
+    const score = ex.strength || 0;
+    const sl = strengthLabel(score);
+    const sc = strengthColor(score);
     const s = getStyles5();
-    return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.section }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.strengthHero }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.strengthScore, color: strengthColor(ex.strength || 0) } }, (ex.strength || 0).toFixed(1), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.strengthDenom }, "/10")), /* @__PURE__ */ import_react11.default.createElement("div", null, /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.strengthLabel, color: strengthColor(ex.strength || 0) } }, sl.icon, " ", sl.text, " Case"), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.strengthSub }, "Overall strength score"))), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.statsRow }, /* @__PURE__ */ import_react11.default.createElement(StatCard2, { label: "Case Type", value: ex.caseType || "Undetermined", wide: true }), /* @__PURE__ */ import_react11.default.createElement(StatCard2, { label: "Time Span", value: ex.timeSpan || "No dates" }), /* @__PURE__ */ import_react11.default.createElement(StatCard2, { label: "Duration", value: ex.timeSpanDays > 0 ? `${ex.timeSpanDays} days` : "\u2014" }), /* @__PURE__ */ import_react11.default.createElement(StatCard2, { label: "Documents", value: ex.counts?.documents ?? 0 }), /* @__PURE__ */ import_react11.default.createElement(StatCard2, { label: "Events", value: ex.counts?.events ?? 0 }), /* @__PURE__ */ import_react11.default.createElement(StatCard2, { label: "Actors", value: ex.counts?.actors ?? 0 }), /* @__PURE__ */ import_react11.default.createElement(StatCard2, { label: "Active Claims", value: ex.counts?.activeThreads ?? 0 })), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.meterWrap }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.meter, width: `${(ex.strength || 0) / 10 * 100}%`, background: strengthColor(ex.strength || 0) } })), brief.generatedAt && /* @__PURE__ */ import_react11.default.createElement("p", { style: s.metaLine }, "Generated ", formatDate2(brief.generatedAt), brief.isStale && /* @__PURE__ */ import_react11.default.createElement("span", { style: s.staleTag }, " \xB7 Outdated")));
-  }
-  function StatCard2({ label, value, wide }) {
-    const s = getStyles5();
-    return /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.statCard, ...wide ? s.statCardWide : {} } }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.statValue }, value), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.statLabel }, label));
-  }
-  function ThreadBreakdown({ brief }) {
-    const s = getStyles5();
-    const threads = brief.threads || [];
-    if (threads.length === 0) {
-      return /* @__PURE__ */ import_react11.default.createElement(EmptyState, { text: "No active legal threads detected. Tag events with claim types to populate threads." });
-    }
-    return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.section }, threads.map((thread) => /* @__PURE__ */ import_react11.default.createElement("div", { key: thread.id, style: s.threadCard }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.threadHeader }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: spacing.sm } }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.threadDot, background: thread.color } }), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.threadName }, "\u{1F9F5} ", thread.name)), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.threadMeta }, /* @__PURE__ */ import_react11.default.createElement("span", { style: s.threadCount }, thread.eventCount, " events \xB7 ", thread.docCount, " docs"), /* @__PURE__ */ import_react11.default.createElement("span", { style: { ...s.threadStrength, color: strengthColor(thread.strength) } }, thread.strength, "/10"))), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.meterWrapSm }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.meterSm, width: `${thread.strength / 10 * 100}%`, background: thread.color } })), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.elementGrid }, (thread.elements || []).map((el) => {
-      const ei = elementIcon(el.status);
-      return /* @__PURE__ */ import_react11.default.createElement("div", { key: el.key, style: s.elementRow }, /* @__PURE__ */ import_react11.default.createElement("span", { style: { ...s.elementIcon, color: ei.color } }, ei.icon), /* @__PURE__ */ import_react11.default.createElement("span", { style: { ...s.elementLabel, color: el.status === "missing" ? colors.textMuted : colors.textPrimary } }, el.label));
-    })), thread.precedents?.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.precedentsRow }, /* @__PURE__ */ import_react11.default.createElement("span", { style: s.precedentsLabel }, "Precedents:"), thread.precedents.map((p) => /* @__PURE__ */ import_react11.default.createElement("span", { key: p, style: s.precedentBadge }, p))), thread.keyEvidence?.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.evidenceSection }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.sectionSubLabel }, "Key Evidence"), thread.keyEvidence.map((e) => /* @__PURE__ */ import_react11.default.createElement("div", { key: e.id, style: s.evidenceRow }, /* @__PURE__ */ import_react11.default.createElement("span", { style: s.evidenceFile }, e.filename || e.id), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.evidenceDate }, e.date ? formatDate2(e.date) : "undated")))), thread.gaps?.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.gapsSection }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.sectionSubLabel }, "Gaps"), thread.gaps.map((g, i) => /* @__PURE__ */ import_react11.default.createElement("div", { key: i, style: s.gapRow }, "\u26A0 ", g))))));
-  }
-  function TimelineView({ brief }) {
-    const s = getStyles5();
-    const tl = brief.timeline || {};
-    const moments = tl.criticalMoments || [];
-    const gaps = tl.gaps || [];
-    if (moments.length === 0 && gaps.length === 0) {
-      return /* @__PURE__ */ import_react11.default.createElement(EmptyState, { text: "No dated events found. Add dates to events to see the timeline." });
-    }
-    const items = [];
-    let gapIdx = 0;
-    for (let i = 0; i < moments.length; i++) {
-      items.push({ type: "event", data: moments[i] });
-      while (gapIdx < gaps.length && new Date(gaps[gapIdx].from) <= new Date(moments[i].date)) {
-        if (i === moments.length - 1 || new Date(gaps[gapIdx].to) <= new Date(moments[i + 1]?.date)) {
-          items.push({ type: "gap", data: gaps[gapIdx] });
-          gapIdx++;
-        } else {
-          break;
-        }
+    const threads = (brief.threads || []).filter((t) => t.eventCount > 0);
+    const paragraphs = buildNarrativeParagraphs(ex, threads, brief);
+    const ringSize = 140;
+    const strokeW = 10;
+    const ringR = (ringSize - strokeW) / 2;
+    const circumference = 2 * Math.PI * ringR;
+    const dashOffset = circumference - score / 10 * circumference;
+    const stats = [
+      { label: "Time Span", value: ex.timeSpan || "No dates" },
+      { label: "Duration", value: ex.timeSpanDays > 0 ? `${ex.timeSpanDays} days` : "\u2014" },
+      { label: "Documents", value: ex.counts?.documents ?? 0 },
+      { label: "Events", value: ex.counts?.events ?? 0 },
+      { label: "Actors", value: ex.counts?.actors ?? 0 }
+    ];
+    return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.section }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.strengthHero }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { position: "relative", width: ringSize, height: ringSize, flexShrink: 0 } }, /* @__PURE__ */ import_react11.default.createElement("svg", { width: ringSize, height: ringSize, style: { transform: "rotate(-90deg)" } }, /* @__PURE__ */ import_react11.default.createElement(
+      "circle",
+      {
+        cx: ringSize / 2,
+        cy: ringSize / 2,
+        r: ringR,
+        fill: "none",
+        stroke: colors.border,
+        strokeWidth: strokeW,
+        opacity: 0.35
       }
+    ), /* @__PURE__ */ import_react11.default.createElement(
+      "circle",
+      {
+        cx: ringSize / 2,
+        cy: ringSize / 2,
+        r: ringR,
+        fill: "none",
+        stroke: sc,
+        strokeWidth: strokeW,
+        strokeDasharray: circumference,
+        strokeDashoffset: dashOffset,
+        strokeLinecap: "round",
+        style: { transition: "stroke-dashoffset 1s ease" }
+      }
+    )), /* @__PURE__ */ import_react11.default.createElement("div", { style: { position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" } }, /* @__PURE__ */ import_react11.default.createElement("span", { style: { fontSize: 36, fontWeight: 800, color: sc, lineHeight: 1, letterSpacing: "-1px" } }, score.toFixed(1)), /* @__PURE__ */ import_react11.default.createElement("span", { style: { fontSize: 12, color: colors.textMuted, marginTop: 2 } }, "/10"))), /* @__PURE__ */ import_react11.default.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { fontSize: 22, fontWeight: 700, color: sc } }, sl.text, " Case"), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.heroCaseType }, ex.caseType || "Undetermined"), /* @__PURE__ */ import_react11.default.createElement("div", { style: { fontSize: 12, color: colors.textMuted, marginTop: 4 } }, threads.length, " active claim", threads.length !== 1 ? "s" : "", " identified"))), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.statsBar }, stats.map((stat, i) => /* @__PURE__ */ import_react11.default.createElement(import_react11.default.Fragment, { key: i }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.statItem }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.statValue }, stat.value), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.statLabel }, stat.label)), i < stats.length - 1 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.statDivider })))), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.whyCard }, /* @__PURE__ */ import_react11.default.createElement("h2", { style: s.whyHeading }, "Why Are We Here"), paragraphs.map((p, i) => /* @__PURE__ */ import_react11.default.createElement("p", { key: i, style: s.whyPara }, p))), threads.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimsSection }, /* @__PURE__ */ import_react11.default.createElement("h3", { style: s.subHeading }, "Active Claims"), threads.map((thread) => {
+      const tc = strengthColor(thread.strength);
+      return /* @__PURE__ */ import_react11.default.createElement(
+        "div",
+        {
+          key: thread.id,
+          style: { ...s.claimRow, borderLeft: `3px solid ${thread.color}` },
+          onClick: () => onNavigateToThread?.(thread.id),
+          title: "Click to open this claim in Threads"
+        },
+        /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimLeft }, /* @__PURE__ */ import_react11.default.createElement("div", null, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimName }, thread.name), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimMeta }, thread.eventCount, " events \xB7 ", thread.docCount, " docs"))),
+        /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimRight }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimMeterWrap }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.claimMeter, width: `${thread.strength / 10 * 100}%`, background: tc } })), /* @__PURE__ */ import_react11.default.createElement("span", { style: { ...s.claimScore, color: tc } }, thread.strength, "/10"), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.viewArrow }, "View \\u2192"))
+      );
+    })), brief.generatedAt && /* @__PURE__ */ import_react11.default.createElement("p", { style: s.metaLine }, "Generated ", formatDate2(brief.generatedAt), brief.isStale && /* @__PURE__ */ import_react11.default.createElement("span", { style: s.staleTag }, " \\u00b7 Outdated")));
+  }
+  function buildNarrativeParagraphs(ex, threads, brief) {
+    const paras = [];
+    const counts = ex.counts || {};
+    const strength = ex.strength || 0;
+    if (counts.events > 0 || threads.length > 0) {
+      let p1 = "This employment matter";
+      if (ex.timeSpan && ex.timeSpan !== "No dated events yet") {
+        p1 += ` spans ${ex.timeSpan}`;
+        if (ex.timeSpanDays > 0) p1 += ` (${ex.timeSpanDays} days)`;
+      }
+      p1 += ". The record contains";
+      const parts = [];
+      if (counts.events > 0) parts.push(`${counts.events} documented event${counts.events !== 1 ? "s" : ""}`);
+      if (counts.documents > 0) parts.push(`${counts.documents} supporting document${counts.documents !== 1 ? "s" : ""}`);
+      if (counts.actors > 0) parts.push(`${counts.actors} named individual${counts.actors !== 1 ? "s" : ""}`);
+      p1 += " " + parts.join(", ") + ".";
+      paras.push(p1);
     }
-    return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.section }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.timelineSpan }, /* @__PURE__ */ import_react11.default.createElement("span", { style: s.timelineDate }, tl.start ? formatDate2(tl.start) : "?"), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.timelineTrack }), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.timelineDate }, tl.end ? formatDate2(tl.end) : "?")), gaps.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.gapSummary }, "\u26A0 ", gaps.length, " documentation gap", gaps.length > 1 ? "s" : "", " detected"), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.timelineList }, moments.map((m, i) => /* @__PURE__ */ import_react11.default.createElement("div", { key: m.id || i, style: s.timelineMoment }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.momentDot }), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.momentContent }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.momentDate }, formatDate2(m.date)), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.momentTitle }, m.title), m.tags?.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.momentTags }, m.tags.map((t) => /* @__PURE__ */ import_react11.default.createElement("span", { key: t, style: s.tagPill }, t.replace(/_/g, " ")))))))), gaps.length > 0 && /* @__PURE__ */ import_react11.default.createElement(import_react11.default.Fragment, null, /* @__PURE__ */ import_react11.default.createElement("h3", { style: s.subHeading }, "Documentation Gaps"), gaps.map((g, i) => /* @__PURE__ */ import_react11.default.createElement("div", { key: i, style: s.gapCard }, /* @__PURE__ */ import_react11.default.createElement("span", { style: s.gapIcon }, "\u{1F573}"), /* @__PURE__ */ import_react11.default.createElement("div", null, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.gapLabel }, g.label), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.gapSub }, "Missing ", g.days, " days of documentation"))))));
+    if (threads.length > 0) {
+      const sorted = [...threads].sort((a, b) => b.strength - a.strength);
+      const top = sorted[0];
+      const threadNames = sorted.map((t) => t.name);
+      let p2 = "";
+      if (threadNames.length === 1) {
+        p2 = `The record establishes a ${top.name} claim`;
+      } else {
+        const rest = threadNames.slice(0, -1).join(", ");
+        const last = threadNames[threadNames.length - 1];
+        p2 = `The record supports ${threadNames.length} concurrent claims \u2014 ${rest} and ${last}`;
+      }
+      if (top.eventCount > 1) {
+        p2 += `, with ${top.name} showing the strongest documented pattern across ${top.eventCount} events`;
+      }
+      const gaps = brief.timeline?.gaps || [];
+      if (gaps.length > 0) {
+        p2 += `. ${gaps.length} documentation gap${gaps.length > 1 ? "s" : ""} exist that may require explanation at deposition`;
+      }
+      p2 += ".";
+      paras.push(p2);
+    }
+    if (strength > 0) {
+      const redFlags = brief.redFlags || [];
+      const highFlags = redFlags.filter((f) => f.severity === "high");
+      let p3 = "";
+      if (strength >= 7) {
+        p3 = `With an overall case strength of ${strength.toFixed(1)}/10, the documented record is well-supported for filing`;
+      } else if (strength >= 4) {
+        p3 = `With an overall case strength of ${strength.toFixed(1)}/10, the record provides a moderate foundation \u2014 additional corroborating evidence would strengthen the position before filing`;
+      } else {
+        p3 = `With an overall case strength of ${strength.toFixed(1)}/10, significant evidentiary gaps remain`;
+      }
+      if (highFlags.length > 0) {
+        p3 += `. ${highFlags.length} high-severity issue${highFlags.length > 1 ? "s" : ""} require${highFlags.length === 1 ? "s" : ""} attorney review before proceeding`;
+      }
+      p3 += ".";
+      paras.push(p3);
+    }
+    if (paras.length === 0) {
+      paras.push("No case data available yet. Add events, documents, and tag them with claim types to generate the narrative summary.");
+    }
+    return paras;
+  }
+  function CausalLinks({ onNavigateToConnections }) {
+    const [connections, setConnections] = (0, import_react11.useState)([]);
+    const [loading, setLoading] = (0, import_react11.useState)(true);
+    const s = getStyles5();
+    (0, import_react11.useEffect)(() => {
+      loadConnections();
+    }, []);
+    const CAUSAL_TYPES = /* @__PURE__ */ new Set([
+      "retaliation_chain",
+      "protected_to_adverse",
+      "whistleblower_retaliation",
+      "pay_retaliation_chain",
+      "retaliatory_harassment",
+      "retaliatory_harassment_pattern",
+      "quid_pro_quo",
+      "employer_notice"
+    ]);
+    async function loadConnections() {
+      setLoading(true);
+      try {
+        const res = await window.api.connections.list();
+        if (res.success) {
+          const causal = (res.connections || []).filter(
+            (c) => c.source_type === "event" && c.target_type === "event" && CAUSAL_TYPES.has(c.connection_type) && c.source_id !== c.target_id
+          );
+          setConnections(causal);
+        }
+      } catch (e) {
+        console.error("[CausalLinks] load error:", e);
+      }
+      setLoading(false);
+    }
+    if (loading) {
+      return /* @__PURE__ */ import_react11.default.createElement("div", { style: { padding: "60px", textAlign: "center", color: colors.textMuted } }, "Loading causal links...");
+    }
+    if (connections.length === 0) {
+      return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.emptyState }, /* @__PURE__ */ import_react11.default.createElement("p", { style: s.emptyStateText }, "No causal links found. Use the Connections view to add or auto-detect links between events."));
+    }
+    const groups = {};
+    for (const c of connections) {
+      const type = c.connection_type || "general";
+      if (!groups[type]) groups[type] = [];
+      groups[type].push(c);
+    }
+    return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.section }, /* @__PURE__ */ import_react11.default.createElement("p", { style: { color: colors.textSecondary, fontSize: typography.fontSize.sm, margin: 0 } }, "Causal connections between documented events, with supporting case precedent."), onNavigateToConnections && /* @__PURE__ */ import_react11.default.createElement("div", { style: { display: "flex", justifyContent: "flex-end" } }, /* @__PURE__ */ import_react11.default.createElement(
+      "button",
+      {
+        onClick: onNavigateToConnections,
+        style: {
+          background: "none",
+          border: `1px solid ${colors.border}`,
+          borderRadius: radius.sm,
+          padding: `${spacing.xs} ${spacing.md}`,
+          fontSize: typography.fontSize.sm,
+          color: colors.textSecondary,
+          cursor: "pointer"
+        }
+      },
+      "View all in Connections \u2192"
+    )), Object.entries(groups).map(([type, conns]) => {
+      const meta = CONNECTION_PRECEDENTS[type] || CONNECTION_PRECEDENTS.general;
+      return /* @__PURE__ */ import_react11.default.createElement("div", { key: type, style: s.causalGroup }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalGroupHeader }, /* @__PURE__ */ import_react11.default.createElement("span", { style: s.causalTypeLabel }, meta.label), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.causalCount }, conns.length, " link", conns.length !== 1 ? "s" : "")), /* @__PURE__ */ import_react11.default.createElement("p", { style: s.causalDescription }, meta.description), meta.precedents.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.precedentsRow }, /* @__PURE__ */ import_react11.default.createElement("span", { style: s.precedentsLabel }, "Precedent:"), meta.precedents.map((p) => /* @__PURE__ */ import_react11.default.createElement("span", { key: p, style: s.precedentBadge }, p))), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalLinks }, conns.map((c) => /* @__PURE__ */ import_react11.default.createElement("div", { key: c.id, style: s.causalLink }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalLinkMain }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalNode }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalNodeLabel }, c.source_date ? formatDate2(c.source_date) : "undated"), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalNodeTitle }, c.source_title || c.source_id)), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalArrow }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalArrowLine }), c.days_between != null && c.days_between >= 0 && /* @__PURE__ */ import_react11.default.createElement("span", { style: s.causalDays }, c.days_between, "d"), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.causalArrowHead }, "\u2192")), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalNode }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalNodeLabel }, c.target_date ? formatDate2(c.target_date) : "undated"), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalNodeTitle }, c.target_title || c.target_id)), c.strength != null && /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.causalStrength, color: strengthColor(c.strength * 10) } }, Math.round(c.strength * 100), "%")), c.description && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.causalLinkDesc }, c.description)))));
+    }));
   }
   function ActorSummary({ brief }) {
     const s = getStyles5();
@@ -18140,41 +18460,48 @@ Found ${result.count} new suggestions based on legal precedents.`);
         maxWidth: 900,
         margin: "0 auto"
       },
-      // Executive summary
+      // Executive summary — ring gauge hero
       strengthHero: {
         display: "flex",
         alignItems: "center",
-        gap: spacing.xl,
-        padding: spacing.xl,
-        background: colors.surface,
+        gap: "32px",
+        padding: "32px",
+        background: `linear-gradient(135deg, ${colors.surface} 0%, ${colors.surfaceAlt} 100%)`,
         borderRadius: radius.lg,
-        boxShadow: shadows.sm
+        border: `1px solid ${colors.border}`,
+        boxShadow: shadows.md
       },
-      strengthScore: {
-        fontSize: 64,
-        fontWeight: 800,
-        lineHeight: 1,
-        letterSpacing: "-2px"
+      heroCaseType: {
+        fontSize: 13,
+        color: colors.textSecondary,
+        textTransform: "uppercase",
+        letterSpacing: "0.06em",
+        fontWeight: typography.fontWeight.medium
       },
-      strengthDenom: { fontSize: 28, fontWeight: 400, opacity: 0.6 },
-      strengthLabel: { fontSize: typography.fontSize.xl, fontWeight: typography.fontWeight.semibold },
-      strengthSub: { color: colors.textMuted, fontSize: typography.fontSize.sm, marginTop: 4 },
-      statsRow: {
+      // Unified stats bar
+      statsBar: {
         display: "flex",
-        flexWrap: "wrap",
-        gap: spacing.md
-      },
-      statCard: {
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "16px 24px",
         background: colors.surface,
         borderRadius: radius.md,
-        padding: `${spacing.md} ${spacing.lg}`,
-        border: `1px solid ${colors.border}`,
-        minWidth: 110,
-        flex: "1 1 110px"
+        border: `1px solid ${colors.border}`
       },
-      statCardWide: { flex: "2 1 220px" },
-      statValue: { fontSize: typography.fontSize.lg, fontWeight: typography.fontWeight.semibold, color: colors.textPrimary },
-      statLabel: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginTop: 2, textTransform: "uppercase", letterSpacing: "0.05em" },
+      statItem: {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        flex: 1
+      },
+      statDivider: {
+        width: 1,
+        height: 32,
+        background: colors.border,
+        flexShrink: 0
+      },
+      statValue: { fontSize: typography.fontSize.md, fontWeight: typography.fontWeight.semibold, color: colors.textPrimary, textAlign: "center" },
+      statLabel: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginTop: 2, textTransform: "uppercase", letterSpacing: "0.05em", textAlign: "center" },
       meterWrap: {
         height: 8,
         background: colors.border,
@@ -18184,88 +18511,160 @@ Found ${result.count} new suggestions based on legal precedents.`);
       meter: { height: "100%", borderRadius: 99, transition: "width 0.6s ease" },
       metaLine: { fontSize: typography.fontSize.sm, color: colors.textMuted, margin: 0 },
       staleTag: { color: "#F59E0B", fontWeight: typography.fontWeight.medium },
-      // Thread cards
-      threadCard: {
+      // Why Are We Here
+      whyCard: {
+        background: colors.surface,
+        borderRadius: radius.lg,
+        padding: "28px 28px 20px",
+        border: `1px solid ${colors.border}`,
+        boxShadow: shadows.sm
+      },
+      whyHeading: {
+        margin: "0 0 16px 0",
+        fontSize: typography.fontSize.md,
+        fontWeight: typography.fontWeight.semibold,
+        color: colors.textPrimary,
+        letterSpacing: "-0.01em"
+      },
+      whyPara: {
+        fontSize: typography.fontSize.base,
+        color: colors.textSecondary,
+        lineHeight: 1.8,
+        margin: "0 0 12px 0"
+      },
+      // Active claims
+      claimsSection: { display: "flex", flexDirection: "column", gap: spacing.sm },
+      claimRow: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: spacing.md,
+        padding: "14px 16px",
+        background: colors.surface,
+        border: `1px solid ${colors.border}`,
+        borderRadius: radius.md,
+        cursor: "pointer",
+        transition: "box-shadow 0.15s, transform 0.1s"
+      },
+      claimLeft: { display: "flex", alignItems: "center", gap: spacing.md, flex: 1, minWidth: 0 },
+      claimName: { fontSize: typography.fontSize.sm, fontWeight: typography.fontWeight.semibold, color: colors.textPrimary },
+      claimMeta: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginTop: 2 },
+      claimRight: { display: "flex", alignItems: "center", gap: spacing.sm, flexShrink: 0 },
+      claimMeterWrap: { width: 100, height: 7, background: colors.border, borderRadius: 99, overflow: "hidden" },
+      claimMeter: { height: "100%", borderRadius: 99, transition: "width 0.6s ease" },
+      claimScore: { fontSize: typography.fontSize.sm, fontWeight: typography.fontWeight.bold, minWidth: 36, textAlign: "right" },
+      viewArrow: { fontSize: 11, color: colors.textMuted, marginLeft: 4, opacity: 0.7 },
+      // Causal links
+      causalGroup: {
         background: colors.surface,
         borderRadius: radius.lg,
         padding: spacing.xl,
         border: `1px solid ${colors.border}`,
+        boxShadow: shadows.sm,
         display: "flex",
         flexDirection: "column",
-        gap: spacing.md,
-        boxShadow: shadows.sm
+        gap: spacing.md
       },
-      threadHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: spacing.sm },
-      threadDot: { width: 10, height: 10, borderRadius: "50%", flexShrink: 0 },
-      threadName: { fontSize: typography.fontSize.lg, fontWeight: typography.fontWeight.semibold, color: colors.textPrimary },
-      threadMeta: { display: "flex", gap: spacing.md, alignItems: "center" },
-      threadCount: { fontSize: typography.fontSize.sm, color: colors.textMuted },
-      threadStrength: { fontSize: typography.fontSize.lg, fontWeight: typography.fontWeight.bold },
-      meterWrapSm: { height: 6, background: colors.border, borderRadius: 99, overflow: "hidden" },
-      meterSm: { height: "100%", borderRadius: 99 },
-      elementGrid: { display: "flex", flexDirection: "column", gap: spacing.xs },
-      elementRow: { display: "flex", alignItems: "flex-start", gap: spacing.sm },
-      elementIcon: { fontSize: 14, fontWeight: 700, flexShrink: 0, marginTop: 1 },
-      elementLabel: { fontSize: typography.fontSize.sm },
+      causalGroupHeader: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between"
+      },
+      causalTypeLabel: {
+        fontSize: typography.fontSize.base,
+        fontWeight: typography.fontWeight.semibold,
+        color: colors.textPrimary
+      },
+      causalCount: {
+        fontSize: typography.fontSize.xs,
+        color: colors.textMuted,
+        background: colors.surfaceAlt,
+        padding: "2px 8px",
+        borderRadius: 99,
+        border: `1px solid ${colors.border}`
+      },
+      causalDescription: {
+        margin: 0,
+        fontSize: typography.fontSize.sm,
+        color: colors.textSecondary,
+        lineHeight: 1.6
+      },
       precedentsRow: { display: "flex", flexWrap: "wrap", gap: spacing.xs, alignItems: "center" },
       precedentsLabel: { fontSize: typography.fontSize.xs, color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" },
       precedentBadge: {
         padding: "2px 8px",
-        background: colors.surfaceAlt,
+        background: "#EFF6FF",
         borderRadius: radius.sm,
         fontSize: typography.fontSize.xs,
-        color: colors.textSecondary,
-        border: `1px solid ${colors.border}`
+        color: "#1D4ED8",
+        border: `1px solid #BFDBFE`
       },
-      evidenceSection: { display: "flex", flexDirection: "column", gap: spacing.xs },
-      gapsSection: { display: "flex", flexDirection: "column", gap: spacing.xs },
-      sectionSubLabel: { fontSize: typography.fontSize.xs, color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: typography.fontWeight.medium },
-      evidenceRow: { display: "flex", justifyContent: "space-between", fontSize: typography.fontSize.sm, color: colors.textSecondary },
-      evidenceFile: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-      evidenceDate: { flexShrink: 0, marginLeft: spacing.sm, color: colors.textMuted },
-      gapRow: { fontSize: typography.fontSize.sm, color: "#F59E0B" },
-      // Timeline
-      timelineSpan: {
+      causalLinks: { display: "flex", flexDirection: "column", gap: spacing.sm },
+      causalLink: {
+        padding: spacing.md,
+        background: colors.bg,
+        borderRadius: radius.md,
+        border: `1px solid ${colors.border}`,
+        display: "flex",
+        flexDirection: "column",
+        gap: spacing.xs
+      },
+      causalLinkMain: {
         display: "flex",
         alignItems: "center",
-        gap: spacing.md
+        gap: spacing.sm,
+        flexWrap: "wrap"
       },
-      timelineDate: { fontSize: typography.fontSize.sm, color: colors.textSecondary, flexShrink: 0 },
-      timelineTrack: { flex: 1, height: 2, background: colors.border },
-      gapSummary: {
-        padding: `${spacing.sm} ${spacing.md}`,
-        background: "#FEF9C3",
-        borderRadius: radius.md,
-        color: "#854D0E",
-        fontSize: typography.fontSize.sm
+      causalNode: {
+        flex: "1 1 160px",
+        minWidth: 120
       },
-      timelineList: { display: "flex", flexDirection: "column", gap: 0, paddingLeft: spacing.md },
-      timelineMoment: { display: "flex", gap: spacing.md, position: "relative", paddingBottom: spacing.lg },
-      momentDot: { width: 10, height: 10, borderRadius: "50%", background: colors.primary, flexShrink: 0, marginTop: 4 },
-      momentContent: { flex: 1, paddingBottom: spacing.md, borderBottom: `1px solid ${colors.borderLight}` },
-      momentDate: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginBottom: 2 },
-      momentTitle: { fontSize: typography.fontSize.base, fontWeight: typography.fontWeight.medium, color: colors.textPrimary },
-      momentTags: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 },
-      tagPill: {
-        padding: "1px 6px",
-        background: colors.surfaceAlt,
-        borderRadius: 99,
+      causalNodeLabel: {
+        fontSize: typography.fontSize.xs,
+        color: colors.textMuted,
+        marginBottom: 2
+      },
+      causalNodeTitle: {
+        fontSize: typography.fontSize.sm,
+        fontWeight: typography.fontWeight.medium,
+        color: colors.textPrimary,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap"
+      },
+      causalArrow: {
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        flexShrink: 0,
+        color: colors.textMuted
+      },
+      causalArrowLine: {
+        width: 24,
+        height: 1,
+        background: colors.border
+      },
+      causalDays: {
         fontSize: 10,
-        color: colors.textSecondary,
+        color: colors.textMuted,
+        background: colors.surfaceAlt,
+        padding: "1px 4px",
+        borderRadius: 4,
         border: `1px solid ${colors.border}`
       },
-      gapCard: {
-        display: "flex",
-        gap: spacing.md,
-        alignItems: "flex-start",
-        padding: spacing.md,
-        background: "#FFF7ED",
-        borderRadius: radius.md,
-        border: "1px solid #FED7AA"
+      causalArrowHead: { fontSize: 14, color: colors.textMuted },
+      causalStrength: {
+        fontSize: typography.fontSize.xs,
+        fontWeight: typography.fontWeight.bold,
+        flexShrink: 0,
+        marginLeft: "auto"
       },
-      gapIcon: { fontSize: "1.5em" },
-      gapLabel: { fontWeight: typography.fontWeight.medium, color: "#9A3412", fontSize: typography.fontSize.sm },
-      gapSub: { color: "#C2410C", fontSize: typography.fontSize.xs, marginTop: 2 },
+      causalLinkDesc: {
+        fontSize: typography.fontSize.xs,
+        color: colors.textMuted,
+        fontStyle: "italic",
+        paddingLeft: 0
+      },
       subHeading: {
         margin: `${spacing.md} 0 0 0`,
         fontSize: typography.fontSize.base,
@@ -18351,18 +18750,50 @@ Found ${result.count} new suggestions based on legal precedents.`);
       emptyStateText: { color: colors.textMuted, fontSize: typography.fontSize.sm }
     };
   }
-  var import_react11, TABS;
+  var import_react11, TABS, CONNECTION_PRECEDENTS;
   var init_LawyerBrief = __esm({
     "src/renderer/pages/LawyerBrief.jsx"() {
       import_react11 = __toESM(require_react());
       init_tokens();
       TABS = [
-        { id: "executive", label: "Executive Summary" },
-        { id: "threads", label: "Thread Breakdown" },
-        { id: "timeline", label: "Timeline" },
+        { id: "summary", label: "Case Summary" },
+        { id: "causal", label: "Causal Links" },
         { id: "actors", label: "Key People" },
         { id: "gaps", label: "Red Flags" }
       ];
+      CONNECTION_PRECEDENTS = {
+        // Core retaliation patterns
+        retaliation: { label: "Retaliation", precedents: ["Burlington N. & Santa Fe Ry. Co. v. White (2006)", "Clark Cty. Sch. Dist. v. Breeden (2001)"], description: "Protected activity followed by adverse action within a suspect timeframe may establish retaliatory intent." },
+        retaliation_chain: { label: "Retaliation Chain", precedents: ["Burlington N. & Santa Fe Ry. Co. v. White (2006)", "Clark Cty. Sch. Dist. v. Breeden (2001)"], description: "A sequence of adverse actions following protected activity establishes a causal chain supporting a retaliation claim." },
+        whistleblower_retaliation: { label: "Whistleblower Retaliation", precedents: ["Burlington N. & Santa Fe Ry. Co. v. White (2006)"], description: "Adverse action following a protected disclosure or complaint supports a whistleblower retaliation claim." },
+        retaliatory_harassment: { label: "Retaliatory Harassment", precedents: ["Burlington N. & Santa Fe Ry. Co. v. White (2006)", "Harris v. Forklift Systems (1993)"], description: "Harassment directed at an employee following protected activity can constitute an adverse employment action under Title VII." },
+        retaliatory_harassment_pattern: { label: "Retaliatory Harassment Pattern", precedents: ["Burlington N. & Santa Fe Ry. Co. v. White (2006)", "Nat'l R.R. Passenger Corp. v. Morgan (2002)"], description: "A systemic post-complaint harassment campaign establishes retaliatory motive and satisfies the adverse action element." },
+        pay_retaliation_chain: { label: "Pay Retaliation", precedents: ["Burlington N. & Santa Fe Ry. Co. v. White (2006)", "Lilly Ledbetter Fair Pay Act (2009)"], description: "Compensation reduced or withheld following protected activity supports a pay retaliation claim." },
+        // Temporal and proximity patterns
+        temporal_proximity: { label: "Temporal Proximity", precedents: ["Clark Cty. Sch. Dist. v. Breeden (2001)"], description: "Courts treat short gaps between protected activity and adverse action as evidence of causation." },
+        temporal_cluster: { label: "Temporal Cluster", precedents: ["Nat'l R.R. Passenger Corp. v. Morgan (2002)"], description: "Events concentrated in a short time window suggest coordinated conduct and can establish a continuing violation." },
+        protected_to_adverse: { label: "Protected Activity \u2192 Adverse Action", precedents: ["Burlington N. & Santa Fe Ry. Co. v. White (2006)"], description: "A direct causal chain from a protected act to a materially adverse employment action supports a retaliation claim." },
+        // Escalation and environment patterns
+        escalation: { label: "Pattern Escalation", precedents: ["Nat'l R.R. Passenger Corp. v. Morgan (2002)"], description: "A series of incidents of increasing severity can establish a hostile work environment claim." },
+        hostile_environment: { label: "Hostile Environment Pattern", precedents: ["Harris v. Forklift Systems (1993)", "Meritor Savings Bank v. Vinson (1986)"], description: "Severe or pervasive conduct that alters employment conditions satisfies the hostile environment standard." },
+        sexual_harassment_pattern: { label: "Sexual Harassment Pattern", precedents: ["Harris v. Forklift Systems (1993)", "Meritor Savings Bank v. Vinson (1986)"], description: "Repeated unwelcome sexual conduct creating a hostile environment establishes liability under Title VII." },
+        quid_pro_quo: { label: "Quid Pro Quo", precedents: ["Meritor Savings Bank v. Vinson (1986)", "Burlington Indus., Inc. v. Ellerth (1998)"], description: "Conditioning an employment benefit on submission to unwelcome conduct establishes tangible employment action liability." },
+        // Actor and employer patterns
+        actor_continuity: { label: "Same-Actor Pattern", precedents: ["Vance v. Ball State Univ. (2013)"], description: "Repeated involvement of the same individual across multiple incidents strengthens discriminatory intent." },
+        supervisor_liability: { label: "Supervisor Liability", precedents: ["Vance v. Ball State Univ. (2013)", "Burlington Indus., Inc. v. Ellerth (1998)"], description: "Employer vicariously liable for a supervisor's tangible employment actions without affirmative defense." },
+        supervisor_pattern: { label: "Supervisor Pattern", precedents: ["Vance v. Ball State Univ. (2013)", "Faragher v. City of Boca Raton (1998)"], description: "Systematic supervisory conduct establishes employer liability and may negate the Faragher/Ellerth affirmative defense." },
+        employer_notice: { label: "Employer Notice", precedents: ["Faragher v. City of Boca Raton (1998)", "Burlington Indus., Inc. v. Ellerth (1998)"], description: "Evidence the employer knew or should have known of misconduct and failed to act defeats the affirmative defense." },
+        // Continuing and cumulative patterns
+        continuing_violation: { label: "Continuing Violation", precedents: ["Nat'l R.R. Passenger Corp. v. Morgan (2002)"], description: "An ongoing series of related acts is treated as a single unlawful violation, extending the limitations period (Morgan)." },
+        convincing_mosaic: { label: "Convincing Mosaic", precedents: ["Lewis v. Union City Sch. Dist. (11th Cir. 2019)", "Smith v. Lockheed-Martin Corp. (11th Cir. 2011)"], description: "A cumulative circumstantial pattern of discriminatory conduct can establish intent without a single smoking-gun fact." },
+        // Pay and FCRA
+        pay_discrimination: { label: "Pay Discrimination", precedents: ["Lilly Ledbetter Fair Pay Act (2009)", "County of Washington v. Gunther (1981)"], description: "Each discriminatory paycheck constitutes a fresh violation under the Ledbetter Act, preserving timeliness." },
+        fcra_discrimination: { label: "FCRA Discrimination", precedents: ["Trans Union Corp. v. FTC (D.C. Cir. 2001)"], description: "Discriminatory or retaliatory use of consumer report information may violate both the FCRA and Title VII." },
+        discrimination_some_harm: { label: "Discriminatory Harm", precedents: ["Muldrow v. City of St. Louis (2024)"], description: "An adverse action need only cause some harm to a term or condition of employment, not serious or significant harm (Muldrow)." },
+        exclusion_pattern: { label: "Systematic Exclusion", precedents: ["Meritor Savings Bank v. Vinson (1986)"], description: "Repeated exclusion from meetings, communications, or opportunities can constitute discriminatory terms." },
+        // Fallback
+        general: { label: "Causal Connection", precedents: [], description: "A documented link between two events that may be relevant to one or more claims." }
+      };
     }
   });
 
@@ -19703,15 +20134,19 @@ This cannot be undone.`)) {
     const [allDocs, setAllDocs] = (0, import_react13.useState)([]);
     const [linkingDoc, setLinkingDoc] = (0, import_react13.useState)(false);
     const [selectedDocId, setSelectedDocId] = (0, import_react13.useState)("");
+    const hasLoadedRef = (0, import_react13.useRef)(false);
     (0, import_react13.useEffect)(() => {
+      hasLoadedRef.current = false;
       loadMoment();
       loadAllDocs();
     }, [momentId]);
     async function loadMoment() {
       if (!momentId) {
         setLoading(false);
+        hasLoadedRef.current = true;
         return;
       }
+      if (hasLoadedRef.current) return;
       setLoading(true);
       try {
         const result = await window.api.events.get(caseId, momentId);
@@ -19736,11 +20171,12 @@ This cannot be undone.`)) {
       } catch (err) {
         setError(err.message);
       }
+      hasLoadedRef.current = true;
       setLoading(false);
     }
     async function loadAllDocs() {
       try {
-        const res = await window.api.documents.list();
+        const res = await window.api.documents.list(caseId);
         if (res.success) setAllDocs(res.documents || []);
       } catch (e) {
       }
@@ -20072,6 +20508,16 @@ This cannot be undone.`)) {
     const [newAlias, setNewAlias] = (0, import_react14.useState)("");
     const [inReportingChain, setInReportingChain] = (0, import_react14.useState)(!!actor.in_reporting_chain);
     const styles5 = getStyles7();
+    (0, import_react14.useEffect)(() => {
+      setEditedActor({ ...actor, relationship_to_self: normalizeRelationship(actor.relationship_to_self) });
+      setInReportingChain(!!actor.in_reporting_chain);
+      try {
+        setAliases(JSON.parse(actor.aliases || "[]"));
+      } catch {
+        setAliases([]);
+      }
+      setDirty(false);
+    }, [actor.id, actor.in_reporting_chain]);
     (0, import_react14.useEffect)(() => {
       loadDetails();
     }, [actor.id]);
@@ -20863,6 +21309,7 @@ This cannot be undone.`)) {
     const [renamingCaseId, setRenamingCaseId] = (0, import_react15.useState)(null);
     const [renameValue, setRenameValue] = (0, import_react15.useState)("");
     const [briefStale, setBriefStale] = (0, import_react15.useState)(false);
+    const [importToast, setImportToast] = (0, import_react15.useState)(null);
     const styles5 = getStyles8();
     (0, import_react15.useEffect)(() => {
       checkVaultStatus();
@@ -20870,12 +21317,30 @@ This cannot be undone.`)) {
     (0, import_react15.useEffect)(() => {
       if (isReadOnly) return;
       const handleImport = async () => {
+        if (!activeCase) {
+          alert("Please open a case before importing documents.");
+          return;
+        }
         const result = await window.api.dialog.openFiles();
         if (!result.canceled && result.filePaths.length > 0) {
-          await window.api.documents.ingest(result.filePaths);
-          setTimelineKey((k) => k + 1);
-          setThreadsKey((k) => k + 1);
-          markBriefStale();
+          try {
+            const res = await window.api.documents.ingest(result.filePaths);
+            const added = res?.documents?.length ?? 0;
+            const errors = res?.errors?.length ?? 0;
+            const dupes = res?.nearDuplicates?.length ?? 0;
+            let msg = `${added} document${added !== 1 ? "s" : ""} added.`;
+            if (dupes) msg += ` ${dupes} near-duplicate${dupes !== 1 ? "s" : ""} detected.`;
+            if (errors) msg += ` ${errors} skipped (duplicate or error).`;
+            setImportToast(msg);
+            setTimeout(() => setImportToast(null), 4e3);
+            setCurrentPage("timeline");
+            setTimelineKey((k) => k + 1);
+            setThreadsKey((k) => k + 1);
+            markBriefStale();
+          } catch (e) {
+            setImportToast("Import failed: " + (e?.message || "Unknown error"));
+            setTimeout(() => setImportToast(null), 5e3);
+          }
         }
       };
       const handleAddMoment = () => setSelectedEvent({});
@@ -20885,7 +21350,7 @@ This cannot be undone.`)) {
         window.removeEventListener("import-files", handleImport);
         window.removeEventListener("add-moment", handleAddMoment);
       };
-    }, [isReadOnly]);
+    }, [isReadOnly, activeCase]);
     (0, import_react15.useEffect)(() => {
       function handleKey(e) {
         if ((e.metaKey || e.ctrlKey) && e.key === "b") {
@@ -21045,8 +21510,8 @@ This cannot be undone.`)) {
           setCurrentPage("brief");
         }
       },
-      /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.caseIcon }, "\u{1F4C4}"),
-      /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.caseName }, "Lawyer Brief"),
+      /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.caseIcon }, "\u2696\uFE0F"),
+      /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.caseName }, "Case Overview"),
       briefStale && /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.staleDot })
     ), /* @__PURE__ */ import_react15.default.createElement(
       "button",
@@ -21118,9 +21583,33 @@ This cannot be undone.`)) {
         key: peopleKey,
         onSelectActor: setSelectedActor
       }
-    ), currentPage === "connections" && /* @__PURE__ */ import_react15.default.createElement(Connections, null), currentPage === "settings" && /* @__PURE__ */ import_react15.default.createElement(Settings, null), currentPage === "brief" && /* @__PURE__ */ import_react15.default.createElement(LawyerBrief, null)), selectedEvent && /* @__PURE__ */ import_react15.default.createElement(
+    ), currentPage === "connections" && /* @__PURE__ */ import_react15.default.createElement(Connections, null), currentPage === "settings" && /* @__PURE__ */ import_react15.default.createElement(Settings, null), currentPage === "brief" && /* @__PURE__ */ import_react15.default.createElement(
+      LawyerBrief,
+      {
+        onNavigateToThread: (threadId) => {
+          setThreadsKey((k) => k + 1);
+          setCurrentPage("threads");
+        },
+        onNavigateToConnections: () => setCurrentPage("connections")
+      }
+    )), importToast && /* @__PURE__ */ import_react15.default.createElement("div", { style: {
+      position: "fixed",
+      bottom: 24,
+      left: "50%",
+      transform: "translateX(-50%)",
+      background: "#1E293B",
+      color: "#fff",
+      padding: "10px 20px",
+      borderRadius: 8,
+      fontSize: 13,
+      fontFamily: "system-ui, sans-serif",
+      boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+      zIndex: 9999,
+      whiteSpace: "nowrap"
+    } }, importToast), selectedEvent && /* @__PURE__ */ import_react15.default.createElement(
       EditMomentModal,
       {
+        key: selectedEvent.id ?? "new",
         caseId: activeCase?.id,
         momentId: selectedEvent.id,
         onClose: () => setSelectedEvent(null),
@@ -21149,8 +21638,21 @@ This cannot be undone.`)) {
       {
         actor: selectedActor,
         onClose: () => setSelectedActor(null),
-        onActorUpdated: () => {
-          setSelectedActor(null);
+        onActorUpdated: async () => {
+          try {
+            const res = await window.api.actors.list();
+            if (res.success && selectedActor) {
+              const updated = res.actors.find((a) => a.id === selectedActor.id);
+              if (updated) {
+                setSelectedActor(updated);
+              } else {
+                setSelectedActor(null);
+              }
+            }
+          } catch (e) {
+            console.error("[App] re-fetch actor failed:", e);
+            setSelectedActor(null);
+          }
           setTimelineKey((k) => k + 1);
           setPeopleKey((k) => k + 1);
           setThreadsKey((k) => k + 1);
