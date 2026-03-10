@@ -185,7 +185,8 @@ function registerIpcHandlers() {
       }
 
       const caseKey = keyManager.deriveCaseKey(currentCaseId);
-      console.log('[IPC] caseKey derived, processing', filePaths.length, 'files...');
+      const ingestKeyFP = require('crypto').createHash('sha256').update(caseKey).digest('hex').substring(0, 8);
+      console.log('[IPC] caseKey derived, keyFP:', ingestKeyFP, 'caseId:', currentCaseId, 'processing', filePaths.length, 'files...');
       const { documents, errors } = await processFiles(filePaths, caseKey);
       console.log('[IPC] processFiles done:', documents.length, 'docs,', errors.length, 'errors');
       if (errors.length > 0) {
@@ -265,6 +266,11 @@ function registerIpcHandlers() {
           }
         }
 
+        // Log pre-insert encrypted_content details for diagnostics
+        console.log('[IPC] PRE-INSERT:', doc.filename, 'enc type:', typeof doc.encrypted_content,
+          'isBuffer:', Buffer.isBuffer(doc.encrypted_content), 'len:', doc.encrypted_content?.length,
+          'first4:', Buffer.isBuffer(doc.encrypted_content) ? doc.encrypted_content.subarray(0, 4).toString('hex') : 'N/A');
+
         insertStmt.run(
           doc.id, doc.filename, doc.original_path, doc.file_type, doc.file_size, doc.sha256_hash,
           doc.encrypted_content, doc.metadata_json,
@@ -274,7 +280,22 @@ function registerIpcHandlers() {
           doc.evidence_confidence, doc.evidence_secondary, doc.evidence_scores_json,
           doc.media_subtype || null, doc.is_recap || 0
         );
-        // Verify the insert actually persisted
+
+        // Round-trip verify: read back encrypted_content and attempt decrypt
+        const rtRow = currentCaseDb.prepare('SELECT encrypted_content FROM documents WHERE id = ?').get(doc.id);
+        const rtEnc = rtRow?.encrypted_content;
+        console.log('[IPC] ROUND-TRIP:', doc.filename, 'readBack type:', typeof rtEnc,
+          'isBuffer:', Buffer.isBuffer(rtEnc), 'len:', rtEnc?.length,
+          'first4:', Buffer.isBuffer(rtEnc) ? rtEnc.subarray(0, 4).toString('hex') : 'N/A',
+          'matches:', Buffer.isBuffer(rtEnc) && Buffer.isBuffer(doc.encrypted_content) && rtEnc.equals(doc.encrypted_content));
+        try {
+          const { decrypt: rtDecrypt } = require('./crypto/vault');
+          rtDecrypt(rtEnc, caseKey);
+          console.log('[IPC] ROUND-TRIP DECRYPT OK:', doc.filename);
+        } catch (rtErr) {
+          console.error('[IPC] ROUND-TRIP DECRYPT FAIL:', doc.filename, rtErr.message);
+        }
+
         const verify = currentCaseDb.prepare('SELECT count(*) as cnt FROM documents').get();
         console.log('[IPC] VERIFY after insert:', doc.filename, '-> total docs now:', verify.cnt);
         inserted.push(docToSummary(doc));
@@ -443,10 +464,17 @@ function registerIpcHandlers() {
         return { success: false, error: 'Document not found' };
       }
 
+      if (!row.encrypted_content) {
+        return { success: false, error: 'Document has no encrypted content' };
+      }
+
       // Decrypt the file content
       const { decrypt } = require('./crypto/vault');
       const caseKey = keyManager.deriveCaseKey(currentCaseId);
-      const decrypted = decrypt(row.encrypted_content, caseKey);
+      const enc = row.encrypted_content;
+      const keyFingerprint = require('crypto').createHash('sha256').update(caseKey).digest('hex').substring(0, 8);
+      console.log('[documents:getContent] docId:', docId, 'type:', typeof enc, 'isBuffer:', Buffer.isBuffer(enc), 'len:', enc?.length, 'caseId:', currentCaseId, 'keyFP:', keyFingerprint);
+      const decrypted = decrypt(enc, caseKey);
 
       // Return as base64 so it can cross the IPC bridge
       return {
@@ -455,6 +483,7 @@ function registerIpcHandlers() {
         mimeType: row.file_type
       };
     } catch (error) {
+      console.error('[documents:getContent] decrypt FAILED:', error.message, 'docId:', docId);
       return { success: false, error: error.message };
     }
   });
@@ -483,21 +512,34 @@ function registerIpcHandlers() {
         return { success: false, error: 'No case is open' };
       }
 
-      // Clean up all related records referencing this document
-      try { currentCaseDb.prepare('DELETE FROM document_date_entries WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM actor_appearances WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM anchor_evidence WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM event_documents WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM incident_documents WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM claim_evidence WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM pay_records WHERE document_id = ?').run(docId); } catch (e) {}
-      try { currentCaseDb.prepare('DELETE FROM timeline_connections WHERE (source_id = ? AND source_type = "document") OR (target_id = ? AND target_type = "document")').run(docId, docId); } catch (e) {}
+      // Disable FK checks to prevent constraint violations from blocking deletion
+      currentCaseDb.prepare('PRAGMA foreign_keys = OFF').run();
 
-      // Delete from documents table
-      currentCaseDb.prepare('DELETE FROM documents WHERE id = ?').run(docId);
+      try {
+        // Clean up all related records referencing this document
+        try { currentCaseDb.prepare('DELETE FROM document_date_entries WHERE document_id = ?').run(docId); } catch (e) {}
+        try { currentCaseDb.prepare('DELETE FROM actor_appearances WHERE document_id = ?').run(docId); } catch (e) {}
+        try { currentCaseDb.prepare('DELETE FROM anchor_evidence WHERE document_id = ?').run(docId); } catch (e) {}
+        try { currentCaseDb.prepare('DELETE FROM event_documents WHERE document_id = ?').run(docId); } catch (e) {}
+        try { currentCaseDb.prepare('DELETE FROM incident_documents WHERE document_id = ?').run(docId); } catch (e) {}
+        try { currentCaseDb.prepare('DELETE FROM claim_evidence WHERE document_id = ?').run(docId); } catch (e) {}
+        try { currentCaseDb.prepare('DELETE FROM pay_records WHERE document_id = ?').run(docId); } catch (e) {}
+        try { currentCaseDb.prepare('DELETE FROM timeline_connections WHERE (source_id = ? AND source_type = "document") OR (target_id = ? AND target_type = "document")').run(docId, docId); } catch (e) {}
+        try { currentCaseDb.prepare('DELETE FROM group_documents WHERE document_id = ?').run(docId); } catch (e) {}
+
+        // Delete from documents table
+        const result = currentCaseDb.prepare('DELETE FROM documents WHERE id = ?').run(docId);
+        if (result.changes === 0) {
+          console.warn('[documents:delete] No rows deleted for id:', docId);
+        }
+      } finally {
+        currentCaseDb.prepare('PRAGMA foreign_keys = ON').run();
+      }
 
       return { success: true };
     } catch (error) {
+      console.error('[documents:delete] Failed:', error.message);
+      try { currentCaseDb.prepare('PRAGMA foreign_keys = ON').run(); } catch (e) {}
       return { success: false, error: error.message };
     }
   });
@@ -2533,20 +2575,35 @@ function registerIpcHandlers() {
   ipcMain.handle('events:delete', async (event, caseId, eventId) => {
     try {
       const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
 
-      // Delete from all junction tables (handle both old anchor_id and new event_id column names)
-      try { caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM event_documents WHERE event_id = ?').run(eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM event_actors WHERE event_id = ?').run(eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM event_precedents WHERE event_id = ?').run(eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM event_precedents WHERE anchor_id = ?').run(eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM event_links WHERE source_event_id = ? OR target_event_id = ?').run(eventId, eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM incident_events WHERE event_id = ?').run(eventId); } catch (e) {}
-      try { caseDb.prepare('DELETE FROM timeline_connections WHERE (source_id = ? AND source_type = "event") OR (target_id = ? AND target_type = "event")').run(eventId, eventId); } catch (e) {}
+      // Disable FK checks to prevent constraint violations from blocking deletion
+      caseDb.prepare('PRAGMA foreign_keys = OFF').run();
 
-      caseDb.prepare('DELETE FROM events WHERE id = ?').run(eventId);
+      try {
+        // Delete from all junction tables (handle both old anchor_id and new event_id column names)
+        try { caseDb.prepare('DELETE FROM event_tags WHERE event_id = ?').run(eventId); } catch (e) {}
+        try { caseDb.prepare('DELETE FROM event_documents WHERE event_id = ?').run(eventId); } catch (e) {}
+        try { caseDb.prepare('DELETE FROM event_actors WHERE event_id = ?').run(eventId); } catch (e) {}
+        try { caseDb.prepare('DELETE FROM event_precedents WHERE event_id = ?').run(eventId); } catch (e) {}
+        try { caseDb.prepare('DELETE FROM event_precedents WHERE anchor_id = ?').run(eventId); } catch (e) {}
+        try { caseDb.prepare('DELETE FROM event_links WHERE source_event_id = ? OR target_event_id = ?').run(eventId, eventId); } catch (e) {}
+        try { caseDb.prepare('DELETE FROM incident_events WHERE event_id = ?').run(eventId); } catch (e) {}
+        try { caseDb.prepare('DELETE FROM timeline_connections WHERE (source_id = ? AND source_type = "event") OR (target_id = ? AND target_type = "event")').run(eventId, eventId); } catch (e) {}
+        try { caseDb.prepare('DELETE FROM anchor_evidence WHERE anchor_id = ?').run(eventId); } catch (e) {}
+
+        const result = caseDb.prepare('DELETE FROM events WHERE id = ?').run(eventId);
+        if (result.changes === 0) {
+          console.warn('[events:delete] No rows deleted for id:', eventId);
+        }
+      } finally {
+        caseDb.prepare('PRAGMA foreign_keys = ON').run();
+      }
+
       return { success: true };
     } catch (error) {
+      console.error('[events:delete] Failed:', error.message);
+      try { currentCaseDb.prepare('PRAGMA foreign_keys = ON').run(); } catch (e) {}
       return { success: false, error: error.message };
     }
   });
@@ -4262,6 +4319,173 @@ function registerIpcHandlers() {
     }
   });
 
+  // ==================== SHARED CASE EXPORT ====================
+
+  ipcMain.handle('brief:exportShared', async (event, passcode, expiryDays) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      // ── Case context ──────────────────────────────────────────────
+      let caseContext = null;
+      try { caseContext = caseDb.prepare('SELECT * FROM case_context WHERE id = 1').get(); } catch (e) {}
+
+      // ── Events with tags, actor IDs, and linked documents ─────────
+      const rawEvents = caseDb.prepare('SELECT * FROM events ORDER BY date, created_at').all();
+      for (const evt of rawEvents) {
+        try { evt.tags     = caseDb.prepare('SELECT tag FROM event_tags WHERE event_id = ?').all(evt.id).map(r => r.tag); }
+        catch (e) { evt.tags = []; }
+        try { evt.actorIds = caseDb.prepare('SELECT actor_id FROM event_actors WHERE event_id = ?').all(evt.id).map(r => r.actor_id); }
+        catch (e) { evt.actorIds = []; }
+        // Documents linked to this event (for thread assignment + inline preview)
+        try {
+          evt.documents = caseDb.prepare(`
+            SELECT d.id, d.filename, d.evidence_type, d.document_date,
+              COALESCE(SUBSTR(d.extracted_text, 1, 2000), '') AS extracted_text
+            FROM documents d
+            JOIN event_documents ed ON ed.document_id = d.id
+            WHERE ed.event_id = ?
+            ORDER BY d.document_date ASC
+          `).all(evt.id);
+        } catch (e) { evt.documents = []; }
+      }
+
+      // ── Actors ────────────────────────────────────────────────────
+      const rawActors = caseDb.prepare('SELECT * FROM actors').all();
+
+      // ── Connections with source/target info and chain_id ──────────
+      let connections = [];
+      try {
+        connections = caseDb.prepare(`
+          SELECT tc.*,
+            e1.title AS source_title, e1.date AS source_date,
+            e2.title AS target_title, e2.date AS target_date
+          FROM timeline_connections tc
+          LEFT JOIN events e1 ON e1.id = tc.source_id
+          LEFT JOIN events e2 ON e2.id = tc.target_id
+          ORDER BY tc.strength DESC
+        `).all();
+      } catch (e) {}
+
+      // ── Latest AI brief (optional — may not exist) ────────────────
+      let briefData = null;
+      try {
+        const latest = caseDb.prepare('SELECT content_json FROM lawyer_briefs ORDER BY id DESC LIMIT 1').get();
+        if (latest) briefData = JSON.parse(latest.content_json);
+      } catch (e) {}
+
+      const caseData = {
+        caseContext,
+        events:      rawEvents,
+        actors:      rawActors,
+        connections,
+        brief:       briefData,
+      };
+
+      // ── Collect + decrypt all linked documents ─────────────────────
+      const { decrypt: vaultDecrypt } = require('./crypto/vault');
+      const caseKey = keyManager.deriveCaseKey(currentCaseId);
+      const exportKeyFP = require('crypto').createHash('sha256').update(caseKey).digest('hex').substring(0, 8);
+      console.log('[CaseExport] currentCaseId:', currentCaseId, 'caseKey len:', caseKey?.length, 'keyFP:', exportKeyFP);
+
+      // Gather unique document IDs across all events
+      const seenDocIds = new Set();
+      for (const evt of rawEvents) {
+        for (const doc of (evt.documents || [])) seenDocIds.add(doc.id);
+      }
+      console.log('[CaseExport] seenDocIds count:', seenDocIds.size);
+
+      const docFiles = {};
+      let decryptOk = 0, decryptFail = 0, skippedSize = 0, skippedType = 0;
+      const MAX_DOC_SIZE = 3 * 1024 * 1024;        // 3 MB per document
+      const MAX_TOTAL_SIZE = 20 * 1024 * 1024;     // 20 MB total (~27 MB base64 → ~28 MB HTML)
+      const PREVIEWABLE_TYPES = new Set([
+        'application/pdf', 'image/png', 'image/jpeg', 'image/gif',
+        'image/webp', 'image/svg+xml', 'image/bmp'
+      ]);
+      let totalDocBytes = 0;
+
+      // Sort by file_size ascending so small docs fill in first, maximizing count embedded
+      const sortedDocIds = [...seenDocIds].sort((a, b) => {
+        const ra = caseDb.prepare('SELECT file_size FROM documents WHERE id = ?').get(a);
+        const rb = caseDb.prepare('SELECT file_size FROM documents WHERE id = ?').get(b);
+        return ((ra && ra.file_size) || 0) - ((rb && rb.file_size) || 0);
+      });
+
+      for (const docId of sortedDocIds) {
+        try {
+          const row = caseDb.prepare(
+            'SELECT encrypted_content, file_type, file_size FROM documents WHERE id = ?'
+          ).get(docId);
+          if (!row || !row.encrypted_content) {
+            console.warn('[CaseExport] skipped doc (no content):', docId);
+            continue;
+          }
+
+          // Only embed browser-previewable file types
+          const mime = row.file_type || 'application/octet-stream';
+          if (!PREVIEWABLE_TYPES.has(mime)) {
+            skippedType++;
+            continue;
+          }
+
+          // Skip documents that are too large individually
+          const rawSize = row.file_size || row.encrypted_content.length;
+          if (rawSize > MAX_DOC_SIZE) {
+            skippedSize++;
+            continue;
+          }
+
+          // Stop embedding once total budget is reached
+          if (totalDocBytes + rawSize > MAX_TOTAL_SIZE) {
+            skippedSize++;
+            continue;
+          }
+
+          const enc = row.encrypted_content;
+          if (decryptFail === 0 && decryptOk === 0) {
+            console.log('[CaseExport] first doc sample — type:', typeof enc, 'isBuffer:', Buffer.isBuffer(enc), 'len:', enc.length, 'first4:', Buffer.isBuffer(enc) ? enc.subarray(0, 4).toString('hex') : 'N/A');
+          }
+          const decrypted = vaultDecrypt(enc, caseKey);
+          const safeId = String(docId).replace(/[^a-zA-Z0-9_-]/g, '_');
+          docFiles[safeId] = { buffer: decrypted, mime };
+          totalDocBytes += decrypted.length;
+          decryptOk++;
+        } catch (e) {
+          decryptFail++;
+          if (decryptFail <= 3) {
+            console.warn('[CaseExport] decrypt FAILED doc', docId, '— error:', e.message, '— enc type:', typeof e, '— isBuffer:', Buffer.isBuffer(e));
+          }
+        }
+      }
+      console.log('[CaseExport] embed results: ok=' + decryptOk + ' fail=' + decryptFail +
+        ' skippedType=' + skippedType + ' skippedSize=' + skippedSize +
+        ' totalBytes=' + totalDocBytes);
+
+      const { generateCaseHTML } = require('./export/brief-html-generator');
+      const { dialog }           = require('electron');
+
+      const html = generateCaseHTML(caseData, passcode, parseInt(expiryDays) || 30, docFiles);
+
+      const result = await dialog.showSaveDialog({
+        title:       'Share Case File',
+        defaultPath: 'case_export.html',
+        filters:     [{ name: 'HTML', extensions: ['html'] }]
+      });
+
+      if (result.canceled || !result.filePath) {
+        return { success: false, error: 'Export cancelled' };
+      }
+
+      const fs = require('fs');
+      fs.writeFileSync(result.filePath, html, 'utf8');
+      return { success: true, path: result.filePath };
+    } catch (err) {
+      console.error('[CaseExport] Failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   // ==================== LAWYER BRIEFS (SESSION-9E) ====================
 
   ipcMain.handle('brief:generate', async () => {
@@ -4292,8 +4516,16 @@ function registerIpcHandlers() {
       let caseContext = null;
       try { caseContext = caseDb.prepare('SELECT * FROM case_context WHERE id = 1').get(); } catch (e) {}
 
+      // Load chain links so brief can pull chain-connected events into threads
+      let chainLinks = [];
+      try {
+        chainLinks = caseDb.prepare(
+          "SELECT * FROM timeline_connections WHERE chain_id IS NOT NULL AND auto_detected = 1"
+        ).all();
+      } catch (e) {}
+
       // Generate brief
-      const brief = generateBrief(rawEvents, rawDocuments, rawActors, rawIncidents, caseContext);
+      const brief = generateBrief(rawEvents, rawDocuments, rawActors, rawIncidents, caseContext, chainLinks);
 
       // Save to DB — archive previous as version (keep last 5)
       const latest = caseDb.prepare('SELECT id FROM lawyer_briefs ORDER BY id DESC LIMIT 1').get();
