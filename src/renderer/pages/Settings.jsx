@@ -12,6 +12,11 @@ export default function Settings() {
   const [exportStatus, setExportStatus] = useState(null); // null | 'working' | 'done' | 'error'
   const [exportMsg, setExportMsg] = useState('');
 
+  // Web export (GitHub Pages viewer)
+  const [webPassword, setWebPassword] = useState('');
+  const [webStatus, setWebStatus] = useState(null);
+  const [webMsg, setWebMsg] = useState('');
+
   useEffect(() => {
     window.api.settings.get('anthropic_api_key').then(r => {
       if (r.success && r.value) setApiKey(r.value);
@@ -43,6 +48,25 @@ export default function Settings() {
     } else {
       setExportStatus('error');
       setExportMsg(r.error || 'Export failed');
+    }
+  }
+
+  async function handleWebExport() {
+    if (!webPassword.trim() || webPassword.length < 4) {
+      setWebMsg('Password must be at least 4 characters.');
+      setWebStatus('error');
+      return;
+    }
+    setWebStatus('working');
+    setWebMsg('');
+    const r = await window.api.export.webVault(webPassword);
+    if (r.success) {
+      setWebStatus('done');
+      setWebMsg('Saved to: ' + r.path);
+      setWebPassword('');
+    } else {
+      setWebStatus('error');
+      setWebMsg(r.error || 'Export failed');
     }
   }
 
@@ -142,6 +166,47 @@ export default function Settings() {
           )}
           <span style={s.hint}>
             Share the .html file with your attorney. Do NOT share the passcode in the same message.
+          </span>
+        </div>
+      </div>
+      <div style={s.section}>
+        <h3 style={s.sectionTitle}>Web Viewer Export</h3>
+        <p style={s.sectionDesc}>
+          Export your case as an encrypted vault for the GitHub Pages web viewer.
+          Recipients visit your site and enter the password to browse the case in
+          their browser — no download required.
+        </p>
+
+        <div style={s.field}>
+          <label style={s.label}>Viewer Password</label>
+          <div style={s.inputRow}>
+            <input
+              style={s.input}
+              type="password"
+              value={webPassword}
+              onChange={e => { setWebPassword(e.target.value); setWebStatus(null); }}
+              placeholder="Choose a password for the web viewer"
+            />
+            <button
+              style={{ ...s.saveBtn, opacity: webStatus === 'working' ? 0.6 : 1 }}
+              onClick={handleWebExport}
+              disabled={webStatus === 'working'}
+            >
+              {webStatus === 'working' ? 'Exporting...' : 'Export for Web'}
+            </button>
+          </div>
+          {webStatus === 'done' && (
+            <span style={{ ...s.hint, color: '#16A34A' }}>
+              {'\u2713'} {webMsg}
+            </span>
+          )}
+          {webStatus === 'error' && (
+            <span style={{ ...s.hint, color: '#DC2626' }}>
+              {webMsg}
+            </span>
+          )}
+          <span style={s.hint}>
+            Save the vault.enc.json file, then run: npm run build:web -- --vault path/to/vault.enc.json
           </span>
         </div>
       </div>

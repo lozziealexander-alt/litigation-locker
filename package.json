@@ -8,7 +8,9 @@
     "start": "npm run bundle && electron .",
     "dev": "npm run bundle && electron . --dev",
     "build": "npm run bundle && electron-builder",
-    "publish": "npm run bundle && electron-builder --publish always"
+    "publish": "npm run bundle && electron-builder --publish always",
+    "build:web": "node scripts/build-web-viewer.js",
+    "build:web:vault": "node scripts/build-web-viewer.js --vault"
   },
   "keywords": [],
   "author": "",

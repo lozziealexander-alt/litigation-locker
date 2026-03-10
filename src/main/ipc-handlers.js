@@ -4305,6 +4305,44 @@ function registerIpcHandlers() {
     }
   });
 
+  // ==================== WEB EXPORT (GitHub Pages viewer) ====================
+
+  ipcMain.handle('export:webVault', async (event, password) => {
+    try {
+      if (!currentCaseDb || !currentCaseId) {
+        return { success: false, error: 'No case open' };
+      }
+      if (!password || password.length < 4) {
+        return { success: false, error: 'Password must be at least 4 characters' };
+      }
+
+      const { exportForWeb } = require('./web-export');
+
+      // Get case name from master db
+      const caseName = db.getMasterDb()
+        ? (db.getMasterDb().prepare('SELECT name FROM cases WHERE id = ?').get(currentCaseId) || {}).name || 'Case'
+        : 'Case';
+
+      const bundle = exportForWeb(currentCaseDb, currentCaseId, caseName, password);
+
+      const result = await dialog.showSaveDialog({
+        title: 'Save Web Vault',
+        defaultPath: 'vault.enc.json',
+        filters: [{ name: 'Encrypted JSON', extensions: ['json'] }]
+      });
+
+      if (result.canceled || !result.filePath) {
+        return { success: false, error: 'Export cancelled' };
+      }
+
+      fs.writeFileSync(result.filePath, JSON.stringify(bundle), 'utf8');
+      return { success: true, path: result.filePath };
+    } catch (err) {
+      console.error('[WebExport] Failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   console.log('[IPC] All handlers registered successfully');
 }
 

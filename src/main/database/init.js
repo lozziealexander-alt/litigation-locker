@@ -1038,6 +1038,10 @@ function setSetting(key, value) {
   ).run(key, value);
 }
 
+function getMasterDb() {
+  return masterDb;
+}
+
 module.exports = {
   initMasterDb,
   initBundledVault,
@@ -1051,6 +1055,7 @@ module.exports = {
   getSalt,
   storeSalt,
   closeMasterDb,
+  getMasterDb,
   getSetting,
   setSetting
 };

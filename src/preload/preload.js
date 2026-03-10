@@ -177,7 +177,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // Encrypted export (SESSION-9C)
   export: {
-    generateHTML: (passcode, expiryDays) => ipcRenderer.invoke('export:generateHTML', passcode, expiryDays)
+    generateHTML: (passcode, expiryDays) => ipcRenderer.invoke('export:generateHTML', passcode, expiryDays),
+    webVault: (password) => ipcRenderer.invoke('export:webVault', password)
   },
 
   // Event Tags
