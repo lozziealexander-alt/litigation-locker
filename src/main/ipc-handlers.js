@@ -54,15 +54,28 @@ function textSimilarity(textA, textB) {
 function registerIpcHandlers() {
   console.log('[IPC] Registering handlers...');
 
+  // ==================== BUNDLED VAULT AUTO-INIT ====================
+  // If a bundled vault exists, auto-open it in read-only mode (no password needed)
+  const hasBundled = db.initBundledVault();
+  if (hasBundled) {
+    console.log('[IPC] Bundled vault detected — read-only mode enabled');
+  }
+
   // ==================== VAULT ====================
 
   ipcMain.handle('vault:exists', async () => {
+    if (db.isReadOnly()) return true; // bundled vault always "exists"
     const exists = db.vaultExists();
     console.log('[IPC] vault:exists =>', exists);
     return exists;
   });
 
+  ipcMain.handle('vault:isReadOnly', async () => {
+    return db.isReadOnly();
+  });
+
   ipcMain.handle('vault:setup', async (event, passphrase) => {
+    if (db.isReadOnly()) return { success: false, error: 'Vault is read-only' };
     try {
       const salt = keyManager.generateSalt();
       await keyManager.unlock(passphrase, salt);
@@ -75,6 +88,8 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('vault:unlock', async (event, passphrase) => {
+    // In bundled/read-only mode, vault is already open — just succeed
+    if (db.isReadOnly()) return { success: true };
     try {
       const salt = db.getSalt();
       if (!salt) {
@@ -92,6 +107,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('vault:lock', async () => {
+    if (db.isReadOnly()) return { success: true };
     closeCurrentCase();
     keyManager.lock();
     db.closeMasterDb();
@@ -99,6 +115,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('vault:isUnlocked', async () => {
+    if (db.isReadOnly()) return true; // bundled vault is always "unlocked"
     return keyManager.isUnlocked();
   });
 

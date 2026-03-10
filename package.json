@@ -42,6 +42,13 @@
     "linux": {
       "target": "AppImage"
     },
+    "extraResources": [
+      {
+        "from": "bundled-vault/",
+        "to": "bundled-vault/",
+        "filter": ["**/*"]
+      }
+    ],
     "publish": {
       "provider": "github",
       "owner": "lozziealexander-alt",

@@ -8,7 +8,8 @@ contextBridge.exposeInMainWorld('api', {
     setup: (passphrase) => ipcRenderer.invoke('vault:setup', passphrase),
     unlock: (passphrase) => ipcRenderer.invoke('vault:unlock', passphrase),
     lock: () => ipcRenderer.invoke('vault:lock'),
-    isUnlocked: () => ipcRenderer.invoke('vault:isUnlocked')
+    isUnlocked: () => ipcRenderer.invoke('vault:isUnlocked'),
+    isReadOnly: () => ipcRenderer.invoke('vault:isReadOnly')
   },
 
   // Kill switch
