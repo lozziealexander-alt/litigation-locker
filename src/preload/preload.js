@@ -8,7 +8,8 @@ contextBridge.exposeInMainWorld('api', {
     setup: (passphrase) => ipcRenderer.invoke('vault:setup', passphrase),
     unlock: (passphrase) => ipcRenderer.invoke('vault:unlock', passphrase),
     lock: () => ipcRenderer.invoke('vault:lock'),
-    isUnlocked: () => ipcRenderer.invoke('vault:isUnlocked')
+    isUnlocked: () => ipcRenderer.invoke('vault:isUnlocked'),
+    isReadOnly: () => ipcRenderer.invoke('vault:isReadOnly')
   },
 
   // Kill switch
@@ -176,7 +177,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // Encrypted export (SESSION-9C)
   export: {
-    generateHTML: (passcode, expiryDays) => ipcRenderer.invoke('export:generateHTML', passcode, expiryDays)
+    generateHTML: (passcode, expiryDays) => ipcRenderer.invoke('export:generateHTML', passcode, expiryDays),
+    webVault: (password) => ipcRenderer.invoke('export:webVault', password)
   },
 
   // Event Tags

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTheme } from '../styles/ThemeContext';
 import { colors, shadows, spacing, typography, radius } from '../styles/tokens';
 
-export default function Unlock({ onUnlock }) {
+export default function Unlock({ onUnlock, isReadOnly }) {
   const { mode } = useTheme(); // subscribe to theme changes
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
@@ -14,8 +14,13 @@ export default function Unlock({ onUnlock }) {
   const styles = getStyles();
 
   useEffect(() => {
+    // Bundled read-only vault: skip login entirely
+    if (isReadOnly) {
+      onUnlock();
+      return;
+    }
     checkVaultExists();
-  }, []);
+  }, [isReadOnly]);
 
   async function checkVaultExists() {
     try {

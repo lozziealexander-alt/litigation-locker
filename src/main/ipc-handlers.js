@@ -54,15 +54,28 @@ function textSimilarity(textA, textB) {
 function registerIpcHandlers() {
   console.log('[IPC] Registering handlers...');
 
+  // ==================== BUNDLED VAULT AUTO-INIT ====================
+  // If a bundled vault exists, auto-open it in read-only mode (no password needed)
+  const hasBundled = db.initBundledVault();
+  if (hasBundled) {
+    console.log('[IPC] Bundled vault detected — read-only mode enabled');
+  }
+
   // ==================== VAULT ====================
 
   ipcMain.handle('vault:exists', async () => {
+    if (db.isReadOnly()) return true; // bundled vault always "exists"
     const exists = db.vaultExists();
     console.log('[IPC] vault:exists =>', exists);
     return exists;
   });
 
+  ipcMain.handle('vault:isReadOnly', async () => {
+    return db.isReadOnly();
+  });
+
   ipcMain.handle('vault:setup', async (event, passphrase) => {
+    if (db.isReadOnly()) return { success: false, error: 'Vault is read-only' };
     try {
       const salt = keyManager.generateSalt();
       await keyManager.unlock(passphrase, salt);
@@ -75,6 +88,8 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('vault:unlock', async (event, passphrase) => {
+    // In bundled/read-only mode, vault is already open — just succeed
+    if (db.isReadOnly()) return { success: true };
     try {
       const salt = db.getSalt();
       if (!salt) {
@@ -92,6 +107,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('vault:lock', async () => {
+    if (db.isReadOnly()) return { success: true };
     closeCurrentCase();
     keyManager.lock();
     db.closeMasterDb();
@@ -99,6 +115,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('vault:isUnlocked', async () => {
+    if (db.isReadOnly()) return true; // bundled vault is always "unlocked"
     return keyManager.isUnlocked();
   });
 
@@ -4619,6 +4636,44 @@ function registerIpcHandlers() {
       return { success: true, path: result.filePath };
     } catch (error) {
       return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== WEB EXPORT (GitHub Pages viewer) ====================
+
+  ipcMain.handle('export:webVault', async (event, password) => {
+    try {
+      if (!currentCaseDb || !currentCaseId) {
+        return { success: false, error: 'No case open' };
+      }
+      if (!password || password.length < 4) {
+        return { success: false, error: 'Password must be at least 4 characters' };
+      }
+
+      const { exportForWeb } = require('./web-export');
+
+      // Get case name from master db
+      const caseName = db.getMasterDb()
+        ? (db.getMasterDb().prepare('SELECT name FROM cases WHERE id = ?').get(currentCaseId) || {}).name || 'Case'
+        : 'Case';
+
+      const bundle = exportForWeb(currentCaseDb, currentCaseId, caseName, password);
+
+      const result = await dialog.showSaveDialog({
+        title: 'Save Web Vault',
+        defaultPath: 'vault.enc.json',
+        filters: [{ name: 'Encrypted JSON', extensions: ['json'] }]
+      });
+
+      if (result.canceled || !result.filePath) {
+        return { success: false, error: 'Export cancelled' };
+      }
+
+      fs.writeFileSync(result.filePath, JSON.stringify(bundle), 'utf8');
+      return { success: true, path: result.filePath };
+    } catch (err) {
+      console.error('[WebExport] Failed:', err);
+      return { success: false, error: err.message };
     }
   });
 

@@ -6,3 +6,4 @@ src/renderer/bundle.js
 *.db-shm
 *.db-journal
 eng.traineddata
+bundled-vault/

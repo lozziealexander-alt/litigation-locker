@@ -15,6 +15,7 @@ import { colors, shadows, spacing, typography, radius } from './styles/tokens';
 export default function App() {
   const { mode, toggle } = useTheme();
   const [isUnlocked, setIsUnlocked] = useState(false);
+  const [isReadOnly, setIsReadOnly] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [cases, setCases] = useState([]);
   const [activeCase, setActiveCase] = useState(null);
@@ -39,6 +40,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (isReadOnly) return; // No file import or moment creation in read-only mode
     const handleImport = async () => {
       if (!activeCase) {
         alert('Please open a case before importing documents.');
@@ -73,7 +75,7 @@ export default function App() {
       window.removeEventListener('import-files', handleImport);
       window.removeEventListener('add-moment', handleAddMoment);
     };
-  }, [activeCase]);
+  }, [isReadOnly, activeCase]);
 
   // Keyboard shortcut: Cmd/Ctrl + B → open lawyer brief
   useEffect(() => {
@@ -96,8 +98,10 @@ export default function App() {
   }
 
   async function checkVaultStatus() {
+    const readOnly = await window.api.vault.isReadOnly();
+    setIsReadOnly(readOnly);
     const unlocked = await window.api.vault.isUnlocked();
-    console.log('[App] vault isUnlocked:', unlocked);
+    console.log('[App] vault isUnlocked:', unlocked, 'readOnly:', readOnly);
     setIsUnlocked(unlocked);
     if (unlocked) {
       await loadCases();
@@ -180,7 +184,7 @@ export default function App() {
   }
 
   if (!isUnlocked) {
-    return <Unlock onUnlock={handleUnlock} />;
+    return <Unlock onUnlock={handleUnlock} isReadOnly={isReadOnly} />;
   }
 
   if (!activeCase) {
@@ -308,23 +312,34 @@ export default function App() {
               )}
             </button>
           ))}
-          <button style={styles.addCaseButton} onClick={handleCreateCase}>
-            <span>+</span>
-            <span>New Case</span>
-          </button>
+          {!isReadOnly && (
+            <button style={styles.addCaseButton} onClick={handleCreateCase}>
+              <span>+</span>
+              <span>New Case</span>
+            </button>
+          )}
         </div>
 
         <div style={styles.sidebarFooter}>
+          {isReadOnly && (
+            <div style={styles.readOnlyBadge}>
+              <span>{'👁'}</span>
+              <span>Read-Only Vault</span>
+            </div>
+          )}
+
           {/* Theme toggle */}
           <button style={styles.themeToggle} onClick={toggle}>
             <span>{mode === 'light' ? '\u263E' : '\u2600'}</span>
             <span>{mode === 'light' ? 'Dark Mode' : 'Light Mode'}</span>
           </button>
 
-          <button style={styles.burnButton} onClick={handleBurn}>
-            <span>{'\uD83D\uDD25'}</span>
-            <span>BURN</span>
-          </button>
+          {!isReadOnly && (
+            <button style={styles.burnButton} onClick={handleBurn}>
+              <span>{'\uD83D\uDD25'}</span>
+              <span>BURN</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -672,6 +687,21 @@ function getStyles() {
       background: '#F59E0B',
       flexShrink: 0,
       marginLeft: 'auto'
+    },
+
+    // Read-only badge
+    readOnlyBadge: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.sm,
+      padding: `${spacing.sm} ${spacing.md}`,
+      background: '#1E3A5F',
+      border: '1px solid #2563EB44',
+      borderRadius: radius.md,
+      color: '#93C5FD',
+      fontSize: typography.fontSize.sm,
+      fontWeight: typography.fontWeight.semibold
     },
 
     // Main
