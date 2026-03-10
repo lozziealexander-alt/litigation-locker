@@ -206,7 +206,7 @@ export default function Settings() {
             </span>
           )}
           <span style={s.hint}>
-            Save the vault.enc.json file, then run: npm run build:web -- --vault path/to/vault.enc.json
+            The vault is automatically deployed to docs/. Commit and push to update your GitHub Pages site.
           </span>
         </div>
       </div>

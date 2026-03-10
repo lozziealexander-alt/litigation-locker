@@ -16872,7 +16872,7 @@ Precedent: ${gap.precedent}`
         disabled: webStatus === "working"
       },
       webStatus === "working" ? "Exporting..." : "Export for Web"
-    )), webStatus === "done" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#16A34A" } }, "\u2713", " ", webMsg), webStatus === "error" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#DC2626" } }, webMsg), /* @__PURE__ */ import_react9.default.createElement("span", { style: s.hint }, "Save the vault.enc.json file, then run: npm run build:web -- --vault path/to/vault.enc.json"))));
+    )), webStatus === "done" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#16A34A" } }, "\u2713", " ", webMsg), webStatus === "error" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#DC2626" } }, webMsg), /* @__PURE__ */ import_react9.default.createElement("span", { style: s.hint }, "The vault is automatically deployed to docs/. Commit and push to update your GitHub Pages site."))));
   }
   function getStyles4() {
     return {

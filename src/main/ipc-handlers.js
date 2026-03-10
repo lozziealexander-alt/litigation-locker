@@ -4324,6 +4324,14 @@ function registerIpcHandlers() {
         : 'Case';
 
       const bundle = exportForWeb(currentCaseDb, currentCaseId, caseName, password);
+      const bundleJson = JSON.stringify(bundle);
+
+      // Also deploy directly to docs/ for GitHub Pages
+      const docsDir = path.join(__dirname, '..', '..', 'docs');
+      if (fs.existsSync(docsDir)) {
+        fs.writeFileSync(path.join(docsDir, 'vault.enc.json'), bundleJson, 'utf8');
+        console.log('[WebExport] Vault deployed to docs/vault.enc.json');
+      }
 
       const result = await dialog.showSaveDialog({
         title: 'Save Web Vault',
@@ -4332,10 +4340,14 @@ function registerIpcHandlers() {
       });
 
       if (result.canceled || !result.filePath) {
+        // Still deployed to docs/ even if user cancels the save dialog
+        if (fs.existsSync(docsDir)) {
+          return { success: true, path: path.join(docsDir, 'vault.enc.json') };
+        }
         return { success: false, error: 'Export cancelled' };
       }
 
-      fs.writeFileSync(result.filePath, JSON.stringify(bundle), 'utf8');
+      fs.writeFileSync(result.filePath, bundleJson, 'utf8');
       return { success: true, path: result.filePath };
     } catch (err) {
       console.error('[WebExport] Failed:', err);
