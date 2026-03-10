@@ -239,7 +239,18 @@ function buildApi() {
       rename: noopFalse,
       getContent: (docId) => {
         const doc = (v.documents || []).find(d => d.id === docId);
-        const text = doc ? (doc.extracted_text || 'No text available.') : 'Document not found.';
+        if (!doc) return Promise.resolve({ success: false, error: 'Document not found' });
+        // If vault contains decrypted binary content (exported with caseKey), serve it
+        if (doc.content_b64) {
+          return Promise.resolve({ success: true, data: doc.content_b64, mimeType: doc.file_type });
+        }
+        // Images and PDFs without stored content — returning false prevents the
+        // DocumentPanel from opening a preview with garbled/broken data
+        if (doc.file_type && (doc.file_type.startsWith('image/') || doc.file_type === 'application/pdf')) {
+          return Promise.resolve({ success: false, error: 'Content not available in read-only vault — re-export to include previews' });
+        }
+        // Text-based documents — serve extracted text
+        const text = doc.extracted_text || 'No text available.';
         return Promise.resolve({ success: true, data: text, mimeType: 'text/plain' });
       },
       reclassify: noopFalse,
@@ -465,12 +476,31 @@ function buildApi() {
     brief: {
       generate: noopFalse,
       getCurrent: () => {
-        if (!v.brief) return Promise.resolve({ success: false });
-        return Promise.resolve({ success: true, ...v.brief });
+        if (!v.brief) return Promise.resolve({ success: true, brief: null });
+        try {
+          const parsed = JSON.parse(v.brief.content_json);
+          return Promise.resolve({ success: true, brief: { ...parsed, isStale: false, storedAt: v.brief.generated_at } });
+        } catch (e) {
+          return Promise.resolve({ success: true, brief: null });
+        }
+      },
+      // `latest` is what LawyerBrief.jsx actually calls — same shape as getCurrent
+      latest: () => {
+        if (!v.brief) return Promise.resolve({ success: true, brief: null });
+        try {
+          const parsed = JSON.parse(v.brief.content_json);
+          return Promise.resolve({ success: true, brief: { ...parsed, isStale: false, storedAt: v.brief.generated_at } });
+        } catch (e) {
+          return Promise.resolve({ success: true, brief: null });
+        }
       },
       getVersions: () => Promise.resolve({ success: true, versions: [] }),
+      // `versions` is what LawyerBrief.jsx actually calls (alias for getVersions)
+      versions: () => Promise.resolve({ success: true, versions: [] }),
       markStale: noop,
-      isStale: () => Promise.resolve({ success: true, isStale: false })
+      isStale: () => Promise.resolve({ success: true, isStale: false }),
+      exportHTML: noopFalse,
+      exportMarkdown: noopFalse
     },
     dialog: {
       openFiles: () => Promise.resolve({ canceled: true, filePaths: [] })
@@ -506,8 +536,79 @@ function buildApi() {
       update: noopFalse,
       delete: noopFalse
     },
+    // Anchors page uses window.api.anchors.* — backed by vault events data
+    anchors: {
+      list: () => Promise.resolve({ success: true, anchors: (v.events || []).map(enrichEvent) }),
+      generate: noopFalse,
+      getRelatedEvidence: (caseId, anchorId) => {
+        const evt = (v.events || []).find(e => e.id === anchorId);
+        if (!evt) return Promise.resolve({ success: false });
+        return Promise.resolve({
+          success: true,
+          event: { ...evt, tags: _tagsByEvent[evt.id] || [] },
+          linked: {
+            documents: _docsByEvent[evt.id] || [],
+            incidents: [],
+            actors: _actorsByEvent[evt.id] || [],
+            precedents: _precedentsByEvent[evt.id] || []
+          },
+          causalityLinks: [],
+          nearby: { documents: [] }
+        });
+      },
+      update: noopFalse,
+      create: noopFalse,
+      clone: noopFalse,
+      breakApart: noopFalse,
+      delete: noopFalse,
+      linkEvidence: noopFalse,
+      unlinkEvidence: noopFalse,
+      linkIncident: noopFalse,
+      linkPrecedent: noopFalse,
+      unlinkPrecedent: noopFalse,
+      linkActor: noopFalse,
+      unlinkActor: noopFalse,
+      reorder: noopFalse
+    },
     connections: {
-      detect: () => Promise.resolve({ success: true, connections: [] })
+      detect: () => Promise.resolve({ success: true, connections: [] }),
+      // connections.list — return vault's timeline_connections enriched with event titles
+      list: () => {
+        const conns = (v.timelineConnections || []).map(tc => {
+          const srcEvt = (v.events || []).find(e => e.id === tc.source_id);
+          const tgtEvt = (v.events || []).find(e => e.id === tc.target_id);
+          return {
+            ...tc,
+            source_title: srcEvt ? srcEvt.title : '',
+            source_date:  srcEvt ? srcEvt.date  : null,
+            target_title: tgtEvt ? tgtEvt.title : '',
+            target_date:  tgtEvt ? tgtEvt.date  : null
+          };
+        }).filter(c => c.source_id !== c.target_id);
+        return Promise.resolve({ success: true, connections: conns });
+      },
+      // listSuggested — return vault's suggested_connections enriched with event titles
+      listSuggested: () => {
+        const suggs = (v.suggestedConnections || []).map(sc => {
+          const srcEvt = (v.events || []).find(e => e.id === sc.source_id);
+          const tgtEvt = (v.events || []).find(e => e.id === sc.target_id);
+          return {
+            ...sc,
+            source_title: srcEvt ? srcEvt.title : '',
+            source_date:  srcEvt ? srcEvt.date  : null,
+            target_title: tgtEvt ? tgtEvt.title : '',
+            target_date:  tgtEvt ? tgtEvt.date  : null
+          };
+        }).filter(s => s.source_id !== s.target_id && s.status === 'pending');
+        return Promise.resolve({ success: true, suggestions: suggs });
+      },
+      autoDetect: noopFalse,
+      approveSuggestion: noopFalse,
+      dismissSuggestion: noop,
+      bulkApprove: noop,
+      suggestFromPrecedents: () => Promise.resolve({ success: true, suggestions: [] }),
+      delete: noopFalse,
+      update: noopFalse
     },
 
     // Electron webUtils mock for drag-and-drop

@@ -239,7 +239,18 @@ function buildApi() {
       rename: noopFalse,
       getContent: (docId) => {
         const doc = (v.documents || []).find(d => d.id === docId);
-        const text = doc ? (doc.extracted_text || 'No text available.') : 'Document not found.';
+        if (!doc) return Promise.resolve({ success: false, error: 'Document not found' });
+        // If vault contains decrypted binary content (exported with caseKey), serve it
+        if (doc.content_b64) {
+          return Promise.resolve({ success: true, data: doc.content_b64, mimeType: doc.file_type });
+        }
+        // Images and PDFs without stored content — returning false prevents the
+        // DocumentPanel from opening a preview with garbled/broken data
+        if (doc.file_type && (doc.file_type.startsWith('image/') || doc.file_type === 'application/pdf')) {
+          return Promise.resolve({ success: false, error: 'Content not available in read-only vault — re-export to include previews' });
+        }
+        // Text-based documents — serve extracted text
+        const text = doc.extracted_text || 'No text available.';
         return Promise.resolve({ success: true, data: text, mimeType: 'text/plain' });
       },
       reclassify: noopFalse,

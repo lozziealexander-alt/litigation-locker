@@ -6,6 +6,7 @@
  */
 const crypto = require('crypto');
 const db = require('./database/init');
+const { decrypt } = require('./crypto/vault');
 
 // PBKDF2 + AES-GCM parameters (must match web-api.js decryption)
 const PBKDF2_ITERATIONS = 100000;
@@ -17,15 +18,28 @@ const SALT_LENGTH = 16;
  * Export all data for the currently-open case database.
  * Returns a plain JS object matching the shapes expected by the renderer.
  */
-function exportCaseData(caseDb, caseId, caseName) {
+function exportCaseData(caseDb, caseId, caseName, caseKey = null) {
   const data = { caseId, caseName };
 
-  // Documents (exclude encrypted_content blob — too large for web)
-  // Use SELECT * and strip encrypted_content to handle migration columns safely
+  // Documents — strip encrypted_content blob (too large), but decrypt image
+  // files into base64 when a caseKey is available so the web viewer can preview them.
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // skip images > 5 MB encrypted
   data.documents = caseDb.prepare(`
     SELECT * FROM documents ORDER BY document_date
   `).all().map(doc => {
+    const encContent = doc.encrypted_content;
     delete doc.encrypted_content;
+
+    if (caseKey && doc.file_type && doc.file_type.startsWith('image/') && encContent) {
+      try {
+        if (encContent.length <= MAX_IMAGE_BYTES) {
+          const decrypted = decrypt(encContent, caseKey);
+          doc.content_b64 = decrypted.toString('base64');
+        }
+      } catch (e) {
+        // Decryption failure — skip; don't abort the whole export
+      }
+    }
     return doc;
   });
 
@@ -200,8 +214,8 @@ function encryptForWeb(data, password) {
 /**
  * Full export pipeline: extract data → encrypt → return bundle.
  */
-function exportForWeb(caseDb, caseId, caseName, password) {
-  const data = exportCaseData(caseDb, caseId, caseName);
+function exportForWeb(caseDb, caseId, caseName, password, caseKey = null) {
+  const data = exportCaseData(caseDb, caseId, caseName, caseKey);
   const bundle = encryptForWeb(data, password);
   bundle.caseName = caseName;
   return bundle;

@@ -4657,7 +4657,7 @@ function registerIpcHandlers() {
         ? (db.getMasterDb().prepare('SELECT name FROM cases WHERE id = ?').get(currentCaseId) || {}).name || 'Case'
         : 'Case';
 
-      const bundle = exportForWeb(currentCaseDb, currentCaseId, caseName, password);
+      const bundle = exportForWeb(currentCaseDb, currentCaseId, caseName, password, keyManager.deriveCaseKey(currentCaseId));
       const bundleJson = JSON.stringify(bundle);
 
       // Also deploy directly to docs/ for GitHub Pages
