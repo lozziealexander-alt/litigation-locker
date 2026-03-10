@@ -468,9 +468,18 @@ function buildApi() {
         if (!v.brief) return Promise.resolve({ success: false });
         return Promise.resolve({ success: true, ...v.brief });
       },
+      // `latest` is what LawyerBrief.jsx actually calls (alias for getCurrent)
+      latest: () => {
+        if (!v.brief) return Promise.resolve({ success: false });
+        return Promise.resolve({ success: true, ...v.brief });
+      },
       getVersions: () => Promise.resolve({ success: true, versions: [] }),
+      // `versions` is what LawyerBrief.jsx actually calls (alias for getVersions)
+      versions: () => Promise.resolve({ success: true, versions: [] }),
       markStale: noop,
-      isStale: () => Promise.resolve({ success: true, isStale: false })
+      isStale: () => Promise.resolve({ success: true, isStale: false }),
+      exportHTML: noopFalse,
+      exportMarkdown: noopFalse
     },
     dialog: {
       openFiles: () => Promise.resolve({ canceled: true, filePaths: [] })
@@ -506,8 +515,53 @@ function buildApi() {
       update: noopFalse,
       delete: noopFalse
     },
+    // Anchors page uses window.api.anchors.* — backed by vault events data
+    anchors: {
+      list: () => Promise.resolve({ success: true, anchors: (v.events || []).map(enrichEvent) }),
+      generate: noopFalse,
+      getRelatedEvidence: (caseId, anchorId) => {
+        const evt = (v.events || []).find(e => e.id === anchorId);
+        if (!evt) return Promise.resolve({ success: false });
+        return Promise.resolve({
+          success: true,
+          event: { ...evt, tags: _tagsByEvent[evt.id] || [] },
+          linked: {
+            documents: _docsByEvent[evt.id] || [],
+            incidents: [],
+            actors: _actorsByEvent[evt.id] || [],
+            precedents: _precedentsByEvent[evt.id] || []
+          },
+          causalityLinks: [],
+          nearby: { documents: [] }
+        });
+      },
+      update: noopFalse,
+      create: noopFalse,
+      clone: noopFalse,
+      breakApart: noopFalse,
+      delete: noopFalse,
+      linkEvidence: noopFalse,
+      unlinkEvidence: noopFalse,
+      linkIncident: noopFalse,
+      linkPrecedent: noopFalse,
+      unlinkPrecedent: noopFalse,
+      linkActor: noopFalse,
+      unlinkActor: noopFalse,
+      reorder: noopFalse
+    },
     connections: {
-      detect: () => Promise.resolve({ success: true, connections: [] })
+      detect: () => Promise.resolve({ success: true, connections: [] }),
+      // Full connections API stubs — vault has no stored connection analysis,
+      // so return empty collections for all read methods.
+      list: () => Promise.resolve({ success: true, connections: [] }),
+      listSuggested: () => Promise.resolve({ success: true, suggestions: [] }),
+      autoDetect: noopFalse,
+      approveSuggestion: noopFalse,
+      dismissSuggestion: noop,
+      bulkApprove: noop,
+      suggestFromPrecedents: () => Promise.resolve({ success: true, suggestions: [] }),
+      delete: noopFalse,
+      update: noopFalse
     },
 
     // Electron webUtils mock for drag-and-drop
