@@ -528,19 +528,11 @@ window.__webViewerReady = (async function init() {
     return;
   }
 
-  // Otherwise, we'll set up a minimal API that waits for unlock
-  // The actual decryption happens when the user enters the password
-  // on the Unlock screen.  We intercept vault.unlock().
-
+  // Set up window.api synchronously so bundle.js can call it immediately on
+  // mount — the fetch completes in the background and populates vaultBundle
+  // before the user ever submits a password.
   let vaultBundle = null;
 
-  // Try to load the vault bundle from external file
-  try {
-    const res = await fetch('./vault.enc.json');
-    if (res.ok) vaultBundle = await res.json();
-  } catch (e) { /* will show error on unlock */ }
-
-  // Provide a minimal API that handles the unlock flow
   window.api = {
     vault: {
       exists: () => Promise.resolve(true),
@@ -566,4 +558,10 @@ window.__webViewerReady = (async function init() {
     cases: { list: () => Promise.resolve({ success: true, cases: [] }) },
     dialog: { openFiles: () => Promise.resolve({ canceled: true, filePaths: [] }) }
   };
+
+  // Fetch the vault bundle in the background
+  try {
+    const res = await fetch('./vault.enc.json');
+    if (res.ok) vaultBundle = await res.json();
+  } catch (e) { /* will show error on unlock */ }
 })();
