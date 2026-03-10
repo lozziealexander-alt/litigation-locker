@@ -1,9 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import NotifyModal, { NotifySummary } from '../components/NotifyModal';
 
 const PERIOD_COLORS = [
   '#f5a623', '#e8743b', '#e05c5c', '#c0392b', '#9b59b6',
   '#3498db', '#1abc9c', '#27ae60', '#2980b9', '#8e44ad',
   '#16a085', '#d35400'
+];
+
+const VIEW_MODES = [
+  { key: 'all', label: 'All' },
+  { key: 'moments', label: 'Moments' },
+  { key: 'documents', label: 'Documents' }
 ];
 
 export default function Timeline({ onSelectDocument, onSelectEvent, onDataChanged, refreshSignal }) {
@@ -13,38 +20,90 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
   const [groupedItems, setGroupedItems] = useState({});
   const [sortedKeys, setSortedKeys] = useState([]);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
+  const [viewMode, setViewMode] = useState('all');
+
+  // Document metadata: linked event counts + notification actors
+  const [docMeta, setDocMeta] = useState({ eventCounts: {}, notifMap: {} });
+
+  // Notification modal state
+  const [notifyDocId, setNotifyDocId] = useState(null);
+
+  // Scroll + chart scroll restoration
+  const itemsPanelRef = useRef(null);
+  const chartPanelRef = useRef(null);
+  const scrollPosRef = useRef(0);
+  const chartScrollRef = useRef(0);
+  const isInitialLoad = useRef(true);
+
+  // Save scroll position before reload
+  const saveScrollPos = useCallback(() => {
+    if (itemsPanelRef.current) scrollPosRef.current = itemsPanelRef.current.scrollTop;
+    if (chartPanelRef.current) chartScrollRef.current = chartPanelRef.current.scrollLeft;
+  }, []);
+
+  // Restore scroll position after reload
+  const restoreScrollPos = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (itemsPanelRef.current) itemsPanelRef.current.scrollTop = scrollPosRef.current;
+      if (chartPanelRef.current) chartPanelRef.current.scrollLeft = chartScrollRef.current;
+    });
+  }, []);
 
   useEffect(() => {
     loadTimeline();
-    const handleCaseChange = () => loadTimeline();
+    const handleCaseChange = () => { isInitialLoad.current = true; loadTimeline(); };
     window.api.on?.('case-changed', handleCaseChange);
     return () => window.api.off?.('case-changed', handleCaseChange);
   }, []);
 
-  // Reload data when parent signals a data change (without remounting)
   useEffect(() => {
-    if (refreshSignal) loadTimeline();
+    if (refreshSignal) {
+      saveScrollPos();
+      loadTimeline();
+    }
   }, [refreshSignal]);
 
+  // Filter items by viewMode
+  const filteredItems = useMemo(() => {
+    if (viewMode === 'moments') return timelineItems.filter(i => i._type === 'moment');
+    if (viewMode === 'documents') return timelineItems.filter(i => i._type === 'document');
+    return timelineItems;
+  }, [timelineItems, viewMode]);
+
   useEffect(() => {
-    if (timelineItems.length > 0) groupByZoom();
-  }, [timelineItems, zoomLevel]);
+    if (filteredItems.length > 0) groupByZoom(filteredItems);
+    else {
+      setGroupedItems({});
+      setSortedKeys([]);
+      setSelectedPeriod(null);
+    }
+  }, [filteredItems, zoomLevel]);
 
   const loadTimeline = async () => {
     try {
-      setLoading(true);
-      const { caseId } = await window.api.cases.current();
-      if (!caseId) { setTimelineItems([]); setLoading(false); return; }
+      // Only show loading spinner on first load, not on refresh
+      if (isInitialLoad.current) setLoading(true);
 
-      const [eventsRes, docsRes] = await Promise.all([
+      const { caseId } = await window.api.cases.current();
+      if (!caseId) { setTimelineItems([]); setLoading(false); isInitialLoad.current = false; return; }
+
+      const [eventsRes, docsRes, metaRes] = await Promise.all([
         window.api.events.list(caseId),
-        window.api.documents.list(caseId)
+        window.api.documents.list(caseId),
+        window.api.notifications?.batchDocumentMeta()
+          .catch(() => ({ success: false }))
+          || Promise.resolve({ success: false })
       ]);
 
       const events = eventsRes.success ? eventsRes.events : [];
       const docs = docsRes.success ? docsRes.documents : [];
 
-      console.log('[Timeline] Events:', events.length, '| Docs:', docs.length);
+      if (metaRes?.success) {
+        setDocMeta({
+          eventCounts: metaRes.eventCounts || {},
+          notifMap: metaRes.notifMap || {}
+        });
+      }
 
       const merged = [
         ...events.map(e => ({
@@ -63,12 +122,16 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
         return new Date(a._date) - new Date(b._date);
       });
 
-      console.log('[Timeline] Total:', merged.length);
       setTimelineItems(merged);
       setLoading(false);
+
+      // Restore scroll on refresh (not initial load)
+      if (!isInitialLoad.current) restoreScrollPos();
+      isInitialLoad.current = false;
     } catch (err) {
       console.error('[Timeline] Load failed:', err);
       setLoading(false);
+      isInitialLoad.current = false;
     }
   };
 
@@ -86,9 +149,9 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
     return d.toLocaleDateString();
   };
 
-  const groupByZoom = () => {
+  const groupByZoom = (items) => {
     const groups = {};
-    timelineItems.forEach(item => {
+    items.forEach(item => {
       const key = getPeriodKey(item._date);
       if (!groups[key]) groups[key] = [];
       groups[key].push(item);
@@ -114,17 +177,16 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
     const res = item._type === 'moment'
       ? await window.api.events.delete(caseId, item.id)
       : await window.api.documents.delete(caseId, item.id);
-    if (res.success) { onDataChanged?.(); loadTimeline(); }
+    if (res.success) { saveScrollPos(); onDataChanged?.(); loadTimeline(); }
     else alert(`Delete failed: ${res.error}`);
   };
 
-  const handleView = (item) => {
-    if (item._type === 'document') onSelectDocument?.(item);
-    else onSelectEvent?.(item);
-  };
-
-  const handleEdit = (item) => {
-    if (item._type === 'moment') onSelectEvent?.(item);
+  const handleNotified = (docId, actors) => {
+    setDocMeta(prev => ({
+      ...prev,
+      notifMap: { ...prev.notifMap, [docId]: actors }
+    }));
+    setNotifyDocId(null);
   };
 
   if (loading) return (
@@ -150,6 +212,18 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* View mode toggle */}
+          <div style={{ display: 'flex', border: '1px solid #ddd', borderRadius: 6, overflow: 'hidden' }}>
+            {VIEW_MODES.map(m => (
+              <button key={m.key} onClick={() => setViewMode(m.key)} style={{
+                padding: '5px 12px', border: 'none', fontSize: 12,
+                background: viewMode === m.key ? '#2563EB' : '#fff',
+                color: viewMode === m.key ? '#fff' : '#555',
+                cursor: 'pointer', fontWeight: viewMode === m.key ? 600 : 400
+              }}>{m.label}</button>
+            ))}
+          </div>
+          {/* Zoom level */}
           <div style={{ display: 'flex', border: '1px solid #ddd', borderRadius: 6, overflow: 'hidden' }}>
             {['year', 'month', 'week', 'day'].map(level => (
               <button key={level} onClick={() => setZoomLevel(level)} style={{
@@ -174,9 +248,11 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
       {/* BAR CHART */}
       <div style={{ background: '#fff', borderBottom: '1px solid #e8e8e8', flexShrink: 0 }}>
         {sortedKeys.length === 0 ? (
-          <div style={{ padding: 40, textAlign: 'center', color: '#aaa' }}>No items yet</div>
+          <div style={{ padding: 40, textAlign: 'center', color: '#aaa' }}>
+            {viewMode === 'all' ? 'No items yet' : `No ${viewMode} yet`}
+          </div>
         ) : (
-          <div style={{ display: 'flex', overflowX: 'auto', padding: '20px 24px 0', gap: 0, alignItems: 'flex-end' }}>
+          <div ref={chartPanelRef} style={{ display: 'flex', overflowX: 'auto', padding: '20px 24px 0', gap: 0, alignItems: 'flex-end' }}>
 
             {/* Y-axis */}
             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: CHART_HEIGHT, paddingBottom: 32, marginRight: 8, flexShrink: 0 }}>
@@ -203,11 +279,8 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
                     style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', width: 64 }}
                     title={`${key}: ${count} items (${mCount} moments, ${dCount} docs)`}
                   >
-                    {/* Count + dot */}
                     <div style={{ fontSize: 11, fontWeight: 600, color: '#555', marginBottom: 2 }}>{count}</div>
                     <div style={{ width: 10, height: 10, borderRadius: '50%', background: color, marginBottom: 4, boxShadow: isSelected ? `0 0 0 3px ${color}44` : 'none' }} />
-
-                    {/* Bar */}
                     <div style={{
                       width: 48, height: barH,
                       background: isSelected ? color : `${color}88`,
@@ -216,13 +289,10 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
                       border: isSelected ? `2px solid ${color}` : '2px solid transparent',
                       position: 'relative', overflow: 'hidden'
                     }}>
-                      {/* Segmented texture like reference */}
                       {Array.from({ length: Math.ceil(barH / 12) }).map((_, i) => (
                         <div key={i} style={{ position: 'absolute', left: 0, right: 0, height: 1, background: 'rgba(255,255,255,0.3)', top: i * 12 }} />
                       ))}
                     </div>
-
-                    {/* Label pill */}
                     <div style={{
                       marginTop: 6, padding: '3px 6px', borderRadius: 4,
                       background: isSelected ? color : '#eee',
@@ -242,7 +312,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
       </div>
 
       {/* ITEMS PANEL */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
+      <div ref={itemsPanelRef} style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
         {selectedPeriod && (
           <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
             <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: '#2c3e50' }}>{selectedPeriod}</h3>
@@ -254,10 +324,14 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
           </div>
         )}
 
-        {(selectedPeriod ? selectedItems : timelineItems).map(item => {
+        {(selectedPeriod ? selectedItems : filteredItems).map(item => {
           const isMoment = item._type === 'moment';
           const typeColor = isMoment ? '#e74c3c' : '#2196f3';
           const tags = isMoment ? (item.tags || []) : (item.evidence_type ? [item.evidence_type] : []);
+
+          // Document-specific metadata
+          const linkedEventCount = !isMoment ? (docMeta.eventCounts[item.id] || 0) : 0;
+          const notifiedActors = !isMoment ? (docMeta.notifMap[item.id] || []) : [];
 
           return (
             <div key={`${item._type}-${item.id}`} style={{
@@ -273,7 +347,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
                 background: isMoment ? '#ffeef0' : '#e8f4fd',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14
               }}>
-                {isMoment ? '🔴' : '📄'}
+                {isMoment ? '\uD83D\uDD34' : '\uD83D\uDCC4'}
               </div>
 
               {/* Content */}
@@ -283,7 +357,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
                 </div>
                 <div style={{ fontSize: 11, color: '#aaa', marginTop: 2, whiteSpace: 'nowrap' }}>
                   {item._date ? new Date(item._date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'No date'}
-                  {!isMoment && item.file_size ? ` · ${(item.file_size / 1024).toFixed(0)} KB` : ''}
+                  {!isMoment && item.file_size ? ` \u00B7 ${(item.file_size / 1024).toFixed(0)} KB` : ''}
                 </div>
                 {tags.length > 0 && (
                   <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
@@ -296,6 +370,36 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
                     ))}
                   </div>
                 )}
+
+                {/* Document: linked event count */}
+                {!isMoment && linkedEventCount > 0 && (
+                  <div style={{ fontSize: 11, color: '#6B7280', marginTop: 4 }}>
+                    {'\uD83D\uDD17'} Linked to {linkedEventCount} moment{linkedEventCount !== 1 ? 's' : ''}
+                  </div>
+                )}
+
+                {/* Document: notification summary + manage button */}
+                {!isMoment && (
+                  <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {notifiedActors.length > 0 ? (
+                      <>
+                        <NotifySummary
+                          actors={notifiedActors}
+                          onClick={() => setNotifyDocId(item.id)}
+                        />
+                      </>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setNotifyDocId(item.id); }}
+                        style={{
+                          padding: '2px 8px', fontSize: 11, borderRadius: 4,
+                          background: 'transparent', color: '#9CA3AF',
+                          border: '1px dashed #D1D5DB', cursor: 'pointer'
+                        }}
+                      >{'\u2610'} Notified employer</button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Actions */}
@@ -304,18 +408,27 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
                   padding: '4px 10px', fontSize: 11, cursor: 'pointer', borderRadius: 4,
                   background: typeColor, color: '#fff', border: 'none', fontWeight: 500
                 }}>
-                  {isMoment ? '✏️ Edit' : '👁 View'}
+                  {isMoment ? '\u270F\uFE0F Edit' : '\uD83D\uDC41 View'}
                 </button>
                 <button onClick={() => handleDelete(item)} style={{
                   padding: '4px 8px', fontSize: 11, cursor: 'pointer', borderRadius: 4,
                   background: '#fff', color: '#e74c3c', border: '1px solid #ffd0d0'
-                }}>🗑</button>
+                }}>{'\uD83D\uDDD1'}</button>
               </div>
             </div>
           );
         })}
       </div>
 
+      {/* Notify modal */}
+      {notifyDocId && (
+        <NotifyModal
+          targetType="document"
+          targetId={notifyDocId}
+          onClose={() => setNotifyDocId(null)}
+          onNotified={(actors) => handleNotified(notifyDocId, actors)}
+        />
+      )}
     </div>
   );
 }

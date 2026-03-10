@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTheme } from '../styles/ThemeContext';
 import { colors, shadows, spacing, typography, radius, getEvidenceColor } from '../styles/tokens';
+import NotifyModal, { NotifySummary } from './NotifyModal';
 
 const EVIDENCE_TYPE_OPTIONS = [
   { value: 'ADVERSE_ACTION', label: 'Adverse Action', desc: 'Demotion, warning, termination' },
@@ -58,6 +59,9 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
   const [selectedMomentId, setSelectedMomentId] = useState('');
   const [linkingMoment, setLinkingMoment] = useState(false);
   const [linkError, setLinkError] = useState(null);
+  // Notifications
+  const [showNotifyModal, setShowNotifyModal] = useState(false);
+  const [notifiedActors, setNotifiedActors] = useState([]);
   const nameInputRef = useRef(null);
   const styles = getStyles();
 
@@ -67,6 +71,7 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
       loadDateEntries(doc.id);
       loadDocActors(doc.id);
       loadLinkedMoments(doc.id);
+      loadNotifications(doc.id);
       setPreviewData(null);
       setShowPreview(false);
       setShowGroupPicker(false);
@@ -189,6 +194,19 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
       await window.api.events.unlinkEvidence(caseId, momentId, doc.id);
       setLinkedMoments(prev => prev.filter(m => m.id !== momentId));
     } catch (e) {}
+  }
+
+  async function loadNotifications(docId) {
+    try {
+      const result = await window.api.notifications?.getForTarget('document', docId);
+      if (result?.success && result.notifications) {
+        setNotifiedActors(result.notifications);
+      } else {
+        setNotifiedActors([]);
+      }
+    } catch (e) {
+      setNotifiedActors([]);
+    }
   }
 
   async function loadAllActors() {
@@ -653,6 +671,26 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
             )}
           </div>
 
+          {/* Notifications */}
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>
+              Notifications
+              {notifiedActors.length > 0 && <span style={styles.countBadge}>{notifiedActors.length}</span>}
+            </h3>
+            {notifiedActors.length > 0 && (
+              <NotifySummary
+                actors={notifiedActors}
+                onClick={() => setShowNotifyModal(true)}
+              />
+            )}
+            <button
+              style={styles.addDateBtn}
+              onClick={() => setShowNotifyModal(true)}
+            >
+              {notifiedActors.length > 0 ? '\uD83D\uDD14 Edit Notifications' : '\uD83D\uDD14 Notify People'}
+            </button>
+          </div>
+
           {/* Linked Moments */}
           {caseId && (
             <div style={styles.section}>
@@ -808,6 +846,19 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
           </div>
         </div>
       </div>
+
+      {/* Notify modal */}
+      {showNotifyModal && (
+        <NotifyModal
+          targetType="document"
+          targetId={doc.id}
+          onClose={() => setShowNotifyModal(false)}
+          onNotified={(actors) => {
+            setNotifiedActors(actors);
+            setShowNotifyModal(false);
+          }}
+        />
+      )}
 
       {/* Full-screen preview overlay */}
       {showPreview && previewData && (

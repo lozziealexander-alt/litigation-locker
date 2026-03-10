@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Litigation Locker — Case Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+      background: #FAFAF8;
+      color: #1A1A1A;
+      overflow: hidden;
+    }
+    #root { height: 100vh; }
+    button:hover { filter: brightness(1.05); }
+    select { cursor: pointer; }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    document.addEventListener('dragover', function(e) { e.preventDefault(); });
+  </script>
+  <script src="./web-api.js"></script>
+  <script src="./bundle.js"></script>
+</body>
+</html>

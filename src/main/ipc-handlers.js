@@ -54,15 +54,28 @@ function textSimilarity(textA, textB) {
 function registerIpcHandlers() {
   console.log('[IPC] Registering handlers...');
 
+  // ==================== BUNDLED VAULT AUTO-INIT ====================
+  // If a bundled vault exists, auto-open it in read-only mode (no password needed)
+  const hasBundled = db.initBundledVault();
+  if (hasBundled) {
+    console.log('[IPC] Bundled vault detected — read-only mode enabled');
+  }
+
   // ==================== VAULT ====================
 
   ipcMain.handle('vault:exists', async () => {
+    if (db.isReadOnly()) return true; // bundled vault always "exists"
     const exists = db.vaultExists();
     console.log('[IPC] vault:exists =>', exists);
     return exists;
   });
 
+  ipcMain.handle('vault:isReadOnly', async () => {
+    return db.isReadOnly();
+  });
+
   ipcMain.handle('vault:setup', async (event, passphrase) => {
+    if (db.isReadOnly()) return { success: false, error: 'Vault is read-only' };
     try {
       const salt = keyManager.generateSalt();
       await keyManager.unlock(passphrase, salt);
@@ -75,6 +88,8 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('vault:unlock', async (event, passphrase) => {
+    // In bundled/read-only mode, vault is already open — just succeed
+    if (db.isReadOnly()) return { success: true };
     try {
       const salt = db.getSalt();
       if (!salt) {
@@ -92,6 +107,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('vault:lock', async () => {
+    if (db.isReadOnly()) return { success: true };
     closeCurrentCase();
     keyManager.lock();
     db.closeMasterDb();
@@ -99,6 +115,7 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('vault:isUnlocked', async () => {
+    if (db.isReadOnly()) return true; // bundled vault is always "unlocked"
     return keyManager.isUnlocked();
   });
 
@@ -3208,6 +3225,124 @@ function registerIpcHandlers() {
     }
   });
 
+  // ==================== NOTIFICATIONS ====================
+
+  ipcMain.handle('notifications:getForTarget', async (event, targetType, targetId) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      // Ensure table exists for older databases
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id TEXT PRIMARY KEY,
+          target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(target_type, target_id, actor_id)
+        )
+      `);
+
+      const notifications = caseDb.prepare(`
+        SELECT n.*, a.name, a.role, a.classification, a.relationship_to_self
+        FROM notifications n
+        JOIN actors a ON a.id = n.actor_id
+        WHERE n.target_type = ? AND n.target_id = ?
+        ORDER BY a.name
+      `).all(targetType, targetId);
+
+      return { success: true, notifications };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('notifications:setForTarget', async (event, targetType, targetId, actorIds) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      // Ensure table exists for older databases
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id TEXT PRIMARY KEY,
+          target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(target_type, target_id, actor_id)
+        )
+      `);
+
+      // Replace all notifications for this target
+      const deleteStmt = caseDb.prepare('DELETE FROM notifications WHERE target_type = ? AND target_id = ?');
+      const insertStmt = caseDb.prepare('INSERT INTO notifications (id, target_type, target_id, actor_id) VALUES (?, ?, ?, ?)');
+
+      const txn = caseDb.transaction(() => {
+        deleteStmt.run(targetType, targetId);
+        for (const actorId of actorIds) {
+          insertStmt.run(uuidv4(), targetType, targetId, actorId);
+        }
+      });
+      txn();
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Batch: get linked-event counts + notification actors for all documents
+  ipcMain.handle('notifications:batchDocumentMeta', async () => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      // Ensure notifications table exists
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id TEXT PRIMARY KEY,
+          target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(target_type, target_id, actor_id)
+        )
+      `);
+
+      // Linked event counts per document
+      let eventCounts = {};
+      try {
+        const rows = caseDb.prepare(`
+          SELECT document_id, COUNT(*) as cnt
+          FROM event_documents
+          GROUP BY document_id
+        `).all();
+        rows.forEach(r => { eventCounts[r.document_id] = r.cnt; });
+      } catch (e) { /* event_documents may not exist */ }
+
+      // Notification actors per document
+      const notifRows = caseDb.prepare(`
+        SELECT n.target_id, a.id as actor_id, a.name, a.role, a.classification
+        FROM notifications n
+        JOIN actors a ON a.id = n.actor_id
+        WHERE n.target_type = 'document'
+        ORDER BY a.name
+      `).all();
+
+      const notifMap = {};
+      notifRows.forEach(r => {
+        if (!notifMap[r.target_id]) notifMap[r.target_id] = [];
+        notifMap[r.target_id].push({ id: r.actor_id, name: r.name, role: r.role, classification: r.classification });
+      });
+
+      return { success: true, eventCounts, notifMap };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // ==================== CASE CONTEXT ====================
 
   ipcMain.handle('context:get', async (event, caseId) => {
@@ -3909,6 +4044,101 @@ function registerIpcHandlers() {
     }
   });
 
+  // ==================== PRECEDENT CONNECTION INTELLIGENCE ====================
+
+  ipcMain.handle('connections:suggestFromPrecedents', async (event, caseId) => {
+    try {
+      console.log('[IPC] Running precedent connection analysis for case:', caseId);
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      const { PrecedentConnectionAnalyzer } = require('./analysis/precedent-connection-analyzer');
+      const suggestions = PrecedentConnectionAnalyzer.analyze(caseDb, caseId);
+
+      event.sender.send('case-changed', { caseId });
+
+      return { success: true, suggestions, count: suggestions.length };
+    } catch (err) {
+      console.error('[IPC] connections:suggestFromPrecedents failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('connections:listSuggested', async (event, caseId) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, suggestions: [] };
+
+      const suggestions = caseDb.prepare(`
+        SELECT
+          sc.*,
+          e1.title as source_title,
+          e1.date as source_date,
+          e2.title as target_title,
+          e2.date as target_date
+        FROM suggested_connections sc
+        LEFT JOIN events e1 ON e1.id = sc.source_id
+        LEFT JOIN events e2 ON e2.id = sc.target_id
+        WHERE sc.case_id = ?
+        ORDER BY sc.strength DESC, sc.days_between ASC
+      `).all(caseId || currentCaseId);
+
+      return { success: true, suggestions };
+    } catch (err) {
+      console.error('[IPC] connections:listSuggested failed:', err);
+      return { success: false, error: err.message, suggestions: [] };
+    }
+  });
+
+  ipcMain.handle('connections:approveSuggestion', async (event, caseId, suggestionId, edits) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      const { PrecedentConnectionAnalyzer } = require('./analysis/precedent-connection-analyzer');
+      const result = PrecedentConnectionAnalyzer.approveSuggestion(caseDb, caseId, suggestionId, edits || {});
+
+      event.sender.send('case-changed', { caseId });
+
+      return { success: true, ...result };
+    } catch (err) {
+      console.error('[IPC] connections:approveSuggestion failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('connections:dismissSuggestion', async (event, caseId, suggestionId) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      const { PrecedentConnectionAnalyzer } = require('./analysis/precedent-connection-analyzer');
+      PrecedentConnectionAnalyzer.dismissSuggestion(caseDb, caseId, suggestionId);
+
+      return { success: true };
+    } catch (err) {
+      console.error('[IPC] connections:dismissSuggestion failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('connections:bulkApprove', async (event, caseId, suggestionIds) => {
+    try {
+      const caseDb = currentCaseDb;
+      if (!caseDb) return { success: false, error: 'No case open' };
+
+      const { PrecedentConnectionAnalyzer } = require('./analysis/precedent-connection-analyzer');
+      const results = PrecedentConnectionAnalyzer.bulkApprove(caseDb, caseId, suggestionIds);
+
+      event.sender.send('case-changed', { caseId });
+
+      return { success: true, results, count: results.length };
+    } catch (err) {
+      console.error('[IPC] connections:bulkApprove failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   // ==================== SESSION-9C: ENCRYPTED EXPORT ====================
 
   ipcMain.handle('export:generateHTML', async (event, passcode, expiryDays) => {
@@ -4072,6 +4302,44 @@ function registerIpcHandlers() {
       return { success: true, path: result.filePath };
     } catch (error) {
       return { success: false, error: error.message };
+    }
+  });
+
+  // ==================== WEB EXPORT (GitHub Pages viewer) ====================
+
+  ipcMain.handle('export:webVault', async (event, password) => {
+    try {
+      if (!currentCaseDb || !currentCaseId) {
+        return { success: false, error: 'No case open' };
+      }
+      if (!password || password.length < 4) {
+        return { success: false, error: 'Password must be at least 4 characters' };
+      }
+
+      const { exportForWeb } = require('./web-export');
+
+      // Get case name from master db
+      const caseName = db.getMasterDb()
+        ? (db.getMasterDb().prepare('SELECT name FROM cases WHERE id = ?').get(currentCaseId) || {}).name || 'Case'
+        : 'Case';
+
+      const bundle = exportForWeb(currentCaseDb, currentCaseId, caseName, password);
+
+      const result = await dialog.showSaveDialog({
+        title: 'Save Web Vault',
+        defaultPath: 'vault.enc.json',
+        filters: [{ name: 'Encrypted JSON', extensions: ['json'] }]
+      });
+
+      if (result.canceled || !result.filePath) {
+        return { success: false, error: 'Export cancelled' };
+      }
+
+      fs.writeFileSync(result.filePath, JSON.stringify(bundle), 'utf8');
+      return { success: true, path: result.filePath };
+    } catch (err) {
+      console.error('[WebExport] Failed:', err);
+      return { success: false, error: err.message };
     }
   });
 

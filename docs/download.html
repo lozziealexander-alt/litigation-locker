@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Litigation Locker - Secure Download</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 48px;
+      max-width: 440px;
+      width: 90%;
+      text-align: center;
+    }
+    .logo {
+      width: 72px;
+      height: 72px;
+      background: #3b82f6;
+      border-radius: 16px;
+      margin: 0 auto 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    .subtitle { color: #94a3b8; font-size: 14px; margin-bottom: 32px; }
+    .input-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    input[type="password"] {
+      flex: 1;
+      padding: 12px 16px;
+      border: 1px solid #475569;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-size: 16px;
+      outline: none;
+    }
+    input[type="password"]:focus { border-color: #3b82f6; }
+    button {
+      padding: 12px 24px;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #2563eb; }
+    button:disabled { background: #475569; cursor: not-allowed; }
+    .error {
+      color: #f87171;
+      font-size: 14px;
+      min-height: 20px;
+      margin-bottom: 8px;
+    }
+    .success {
+      color: #4ade80;
+      font-size: 14px;
+    }
+    .footer {
+      margin-top: 32px;
+      color: #475569;
+      font-size: 12px;
+    }
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #ffffff40;
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">&#128274;</div>
+    <h1>Litigation Locker</h1>
+    <p class="subtitle">Enter the access password to download the application.</p>
+    <div class="error" id="error"></div>
+    <div class="input-group">
+      <input type="password" id="password" placeholder="Access password" autocomplete="off" />
+      <button id="submit" onclick="unlock()">Unlock</button>
+    </div>
+    <div class="success" id="success"></div>
+    <div class="footer">Secure, encrypted download portal</div>
+  </div>
+
+  <!--
+    ENCRYPTED PAYLOAD
+    To set a download URL and password, run: node scripts/encrypt-url.js
+    It will generate the values below.
+  -->
+  <script>
+    // These values are set by scripts/encrypt-url.js
+    const ENCRYPTED_DATA = "ca7d2f12db0ae4003dea271f9074b1f52e928e38cc09db18e28b2ee70476fa51a421036f6098d48156ec62f45dde940464d16b5817737cc65f6ecd25a566900b296942e4eb752fee75820278fed6c306225ed73d8cafe5fd046d938ec1694fa8f062e035a7c994912e2bc91c54177a625607ca611edcbc51a83a26afdbc06a171da8c7";
+    const SALT = "c56de0319d9a2628629d65a099b20424";
+    const IV = "213914196a61fda933348328";
+    const PASSWORD_HASH = "fb0a74ff6f2e88f43a1f7ead9e3a37aabf7d1d761d7191eacb52a47a4acb0565";
+
+    const passwordInput = document.getElementById("password");
+    const errorEl = document.getElementById("error");
+    const successEl = document.getElementById("success");
+    const submitBtn = document.getElementById("submit");
+
+    passwordInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") unlock();
+    });
+
+    function hexToBytes(hex) {
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < hex.length; i += 2) {
+        bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+      }
+      return bytes;
+    }
+
+    async function sha256(str) {
+      const data = new TextEncoder().encode(str);
+      const hash = await crypto.subtle.digest("SHA-256", data);
+      return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    async function unlock() {
+      const password = passwordInput.value.trim();
+      errorEl.textContent = "";
+      successEl.textContent = "";
+
+      if (!password) {
+        errorEl.textContent = "Please enter a password.";
+        return;
+      }
+
+      if (!ENCRYPTED_DATA || !SALT || !IV || !PASSWORD_HASH) {
+        errorEl.textContent = "Download not yet configured. Run: node scripts/encrypt-url.js";
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner"></span>';
+
+      try {
+        // Verify password hash first
+        const hash = await sha256(password);
+        if (hash !== PASSWORD_HASH) {
+          errorEl.textContent = "Incorrect password.";
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Unlock";
+          return;
+        }
+
+        // Derive key from password using PBKDF2
+        const keyMaterial = await crypto.subtle.importKey(
+          "raw",
+          new TextEncoder().encode(password),
+          "PBKDF2",
+          false,
+          ["deriveKey"]
+        );
+
+        const key = await crypto.subtle.deriveKey(
+          { name: "PBKDF2", salt: hexToBytes(SALT), iterations: 100000, hash: "SHA-256" },
+          keyMaterial,
+          { name: "AES-GCM", length: 256 },
+          false,
+          ["decrypt"]
+        );
+
+        // Decrypt the URL
+        const decrypted = await crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: hexToBytes(IV) },
+          key,
+          hexToBytes(ENCRYPTED_DATA)
+        );
+
+        const url = new TextDecoder().decode(decrypted);
+        successEl.textContent = "Access granted — starting download...";
+        submitBtn.textContent = "Downloading...";
+
+        setTimeout(() => { window.location.href = url; }, 800);
+
+      } catch (e) {
+        errorEl.textContent = "Decryption failed. Incorrect password.";
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Unlock";
+      }
+    }
+  </script>
+</body>
+</html>

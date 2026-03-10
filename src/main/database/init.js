@@ -6,6 +6,47 @@ const { app } = require('electron');
 const keyManager = require('../crypto/key-derivation');
 
 let masterDb = null;
+let readOnlyMode = false;
+
+/**
+ * Check if a bundled vault exists inside the app resources.
+ * When the app is distributed with a pre-loaded vault, this returns the path.
+ */
+function getBundledVaultPath() {
+  // In packaged app: process.resourcesPath points to Resources/
+  // In dev: fall back to project root
+  const candidates = [
+    path.join(process.resourcesPath || '', 'bundled-vault'),
+    path.join(__dirname, '..', '..', '..', 'bundled-vault')
+  ];
+  for (const dir of candidates) {
+    const masterPath = path.join(dir, 'master.db');
+    if (fs.existsSync(masterPath)) {
+      return dir;
+    }
+  }
+  return null;
+}
+
+/**
+ * Initialize from a bundled (read-only) vault.
+ * Opens all databases in readonly mode so the recipient can view but not modify.
+ */
+function initBundledVault() {
+  const bundledPath = getBundledVaultPath();
+  if (!bundledPath) return false;
+
+  console.log('[DB] Opening bundled vault (read-only) from:', bundledPath);
+  readOnlyMode = true;
+
+  const dbPath = path.join(bundledPath, 'master.db');
+  masterDb = new Database(dbPath, { readonly: true });
+  return true;
+}
+
+function isReadOnly() {
+  return readOnlyMode;
+}
 
 /**
  * Initialize master database (vault registry)
@@ -82,7 +123,9 @@ function createCase(name) {
  * Open an existing case database
  */
 function openCase(caseId) {
-  const caseKey = keyManager.deriveCaseKey(caseId);
+  if (!readOnlyMode) {
+    const caseKey = keyManager.deriveCaseKey(caseId);
+  }
 
   const stmt = masterDb.prepare('SELECT db_path FROM cases WHERE id = ?');
   const row = stmt.get(caseId);
@@ -91,16 +134,28 @@ function openCase(caseId) {
     throw new Error(`Case not found: ${caseId}`);
   }
 
+  // In bundled/read-only mode, resolve the case db relative to the bundled vault
+  let dbPath = row.db_path;
+  if (readOnlyMode) {
+    const bundledPath = getBundledVaultPath();
+    const caseDirBundled = path.join(bundledPath, 'case-databases');
+    const caseFileName = path.basename(row.db_path);
+    const bundledCasePath = path.join(caseDirBundled, caseFileName);
+    if (fs.existsSync(bundledCasePath)) {
+      dbPath = bundledCasePath;
+    }
+  }
+
   // Ensure the databases directory exists (may have been removed)
-  const dbDir = path.dirname(row.db_path);
-  if (!fs.existsSync(dbDir)) {
+  const dbDir = path.dirname(dbPath);
+  if (!readOnlyMode && !fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
-  const fileSize = fs.existsSync(row.db_path) ? fs.statSync(row.db_path).size : 0;
-  console.log('[DB] openCase path=' + row.db_path + ' fileSize=' + fileSize);
+  const fileSize = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
+  console.log('[DB] openCase path=' + dbPath + ' fileSize=' + fileSize + ' readOnly=' + readOnlyMode);
 
-  const caseDb = new Database(row.db_path);
+  const caseDb = readOnlyMode ? new Database(dbPath, { readonly: true }) : new Database(dbPath);
 
   const tables = caseDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
   console.log('[DB] openCase tables=' + tables.length);
@@ -115,6 +170,10 @@ function openCase(caseId) {
   }
 
   // ---- Migrations for existing databases ----
+  // Skip all migrations in read-only mode
+  if (readOnlyMode) {
+    return caseDb;
+  }
 
   // Add evidence classification columns (inference-based classification update)
   const docColumns = caseDb.prepare("PRAGMA table_info(documents)").all();
@@ -839,6 +898,39 @@ function openCase(caseId) {
     }
   }
 
+  // SESSION-9F: Suggested connections table (precedent-aware connection intelligence)
+  {
+    const hasSuggestedConnections = caseDb.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='suggested_connections'"
+    ).get();
+    if (!hasSuggestedConnections) {
+      caseDb.exec(`
+        CREATE TABLE IF NOT EXISTS suggested_connections (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          source_type TEXT NOT NULL DEFAULT 'event',
+          target_id TEXT NOT NULL,
+          target_type TEXT NOT NULL DEFAULT 'event',
+          connection_type TEXT NOT NULL,
+          precedent_key TEXT NOT NULL,
+          legal_element TEXT NOT NULL,
+          strength REAL DEFAULT 0.5,
+          days_between INTEGER,
+          description TEXT,
+          reasoning TEXT,
+          status TEXT DEFAULT 'pending',
+          overlaps_connection_id TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          reviewed_at DATETIME
+        )
+      `);
+      caseDb.exec('CREATE INDEX IF NOT EXISTS idx_sc_case ON suggested_connections(case_id)');
+      caseDb.exec('CREATE INDEX IF NOT EXISTS idx_sc_status ON suggested_connections(case_id, status)');
+      console.log('[DB] SESSION-9F: Created suggested_connections table');
+    }
+  }
+
   // SESSION-9E: Lawyer briefs tables
   {
     const hasBriefs = caseDb.prepare(
@@ -946,8 +1038,15 @@ function setSetting(key, value) {
   ).run(key, value);
 }
 
+function getMasterDb() {
+  return masterDb;
+}
+
 module.exports = {
   initMasterDb,
+  initBundledVault,
+  getBundledVaultPath,
+  isReadOnly,
   createCase,
   renameCase,
   openCase,
@@ -956,6 +1055,7 @@ module.exports = {
   getSalt,
   storeSalt,
   closeMasterDb,
+  getMasterDb,
   getSetting,
   setSetting
 };

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { colors, shadows, spacing, typography, radius } from '../styles/tokens';
+import NotifyModal, { NotifySummary } from './NotifyModal';
 
 const TAG_VOCABULARY = [
   { tag: 'sexual_harassment', label: 'Sexual Harassment', color: '#DC2626' },
@@ -46,6 +47,10 @@ export default function EventPanel({ event, onClose, onEventUpdated, onSelectDoc
   // Navigation - all events for prev/next
   const [allEvents, setAllEvents] = useState([]);
 
+  // Notifications
+  const [showNotifyModal, setShowNotifyModal] = useState(false);
+  const [notifiedActors, setNotifiedActors] = useState([]);
+
   const caseId = event.case_id;
 
   const loadRelated = useCallback(async () => {
@@ -64,6 +69,23 @@ export default function EventPanel({ event, onClose, onEventUpdated, onSelectDoc
   useEffect(() => {
     loadRelated();
   }, [loadRelated]);
+
+  // Load notifications for this event
+  useEffect(() => {
+    if (!event?.id) return;
+    (async () => {
+      try {
+        const result = await window.api.notifications?.getForTarget('event', event.id);
+        if (result?.success && result.notifications) {
+          setNotifiedActors(result.notifications);
+        } else {
+          setNotifiedActors([]);
+        }
+      } catch (e) {
+        setNotifiedActors([]);
+      }
+    })();
+  }, [event?.id]);
 
   // Load all events for prev/next navigation
   useEffect(() => {
@@ -459,6 +481,19 @@ export default function EventPanel({ event, onClose, onEventUpdated, onSelectDoc
           </div>
         )}
       </div>
+
+      {/* Notify modal */}
+      {showNotifyModal && (
+        <NotifyModal
+          targetType="event"
+          targetId={event.id}
+          onClose={() => setShowNotifyModal(false)}
+          onNotified={(actors) => {
+            setNotifiedActors(actors);
+            setShowNotifyModal(false);
+          }}
+        />
+      )}
     </div>
   );
 
@@ -537,6 +572,22 @@ export default function EventPanel({ event, onClose, onEventUpdated, onSelectDoc
             <div style={styles.textContent}>{evt.why_no_report}</div>
           </Section>
         ) : null}
+        {/* Notifications */}
+        <Section title="Notifications">
+          {notifiedActors.length > 0 ? (
+            <NotifySummary
+              actors={notifiedActors}
+              onClick={() => setShowNotifyModal(true)}
+            />
+          ) : (
+            <button
+              style={styles.linkBtn}
+              onClick={() => setShowNotifyModal(true)}
+            >
+              {'\uD83D\uDD14'} Notify People
+            </button>
+          )}
+        </Section>
       </>
     );
   }
