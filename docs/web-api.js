@@ -465,13 +465,23 @@ function buildApi() {
     brief: {
       generate: noopFalse,
       getCurrent: () => {
-        if (!v.brief) return Promise.resolve({ success: false });
-        return Promise.resolve({ success: true, ...v.brief });
+        if (!v.brief) return Promise.resolve({ success: true, brief: null });
+        try {
+          const parsed = JSON.parse(v.brief.content_json);
+          return Promise.resolve({ success: true, brief: { ...parsed, isStale: false, storedAt: v.brief.generated_at } });
+        } catch (e) {
+          return Promise.resolve({ success: true, brief: null });
+        }
       },
-      // `latest` is what LawyerBrief.jsx actually calls (alias for getCurrent)
+      // `latest` is what LawyerBrief.jsx actually calls — same shape as getCurrent
       latest: () => {
-        if (!v.brief) return Promise.resolve({ success: false });
-        return Promise.resolve({ success: true, ...v.brief });
+        if (!v.brief) return Promise.resolve({ success: true, brief: null });
+        try {
+          const parsed = JSON.parse(v.brief.content_json);
+          return Promise.resolve({ success: true, brief: { ...parsed, isStale: false, storedAt: v.brief.generated_at } });
+        } catch (e) {
+          return Promise.resolve({ success: true, brief: null });
+        }
       },
       getVersions: () => Promise.resolve({ success: true, versions: [] }),
       // `versions` is what LawyerBrief.jsx actually calls (alias for getVersions)
