@@ -12957,12 +12957,18 @@
     const [isSubmitting, setIsSubmitting] = (0, import_react2.useState)(false);
     const styles5 = getStyles();
     (0, import_react2.useEffect)(() => {
-      if (isReadOnly) {
-        onUnlock();
-        return;
-      }
-      checkVaultExists();
-    }, [isReadOnly]);
+      (async () => {
+        try {
+          const unlocked = await window.api.vault.isUnlocked();
+          if (unlocked) {
+            onUnlock();
+            return;
+          }
+        } catch (e) {
+        }
+        checkVaultExists();
+      })();
+    }, []);
     async function checkVaultExists() {
       try {
         const exists = await window.api.vault.exists();
@@ -16866,7 +16872,7 @@ Precedent: ${gap.precedent}`
         disabled: webStatus === "working"
       },
       webStatus === "working" ? "Exporting..." : "Export for Web"
-    )), webStatus === "done" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#16A34A" } }, "\u2713", " ", webMsg), webStatus === "error" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#DC2626" } }, webMsg), /* @__PURE__ */ import_react9.default.createElement("span", { style: s.hint }, "Save the vault.enc.json file, then run: npm run build:web -- --vault path/to/vault.enc.json"))));
+    )), webStatus === "done" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#16A34A" } }, "\u2713", " ", webMsg), webStatus === "error" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#DC2626" } }, webMsg), /* @__PURE__ */ import_react9.default.createElement("span", { style: s.hint }, "The vault is automatically deployed to docs/. Commit and push to update your GitHub Pages site."))));
   }
   function getStyles4() {
     return {
