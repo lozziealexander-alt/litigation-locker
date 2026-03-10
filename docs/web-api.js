@@ -551,10 +551,36 @@ function buildApi() {
     },
     connections: {
       detect: () => Promise.resolve({ success: true, connections: [] }),
-      // Full connections API stubs — vault has no stored connection analysis,
-      // so return empty collections for all read methods.
-      list: () => Promise.resolve({ success: true, connections: [] }),
-      listSuggested: () => Promise.resolve({ success: true, suggestions: [] }),
+      // connections.list — return vault's timeline_connections enriched with event titles
+      list: () => {
+        const conns = (v.timelineConnections || []).map(tc => {
+          const srcEvt = (v.events || []).find(e => e.id === tc.source_id);
+          const tgtEvt = (v.events || []).find(e => e.id === tc.target_id);
+          return {
+            ...tc,
+            source_title: srcEvt ? srcEvt.title : '',
+            source_date:  srcEvt ? srcEvt.date  : null,
+            target_title: tgtEvt ? tgtEvt.title : '',
+            target_date:  tgtEvt ? tgtEvt.date  : null
+          };
+        }).filter(c => c.source_id !== c.target_id);
+        return Promise.resolve({ success: true, connections: conns });
+      },
+      // listSuggested — return vault's suggested_connections enriched with event titles
+      listSuggested: () => {
+        const suggs = (v.suggestedConnections || []).map(sc => {
+          const srcEvt = (v.events || []).find(e => e.id === sc.source_id);
+          const tgtEvt = (v.events || []).find(e => e.id === sc.target_id);
+          return {
+            ...sc,
+            source_title: srcEvt ? srcEvt.title : '',
+            source_date:  srcEvt ? srcEvt.date  : null,
+            target_title: tgtEvt ? tgtEvt.title : '',
+            target_date:  tgtEvt ? tgtEvt.date  : null
+          };
+        }).filter(s => s.source_id !== s.target_id && s.status === 'pending');
+        return Promise.resolve({ success: true, suggestions: suggs });
+      },
       autoDetect: noopFalse,
       approveSuggestion: noopFalse,
       dismissSuggestion: noop,

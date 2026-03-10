@@ -96,12 +96,24 @@ function exportCaseData(caseDb, caseId, caseName) {
     SELECT incident_id, event_id, event_role FROM incident_events
   `).all();
 
-  // Timeline connections
+  // Timeline connections (include id so the Connections page can reference them)
   data.timelineConnections = caseDb.prepare(`
-    SELECT source_id, source_type, target_id, target_type,
-           connection_type, strength, days_between, description
+    SELECT id, source_id, source_type, target_id, target_type,
+           connection_type, strength, days_between, description, auto_detected
     FROM timeline_connections
   `).all();
+
+  // Suggested connections (AI-detected, pending review)
+  try {
+    data.suggestedConnections = caseDb.prepare(`
+      SELECT id, source_id, source_type, target_id, target_type,
+             connection_type, precedent_key, legal_element, strength,
+             days_between, description, reasoning, status
+      FROM suggested_connections
+    `).all();
+  } catch (e) {
+    data.suggestedConnections = [];
+  }
 
   // Case context
   data.context = caseDb.prepare(`
