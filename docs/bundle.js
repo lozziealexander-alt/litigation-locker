@@ -13602,6 +13602,14 @@
     const [selectedPeriod, setSelectedPeriod] = (0, import_react4.useState)(null);
     const [viewMode, setViewMode] = (0, import_react4.useState)("all");
     const [pendingDeleteId, setPendingDeleteId] = (0, import_react4.useState)(null);
+    const [expandedItems, setExpandedItems] = (0, import_react4.useState)(/* @__PURE__ */ new Set());
+    const toggleExpand = (0, import_react4.useCallback)((id) => {
+      setExpandedItems((prev) => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+      });
+    }, []);
     const [docMeta, setDocMeta] = (0, import_react4.useState)({ eventCounts: {}, notifMap: {} });
     const [notifyDocId, setNotifyDocId] = (0, import_react4.useState)(null);
     const itemsPanelRef = (0, import_react4.useRef)(null);
@@ -13850,19 +13858,22 @@
       const isContext = isMoment && item.is_context_event;
       const typeColor = isContext ? "#6B7280" : isMoment ? "#e74c3c" : "#2196f3";
       const tags = isMoment ? item.tags || [] : item.evidence_type ? [item.evidence_type] : [];
+      const isExpanded = expandedItems.has(item.id);
       const linkedEventCount = !isMoment ? docMeta.eventCounts[item.id] || 0 : 0;
       const notifiedActors = !isMoment ? docMeta.notifMap[item.id] || [] : [];
+      const description = item.description || item.notes || null;
+      const category = item.category || null;
+      const location = item.location || null;
+      const severity = item.severity || null;
+      const hasExpandableContent = isMoment ? description || category || location || severity || tags.length > 4 : item.extracted_text || linkedEventCount > 0;
       return /* @__PURE__ */ import_react4.default.createElement("div", { key: `${item._type}-${item.id}`, style: {
-        display: "flex",
-        gap: 12,
-        padding: "10px 14px",
         background: "#fff",
         border: "1px solid #eee",
         borderLeft: `3px solid ${typeColor}`,
         borderRadius: 6,
         marginBottom: 6,
         transition: "box-shadow 0.1s"
-      } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: {
+      } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 12, padding: "10px 14px" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: {
         width: 32,
         height: 32,
         borderRadius: "50%",
@@ -13872,7 +13883,7 @@
         alignItems: "center",
         justifyContent: "center",
         fontSize: 14
-      } }, isContext ? "\u25EF" : isMoment ? "\u{1F534}" : "\u{1F4C4}"), /* @__PURE__ */ import_react4.default.createElement("div", { style: { flex: 1, minWidth: 0, overflow: "hidden" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontWeight: 500, fontSize: 13, color: isContext ? "#6B7280" : "#2c3e50", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6 } }, item._label, isContext && /* @__PURE__ */ import_react4.default.createElement("span", { style: { fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#e5e7eb", color: "#6B7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, flexShrink: 0 } }, "Context")), /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontSize: 11, color: "#aaa", marginTop: 2, whiteSpace: "nowrap" } }, item._date ? new Date(item._date).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "No date", !isMoment && item.file_size ? ` \xB7 ${(item.file_size / 1024).toFixed(0)} KB` : ""), tags.length > 0 && /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" } }, tags.slice(0, 4).map((tag) => /* @__PURE__ */ import_react4.default.createElement("span", { key: tag, style: {
+      } }, isContext ? "\u25EF" : isMoment ? "\u{1F534}" : "\u{1F4C4}"), /* @__PURE__ */ import_react4.default.createElement("div", { style: { flex: 1, minWidth: 0, overflow: "hidden" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontWeight: 500, fontSize: 13, color: isContext ? "#6B7280" : "#2c3e50", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6 } }, item._label, isContext && /* @__PURE__ */ import_react4.default.createElement("span", { style: { fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#e5e7eb", color: "#6B7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, flexShrink: 0 } }, "Context")), /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontSize: 11, color: "#aaa", marginTop: 2, whiteSpace: "nowrap" } }, item._date ? new Date(item._date).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "No date", !isMoment && item.file_size ? ` \xB7 ${(item.file_size / 1024).toFixed(0)} KB` : ""), !isExpanded && tags.length > 0 && /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" } }, tags.slice(0, 4).map((tag) => /* @__PURE__ */ import_react4.default.createElement("span", { key: tag, style: {
         padding: "1px 6px",
         fontSize: 10,
         borderRadius: 3,
@@ -13881,13 +13892,7 @@
         fontWeight: 500,
         textTransform: "uppercase",
         letterSpacing: 0.3
-      } }, tag.replace(/_/g, " ")))), !isMoment && linkedEventCount > 0 && /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 4 } }, "\u{1F517}", " Linked to ", linkedEventCount, " moment", linkedEventCount !== 1 ? "s" : ""), !isMoment && /* @__PURE__ */ import_react4.default.createElement("div", { style: { marginTop: 4, display: "flex", alignItems: "center", gap: 8 } }, notifiedActors.length > 0 ? /* @__PURE__ */ import_react4.default.createElement(import_react4.default.Fragment, null, /* @__PURE__ */ import_react4.default.createElement(
-        NotifySummary,
-        {
-          actors: notifiedActors,
-          onClick: () => setNotifyDocId(item.id)
-        }
-      )) : /* @__PURE__ */ import_react4.default.createElement(
+      } }, tag.replace(/_/g, " "))), tags.length > 4 && /* @__PURE__ */ import_react4.default.createElement("span", { style: { fontSize: 10, color: "#aaa" } }, "+", tags.length - 4, " more")), !isMoment && !isExpanded && /* @__PURE__ */ import_react4.default.createElement("div", { style: { marginTop: 4, display: "flex", alignItems: "center", gap: 8 } }, notifiedActors.length > 0 ? /* @__PURE__ */ import_react4.default.createElement(NotifySummary, { actors: notifiedActors, onClick: () => setNotifyDocId(item.id) }) : /* @__PURE__ */ import_react4.default.createElement(
         "button",
         {
           onClick: (e) => {
@@ -13906,7 +13911,26 @@
         },
         "\u2610",
         " Notified employer"
-      ))), /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center", flexShrink: 0 } }, /* @__PURE__ */ import_react4.default.createElement("button", { onClick: () => isMoment ? onSelectEvent?.(item) : onSelectDocument?.(item), style: {
+      ))), /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center", flexShrink: 0 } }, hasExpandableContent && /* @__PURE__ */ import_react4.default.createElement(
+        "button",
+        {
+          onClick: () => toggleExpand(item.id),
+          title: isExpanded ? "Collapse" : "Expand details",
+          style: {
+            padding: "4px 8px",
+            fontSize: 13,
+            cursor: "pointer",
+            borderRadius: 4,
+            background: isExpanded ? "#f1f5f9" : "#fff",
+            color: "#64748b",
+            border: "1px solid #e2e8f0",
+            lineHeight: 1,
+            transition: "all 0.15s",
+            transform: isExpanded ? "rotate(180deg)" : "none"
+          }
+        },
+        "\u2304"
+      ), /* @__PURE__ */ import_react4.default.createElement("button", { onClick: () => isMoment ? onSelectEvent?.(item) : onSelectDocument?.(item), style: {
         padding: "4px 10px",
         fontSize: 11,
         cursor: "pointer",
@@ -13924,7 +13948,40 @@
         color: pendingDeleteId === item.id ? "#fff" : "#e74c3c",
         border: "1px solid #ffd0d0",
         fontWeight: pendingDeleteId === item.id ? 600 : 400
-      } }, pendingDeleteId === item.id ? "Sure?" : "\u{1F5D1}")));
+      } }, pendingDeleteId === item.id ? "Sure?" : "\u{1F5D1}"))), isExpanded && /* @__PURE__ */ import_react4.default.createElement("div", { style: {
+        borderTop: "1px solid #f0f0f0",
+        padding: "10px 14px 12px 58px",
+        // left-indent to align under content
+        background: "#fafafa"
+      } }, isMoment ? /* @__PURE__ */ import_react4.default.createElement(import_react4.default.Fragment, null, description && /* @__PURE__ */ import_react4.default.createElement("p", { style: { margin: "0 0 8px", fontSize: 12, color: "#374151", lineHeight: 1.6, whiteSpace: "pre-wrap" } }, description), /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", marginBottom: tags.length > 0 ? 8 : 0 } }, category && /* @__PURE__ */ import_react4.default.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, /* @__PURE__ */ import_react4.default.createElement("span", { style: { color: "#9CA3AF" } }, "Category"), "\xA0 ", category.replace(/_/g, " ")), severity && /* @__PURE__ */ import_react4.default.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, /* @__PURE__ */ import_react4.default.createElement("span", { style: { color: "#9CA3AF" } }, "Severity"), "\xA0 ", severity), location && /* @__PURE__ */ import_react4.default.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, /* @__PURE__ */ import_react4.default.createElement("span", { style: { color: "#9CA3AF" } }, "Location"), "\xA0 ", location)), tags.length > 0 && /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 4, flexWrap: "wrap" } }, tags.map((tag) => /* @__PURE__ */ import_react4.default.createElement("span", { key: tag, style: {
+        padding: "1px 6px",
+        fontSize: 10,
+        borderRadius: 3,
+        background: isContext ? "#f3f4f6" : "#ffeef0",
+        color: isContext ? "#9CA3AF" : typeColor,
+        fontWeight: 500,
+        textTransform: "uppercase",
+        letterSpacing: 0.3
+      } }, tag.replace(/_/g, " ")))), !description && !category && !severity && !location && tags.length === 0 && /* @__PURE__ */ import_react4.default.createElement("span", { style: { fontSize: 11, color: "#bbb", fontStyle: "italic" } }, "No additional details")) : /* @__PURE__ */ import_react4.default.createElement(import_react4.default.Fragment, null, linkedEventCount > 0 && /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 6 } }, "\u{1F517}", " Linked to ", linkedEventCount, " moment", linkedEventCount !== 1 ? "s" : ""), item.extracted_text && /* @__PURE__ */ import_react4.default.createElement("p", { style: { margin: "0 0 8px", fontSize: 11, color: "#6B7280", lineHeight: 1.5, fontStyle: "italic" } }, item.extracted_text.slice(0, 320), item.extracted_text.length > 320 ? "\u2026" : ""), /* @__PURE__ */ import_react4.default.createElement("div", { style: { marginTop: 4, display: "flex", alignItems: "center", gap: 8 } }, notifiedActors.length > 0 ? /* @__PURE__ */ import_react4.default.createElement(NotifySummary, { actors: notifiedActors, onClick: () => setNotifyDocId(item.id) }) : /* @__PURE__ */ import_react4.default.createElement(
+        "button",
+        {
+          onClick: (e) => {
+            e.stopPropagation();
+            setNotifyDocId(item.id);
+          },
+          style: {
+            padding: "2px 8px",
+            fontSize: 11,
+            borderRadius: 4,
+            background: "transparent",
+            color: "#9CA3AF",
+            border: "1px dashed #D1D5DB",
+            cursor: "pointer"
+          }
+        },
+        "\u2610",
+        " Notified employer"
+      )))));
     })), notifyDocId && /* @__PURE__ */ import_react4.default.createElement(
       NotifyModal,
       {
