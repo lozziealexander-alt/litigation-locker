@@ -53,6 +53,7 @@ if (vaultPath && fs.existsSync(vaultPath)) {
 
 // 4. Write viewer.html
 console.log('[build] Writing viewer.html...');
+const cacheBust = Date.now();
 const viewerHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -80,8 +81,8 @@ const viewerHtml = `<!DOCTYPE html>
   <script>
     document.addEventListener('dragover', function(e) { e.preventDefault(); });
   </script>
-  <script src="./web-api.js"></script>
-  <script src="./bundle.js"></script>
+  <script src="./web-api.js?v=${cacheBust}"></script>
+  <script src="./bundle.js?v=${cacheBust}"></script>
 </body>
 </html>`;
 
