@@ -22,6 +22,15 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [viewMode, setViewMode] = useState('all');
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const [expandedItems, setExpandedItems] = useState(new Set());
+
+  const toggleExpand = useCallback((id) => {
+    setExpandedItems(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
 
   // Document metadata: linked event counts + notification actors
   const [docMeta, setDocMeta] = useState({ eventCounts: {}, notifMap: {} });
@@ -334,96 +343,188 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
           const isContext = isMoment && item.is_context_event;
           const typeColor = isContext ? '#6B7280' : isMoment ? '#e74c3c' : '#2196f3';
           const tags = isMoment ? (item.tags || []) : (item.evidence_type ? [item.evidence_type] : []);
+          const isExpanded = expandedItems.has(item.id);
 
           // Document-specific metadata
           const linkedEventCount = !isMoment ? (docMeta.eventCounts[item.id] || 0) : 0;
           const notifiedActors = !isMoment ? (docMeta.notifMap[item.id] || []) : [];
 
+          // Fields to show when expanded
+          const description = item.description || item.notes || null;
+          const category = item.category || null;
+          const location = item.location || null;
+          const severity = item.severity || null;
+          const hasExpandableContent = isMoment
+            ? (description || category || location || severity || tags.length > 4)
+            : (item.extracted_text || linkedEventCount > 0);
+
           return (
             <div key={`${item._type}-${item.id}`} style={{
-              display: 'flex', gap: 12, padding: '10px 14px',
               background: '#fff', border: '1px solid #eee',
               borderLeft: `3px solid ${typeColor}`,
               borderRadius: 6, marginBottom: 6,
               transition: 'box-shadow 0.1s'
             }}>
-              {/* Icon */}
-              <div style={{
-                width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
-                background: isContext ? '#f3f4f6' : isMoment ? '#ffeef0' : '#e8f4fd',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14
-              }}>
-                {isContext ? '\u25EF' : isMoment ? '\uD83D\uDD34' : '\uD83D\uDCC4'}
-              </div>
-
-              {/* Content */}
-              <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                <div style={{ fontWeight: 500, fontSize: 13, color: isContext ? '#6B7280' : '#2c3e50', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {item._label}
-                  {isContext && <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#e5e7eb', color: '#6B7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0 }}>Context</span>}
-                </div>
-                <div style={{ fontSize: 11, color: '#aaa', marginTop: 2, whiteSpace: 'nowrap' }}>
-                  {item._date ? new Date(item._date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'No date'}
-                  {!isMoment && item.file_size ? ` \u00B7 ${(item.file_size / 1024).toFixed(0)} KB` : ''}
-                </div>
-                {tags.length > 0 && (
-                  <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
-                    {tags.slice(0, 4).map(tag => (
-                      <span key={tag} style={{
-                        padding: '1px 6px', fontSize: 10, borderRadius: 3,
-                        background: isContext ? '#f3f4f6' : isMoment ? '#ffeef0' : '#e8f4fd',
-                        color: isContext ? '#9CA3AF' : typeColor, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.3
-                      }}>{tag.replace(/_/g, ' ')}</span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Document: linked event count */}
-                {!isMoment && linkedEventCount > 0 && (
-                  <div style={{ fontSize: 11, color: '#6B7280', marginTop: 4 }}>
-                    {'\uD83D\uDD17'} Linked to {linkedEventCount} moment{linkedEventCount !== 1 ? 's' : ''}
-                  </div>
-                )}
-
-                {/* Document: notification summary + manage button */}
-                {!isMoment && (
-                  <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {notifiedActors.length > 0 ? (
-                      <>
-                        <NotifySummary
-                          actors={notifiedActors}
-                          onClick={() => setNotifyDocId(item.id)}
-                        />
-                      </>
-                    ) : (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setNotifyDocId(item.id); }}
-                        style={{
-                          padding: '2px 8px', fontSize: 11, borderRadius: 4,
-                          background: 'transparent', color: '#9CA3AF',
-                          border: '1px dashed #D1D5DB', cursor: 'pointer'
-                        }}
-                      >{'\u2610'} Notified employer</button>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Actions */}
-              <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-                <button onClick={() => isMoment ? onSelectEvent?.(item) : onSelectDocument?.(item)} style={{
-                  padding: '4px 10px', fontSize: 11, cursor: 'pointer', borderRadius: 4,
-                  background: typeColor, color: '#fff', border: 'none', fontWeight: 500
+              {/* Main row */}
+              <div style={{ display: 'flex', gap: 12, padding: '10px 14px' }}>
+                {/* Icon */}
+                <div style={{
+                  width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+                  background: isContext ? '#f3f4f6' : isMoment ? '#ffeef0' : '#e8f4fd',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14
                 }}>
-                  {isMoment ? '\u270F\uFE0F Edit' : '\uD83D\uDC41 View'}
-                </button>
-                <button onClick={() => handleDelete(item)} style={{
-                  padding: '4px 8px', fontSize: 11, cursor: 'pointer', borderRadius: 4,
-                  background: pendingDeleteId === item.id ? '#e74c3c' : '#fff',
-                  color: pendingDeleteId === item.id ? '#fff' : '#e74c3c',
-                  border: '1px solid #ffd0d0', fontWeight: pendingDeleteId === item.id ? 600 : 400
-                }}>{pendingDeleteId === item.id ? 'Sure?' : '\uD83D\uDDD1'}</button>
+                  {isContext ? '\u25EF' : isMoment ? '\uD83D\uDD34' : '\uD83D\uDCC4'}
+                </div>
+
+                {/* Content */}
+                <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                  <div style={{ fontWeight: 500, fontSize: 13, color: isContext ? '#6B7280' : '#2c3e50', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {item._label}
+                    {isContext && <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#e5e7eb', color: '#6B7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0 }}>Context</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#aaa', marginTop: 2, whiteSpace: 'nowrap' }}>
+                    {item._date ? new Date(item._date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'No date'}
+                    {!isMoment && item.file_size ? ` \u00B7 ${(item.file_size / 1024).toFixed(0)} KB` : ''}
+                  </div>
+                  {!isExpanded && tags.length > 0 && (
+                    <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+                      {tags.slice(0, 4).map(tag => (
+                        <span key={tag} style={{
+                          padding: '1px 6px', fontSize: 10, borderRadius: 3,
+                          background: isContext ? '#f3f4f6' : isMoment ? '#ffeef0' : '#e8f4fd',
+                          color: isContext ? '#9CA3AF' : typeColor, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.3
+                        }}>{tag.replace(/_/g, ' ')}</span>
+                      ))}
+                      {tags.length > 4 && <span style={{ fontSize: 10, color: '#aaa' }}>+{tags.length - 4} more</span>}
+                    </div>
+                  )}
+
+                  {/* Document: notification summary (collapsed view only) */}
+                  {!isMoment && !isExpanded && (
+                    <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {notifiedActors.length > 0 ? (
+                        <NotifySummary actors={notifiedActors} onClick={() => setNotifyDocId(item.id)} />
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setNotifyDocId(item.id); }}
+                          style={{
+                            padding: '2px 8px', fontSize: 11, borderRadius: 4,
+                            background: 'transparent', color: '#9CA3AF',
+                            border: '1px dashed #D1D5DB', cursor: 'pointer'
+                          }}
+                        >{'\u2610'} Notified employer</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+                  {hasExpandableContent && (
+                    <button
+                      onClick={() => toggleExpand(item.id)}
+                      title={isExpanded ? 'Collapse' : 'Expand details'}
+                      style={{
+                        padding: '4px 8px', fontSize: 13, cursor: 'pointer', borderRadius: 4,
+                        background: isExpanded ? '#f1f5f9' : '#fff',
+                        color: '#64748b', border: '1px solid #e2e8f0',
+                        lineHeight: 1, transition: 'all 0.15s',
+                        transform: isExpanded ? 'rotate(180deg)' : 'none'
+                      }}
+                    >⌄</button>
+                  )}
+                  <button onClick={() => isMoment ? onSelectEvent?.(item) : onSelectDocument?.(item)} style={{
+                    padding: '4px 10px', fontSize: 11, cursor: 'pointer', borderRadius: 4,
+                    background: typeColor, color: '#fff', border: 'none', fontWeight: 500
+                  }}>
+                    {isMoment ? '\u270F\uFE0F Edit' : '\uD83D\uDC41 View'}
+                  </button>
+                  <button onClick={() => handleDelete(item)} style={{
+                    padding: '4px 8px', fontSize: 11, cursor: 'pointer', borderRadius: 4,
+                    background: pendingDeleteId === item.id ? '#e74c3c' : '#fff',
+                    color: pendingDeleteId === item.id ? '#fff' : '#e74c3c',
+                    border: '1px solid #ffd0d0', fontWeight: pendingDeleteId === item.id ? 600 : 400
+                  }}>{pendingDeleteId === item.id ? 'Sure?' : '\uD83D\uDDD1'}</button>
+                </div>
               </div>
+
+              {/* Expanded detail panel */}
+              {isExpanded && (
+                <div style={{
+                  borderTop: '1px solid #f0f0f0',
+                  padding: '10px 14px 12px 58px', // left-indent to align under content
+                  background: '#fafafa'
+                }}>
+                  {isMoment ? (
+                    <>
+                      {description && (
+                        <p style={{ margin: '0 0 8px', fontSize: 12, color: '#374151', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                          {description}
+                        </p>
+                      )}
+                      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: tags.length > 0 ? 8 : 0 }}>
+                        {category && (
+                          <span style={{ fontSize: 11, color: '#6B7280' }}>
+                            <span style={{ color: '#9CA3AF' }}>Category</span>&nbsp; {category.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                        {severity && (
+                          <span style={{ fontSize: 11, color: '#6B7280' }}>
+                            <span style={{ color: '#9CA3AF' }}>Severity</span>&nbsp; {severity}
+                          </span>
+                        )}
+                        {location && (
+                          <span style={{ fontSize: 11, color: '#6B7280' }}>
+                            <span style={{ color: '#9CA3AF' }}>Location</span>&nbsp; {location}
+                          </span>
+                        )}
+                      </div>
+                      {tags.length > 0 && (
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          {tags.map(tag => (
+                            <span key={tag} style={{
+                              padding: '1px 6px', fontSize: 10, borderRadius: 3,
+                              background: isContext ? '#f3f4f6' : '#ffeef0',
+                              color: isContext ? '#9CA3AF' : typeColor,
+                              fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.3
+                            }}>{tag.replace(/_/g, ' ')}</span>
+                          ))}
+                        </div>
+                      )}
+                      {!description && !category && !severity && !location && tags.length === 0 && (
+                        <span style={{ fontSize: 11, color: '#bbb', fontStyle: 'italic' }}>No additional details</span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {linkedEventCount > 0 && (
+                        <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 6 }}>
+                          {'\uD83D\uDD17'} Linked to {linkedEventCount} moment{linkedEventCount !== 1 ? 's' : ''}
+                        </div>
+                      )}
+                      {item.extracted_text && (
+                        <p style={{ margin: '0 0 8px', fontSize: 11, color: '#6B7280', lineHeight: 1.5, fontStyle: 'italic' }}>
+                          {item.extracted_text.slice(0, 320)}{item.extracted_text.length > 320 ? '…' : ''}
+                        </p>
+                      )}
+                      <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {notifiedActors.length > 0 ? (
+                          <NotifySummary actors={notifiedActors} onClick={() => setNotifyDocId(item.id)} />
+                        ) : (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setNotifyDocId(item.id); }}
+                            style={{
+                              padding: '2px 8px', fontSize: 11, borderRadius: 4,
+                              background: 'transparent', color: '#9CA3AF',
+                              border: '1px dashed #D1D5DB', cursor: 'pointer'
+                            }}
+                          >{'\u2610'} Notified employer</button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
