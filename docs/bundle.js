@@ -13865,7 +13865,7 @@
       const category = item.category || null;
       const location = item.location || null;
       const severity = item.severity || null;
-      const hasExpandableContent = isMoment ? description || category || location || severity || tags.length > 4 : item.extracted_text || linkedEventCount > 0;
+      const hasExpandableContent = isMoment || item.extracted_text || linkedEventCount > 0;
       return /* @__PURE__ */ import_react4.default.createElement("div", { key: `${item._type}-${item.id}`, style: {
         background: "#fff",
         border: "1px solid #eee",

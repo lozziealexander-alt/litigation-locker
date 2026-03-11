@@ -354,9 +354,8 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
           const category = item.category || null;
           const location = item.location || null;
           const severity = item.severity || null;
-          const hasExpandableContent = isMoment
-            ? (description || category || location || severity || tags.length > 4)
-            : (item.extracted_text || linkedEventCount > 0);
+          // Always show expand toggle on moments; for docs only if there's something extra
+          const hasExpandableContent = isMoment || item.extracted_text || linkedEventCount > 0;
 
           return (
             <div key={`${item._type}-${item.id}`} style={{
