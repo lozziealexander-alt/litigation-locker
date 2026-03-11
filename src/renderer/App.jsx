@@ -22,7 +22,7 @@ export default function App() {
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedActor, setSelectedActor] = useState(null);
-  const [currentPage, setCurrentPage] = useState('timeline');
+  const [currentPage, setCurrentPage] = useState('brief');
   const [timelineKey, setTimelineKey] = useState(0);
   const [peopleKey, setPeopleKey] = useState(0);
   const [threadsKey, setThreadsKey] = useState(0);
@@ -219,6 +219,17 @@ export default function App() {
           <button
             style={{
               ...styles.caseButton,
+              ...(currentPage === 'brief' ? styles.navButtonActive : {})
+            }}
+            onClick={() => { setBriefStale(false); setCurrentPage('brief'); }}
+          >
+            <span style={styles.caseIcon}>⚖️</span>
+            <span style={styles.caseName}>Case Overview</span>
+            {briefStale && <span style={styles.staleDot} />}
+          </button>
+          <button
+            style={{
+              ...styles.caseButton,
               ...(currentPage === 'timeline' ? styles.navButtonActive : {})
             }}
             onClick={() => setCurrentPage('timeline')}
@@ -255,17 +266,6 @@ export default function App() {
           >
             <span style={styles.caseIcon}>⚡</span>
             <span style={styles.caseName}>Connections</span>
-          </button>
-          <button
-            style={{
-              ...styles.caseButton,
-              ...(currentPage === 'brief' ? styles.navButtonActive : {})
-            }}
-            onClick={() => { setBriefStale(false); setCurrentPage('brief'); }}
-          >
-            <span style={styles.caseIcon}>⚖️</span>
-            <span style={styles.caseName}>Case Overview</span>
-            {briefStale && <span style={styles.staleDot} />}
           </button>
           <button
             style={{
@@ -374,7 +374,7 @@ export default function App() {
           />
         )}
         {currentPage === 'connections' && (
-          <Connections />
+          <Connections onSelectDocument={setSelectedDocument} />
         )}
         {currentPage === 'settings' && (
           <Settings />

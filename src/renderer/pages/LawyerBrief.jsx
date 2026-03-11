@@ -65,6 +65,7 @@ export default function LawyerBrief({ onNavigateToThread, onNavigateToConnection
   const [versions, setVersions]         = useState([]);
   const [showVersions, setShowVersions] = useState(false);
   const [exportStatus, setExportStatus] = useState('');
+  const [events, setEvents]             = useState([]);
 
   const s = getStyles();
 
@@ -76,8 +77,17 @@ export default function LawyerBrief({ onNavigateToThread, onNavigateToConnection
   async function loadLatest() {
     setIsLoading(true);
     try {
-      const res = await window.api.brief.latest();
-      if (res.success && res.brief) setBrief(res.brief);
+      const [briefRes, caseRes] = await Promise.all([
+        window.api.brief.latest(),
+        window.api.cases.current().catch(() => ({}))
+      ]);
+      if (briefRes.success && briefRes.brief) setBrief(briefRes.brief);
+      if (caseRes?.caseId) {
+        try {
+          const eventsRes = await window.api.events.list(caseRes.caseId);
+          if (eventsRes.success) setEvents(eventsRes.events || []);
+        } catch (_) {}
+      }
     } catch (e) {
       console.error('[CaseOverview] loadLatest error:', e);
     }
@@ -219,12 +229,8 @@ export default function LawyerBrief({ onNavigateToThread, onNavigateToConnection
       )}
 
       {!brief && !isGenerating && (
-        <div style={s.empty}>
-          <div style={s.emptyIcon}>⚖️</div>
-          <h2 style={s.emptyTitle}>No overview yet</h2>
-          <p style={s.emptyText}>
-            Click <strong>Generate Overview</strong> to auto-build your case summary from all evidence, events, and actors.
-          </p>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '32px 24px' }}>
+          <HowToUse />
         </div>
       )}
 
@@ -248,7 +254,9 @@ export default function LawyerBrief({ onNavigateToThread, onNavigateToConnection
 
           {/* Tab content */}
           <div style={s.content}>
-            {activeTab === 'summary' && <CaseSummary brief={brief} onNavigateToThread={onNavigateToThread} />}
+            {activeTab === 'summary' && (
+              <CaseSummary brief={brief} onNavigateToThread={onNavigateToThread} />
+            )}
             {activeTab === 'causal'  && <CausalLinks onNavigateToConnections={onNavigateToConnections} />}
             {activeTab === 'actors'  && <ActorSummary brief={brief} />}
             {activeTab === 'gaps'    && <RedFlags brief={brief} />}
@@ -276,12 +284,13 @@ function CaseSummary({ brief, onNavigateToThread }) {
   const circumference = 2 * Math.PI * ringR;
   const dashOffset = circumference - (score / 10) * circumference;
 
+  const statVal = (n) => (n != null && n > 0) ? n : '\u2014';
   const stats = [
     { label: 'Time Span', value: ex.timeSpan || 'No dates' },
     { label: 'Duration', value: ex.timeSpanDays > 0 ? `${ex.timeSpanDays} days` : '\u2014' },
-    { label: 'Documents', value: ex.counts?.documents ?? 0 },
-    { label: 'Events', value: ex.counts?.events ?? 0 },
-    { label: 'Actors', value: ex.counts?.actors ?? 0 }
+    { label: 'Documents', value: statVal(ex.counts?.documents) },
+    { label: 'Events', value: statVal(ex.counts?.events) },
+    { label: 'Actors', value: statVal(ex.counts?.actors) }
   ];
 
   return (
@@ -448,6 +457,188 @@ function buildNarrativeParagraphs(ex, threads, brief) {
   }
 
   return paras;
+}
+
+// ── Personal narrative builder ────────────────────────────────────────────────
+function buildPersonalNarrative(events) {
+  if (!events || events.length === 0) return [];
+
+  // Events use `date` (DB column), not `event_date`
+  const dated = events
+    .filter(e => e.date)
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  const all = [...dated, ...events.filter(e => !e.date)];
+  if (all.length === 0) return [];
+
+  const segments = [];
+  const first = dated[0] || all[0];
+  const last  = dated[dated.length - 1] || all[all.length - 1];
+
+  // Helpers
+  const dateStr   = (evt) => evt.date ? ' on ' + formatDate(evt.date) : '';
+  const safeTitle = (evt) => {
+    const t = evt?.title;
+    if (!t) return 'an incident';
+    return t.charAt(0).toLowerCase() + t.slice(1);
+  };
+
+  // Events use `tags` array (from event_tags table), not event_type
+  const hasTag    = (evt, tags) => Array.isArray(evt.tags) && evt.tags.some(t => tags.includes(t));
+  const byTag     = (tags) => all.filter(e => hasTag(e, tags));
+
+  const harassEvts      = byTag(['hostile_environment', 'sexual_harassment', 'gender_harassment']);
+  const exclusionEvts   = byTag(['exclusion']);
+  const reportedEvts    = byTag(['protected_activity', 'help_request']);
+  const retaliationEvts = byTag(['retaliation']);
+  const adverseEvts     = byTag(['adverse_action']);
+
+  // 1. Opening — first documented event
+  segments.push(
+    `The first documented incident occurred${dateStr(first)} — ${safeTitle(first)}.`
+  );
+
+  // 2. Harassment / hostile conduct
+  if (harassEvts.length > 0) {
+    const h = harassEvts[0];
+    if (harassEvts.length === 1) {
+      segments.push(`The workplace became hostile — ${safeTitle(h)}${dateStr(h)}.`);
+    } else {
+      segments.push(`Over time, I experienced ${harassEvts.length} documented incidents of harassment or hostile conduct, beginning with ${safeTitle(h)}.`);
+    }
+  }
+
+  // 3. Systematic exclusion
+  if (exclusionEvts.length > 0) {
+    const titles = exclusionEvts.slice(0, 2).map(safeTitle).join(', and ');
+    segments.push(`I was systematically excluded — ${titles}.`);
+  }
+
+  // 4. Reporting / complaint / protected activity
+  if (reportedEvts.length > 0) {
+    const r = reportedEvts[0];
+    segments.push(`I formally raised concerns${dateStr(r)}, but the conduct continued.`);
+  }
+
+  // 5. Retaliation
+  if (retaliationEvts.length > 0) {
+    const r = retaliationEvts[0];
+    segments.push(`After I spoke up, things escalated — ${safeTitle(r)}${dateStr(r)}.`);
+  }
+
+  // 6. Culmination / adverse action
+  if (adverseEvts.length > 0) {
+    const final = adverseEvts[adverseEvts.length - 1];
+    segments.push(`It culminated in ${safeTitle(final)}${dateStr(final)}.`);
+  } else if (dated.length > 1 && last !== first) {
+    segments.push(`The most recent documented event was ${safeTitle(last)}, on ${formatDate(last.date)}.`);
+  }
+
+  return segments;
+}
+
+// ── YourStory component ───────────────────────────────────────────────────────
+function YourStory({ events }) {
+  const narrative = buildPersonalNarrative(events);
+  if (!narrative.length) return null;
+  const s = getStyles();
+  return (
+    <div style={{ ...s.section, marginBottom: 24 }}>
+      <div style={{
+        background: 'linear-gradient(135deg, #F5F3FF 0%, #EDE9FE 100%)',
+        borderRadius: radius.lg,
+        padding: '24px 28px',
+        border: '1px solid #DDD6FE',
+        boxShadow: shadows.sm,
+        position: 'relative',
+        overflow: 'hidden'
+      }}>
+        <div style={{
+          position: 'absolute', top: -10, right: 16,
+          fontSize: 72, opacity: 0.06, lineHeight: 1,
+          userSelect: 'none', color: '#7C3AED', fontFamily: 'Georgia, serif'
+        }}>"</div>
+        <h2 style={{
+          margin: '0 0 14px 0',
+          fontSize: typography.fontSize.base,
+          fontWeight: typography.fontWeight.semibold,
+          color: '#5B21B6',
+          display: 'flex', alignItems: 'center', gap: 8
+        }}>
+          📖 Your Story
+          <span style={{ fontSize: typography.fontSize.xs, color: '#7C3AED', fontWeight: 400, opacity: 0.8 }}>
+            — auto-generated from your events
+          </span>
+        </h2>
+        {narrative.map((sentence, i) => (
+          <p key={i} style={{
+            fontSize: typography.fontSize.base,
+            color: '#2D1B69',
+            lineHeight: 1.85,
+            margin: '0 0 6px 0'
+          }}>
+            {sentence}
+          </p>
+        ))}
+        <div style={{
+          marginTop: 12,
+          fontSize: typography.fontSize.xs,
+          color: '#7C3AED',
+          opacity: 0.65
+        }}>
+          Based on {events.length} documented event{events.length !== 1 ? 's' : ''}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── How To Use component ──────────────────────────────────────────────────────
+const HOW_TO_STEPS = [
+  { icon: '📅', title: 'Add Events to your Timeline', desc: 'Record every incident, meeting, email, or decision with dates and descriptions. Click the Timeline tab, then the + button to add your first event.' },
+  { icon: '📎', title: 'Upload Supporting Documents', desc: 'Drag and drop files onto the app or use File → Import to attach emails, screenshots, performance reviews, and other evidence.' },
+  { icon: '👥', title: 'Tag the People Involved', desc: 'Go to the People tab and add each person — managers, HR contacts, colleagues. Label them as bad actors, witnesses, or bystanders.' },
+  { icon: '🔗', title: 'Review Connections', desc: 'Visit the Connections page and run Auto-Detect to find legal patterns — retaliation chains, escalation, temporal clusters.' },
+  { icon: '⚖️', title: 'Generate your Case Overview', desc: "Once you have events and documents logged, click Generate Overview above. You'll get a full legal summary with case strength scoring." },
+];
+
+function HowToUse() {
+  const s = getStyles();
+  return (
+    <div style={{ maxWidth: 680, margin: '0 auto' }}>
+      <div style={{ textAlign: 'center', marginBottom: 36 }}>
+        <div style={{ fontSize: '2.5em', marginBottom: 10 }}>⚖️</div>
+        <h2 style={{ margin: '0 0 8px', fontSize: typography.fontSize.xl, color: colors.textPrimary, fontWeight: typography.fontWeight.semibold }}>
+          Welcome to Litigation Locker
+        </h2>
+        <p style={{ margin: '0 auto', color: colors.textMuted, fontSize: typography.fontSize.sm, maxWidth: 460 }}>
+          Your secure case documentation tool. Follow these steps to build a record that's ready for attorney review.
+        </p>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {HOW_TO_STEPS.map((step, i) => (
+          <div key={i} style={{
+            display: 'flex', gap: 16, padding: '16px 20px',
+            background: colors.surface,
+            borderRadius: radius.md,
+            border: `1px solid ${colors.border}`
+          }}>
+            <span style={{ fontSize: '1.4em', flexShrink: 0, marginTop: 1 }}>{step.icon}</span>
+            <div>
+              <div style={{ fontWeight: typography.fontWeight.semibold, color: colors.textPrimary, marginBottom: 4, fontSize: typography.fontSize.sm }}>
+                {i + 1}. {step.title}
+              </div>
+              <div style={{ fontSize: typography.fontSize.sm, color: colors.textSecondary, lineHeight: 1.65 }}>
+                {step.desc}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <p style={{ textAlign: 'center', color: colors.textMuted, fontSize: typography.fontSize.xs, marginTop: 24 }}>
+        Navigate using the sidebar on the left
+      </p>
+    </div>
+  );
 }
 
 function StatCard({ label, value, wide }) {
@@ -969,6 +1160,7 @@ function getStyles() {
     // Content
     content: {
       flex: 1,
+      minHeight: 0,
       overflowY: 'auto',
       padding: spacing.xl
     },

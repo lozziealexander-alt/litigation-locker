@@ -94,7 +94,7 @@ function ctDesc(type) {
   return (CONNECTION_TYPE_LABELS[type] || {}).desc || '';
 }
 
-export default function Connections() {
+export default function Connections({ onSelectDocument }) {
   const [connections, setConnections] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [events, setEvents] = useState([]);
@@ -104,6 +104,17 @@ export default function Connections() {
   const [editModal, setEditModal] = useState(null);
   const [editConnectionModal, setEditConnectionModal] = useState(null);
   const [showDismissed, setShowDismissed] = useState(false);
+
+  // Build event-id → documents[] lookup for showing related docs on connection cards
+  const docsByEventId = React.useMemo(() => {
+    const map = new Map();
+    for (const evt of events) {
+      if (Array.isArray(evt.documents) && evt.documents.length > 0) {
+        map.set(String(evt.id), evt.documents);
+      }
+    }
+    return map;
+  }, [events]);
 
   const loadData = useCallback(async () => {
     try {
@@ -624,6 +635,55 @@ export default function Connections() {
                   }}>
                     {conn.description}
                   </div>
+
+                  {/* Related documents from linked events */}
+                  {onSelectDocument && (() => {
+                    const srcDocs = docsByEventId.get(String(conn.source_id)) || [];
+                    const tgtDocs = docsByEventId.get(String(conn.target_id)) || [];
+                    const seen = new Set();
+                    const unique = [...srcDocs, ...tgtDocs].filter(d => {
+                      if (seen.has(d.id)) return false;
+                      seen.add(d.id);
+                      return true;
+                    });
+                    if (!unique.length) return null;
+                    return (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ fontSize: '10px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
+                          Related Documents
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                          {unique.slice(0, 5).map(doc => (
+                            <button
+                              key={doc.id}
+                              onClick={() => onSelectDocument(doc)}
+                              style={{
+                                padding: '3px 10px',
+                                background: 'transparent',
+                                border: '1px solid #3d4450',
+                                borderRadius: 4,
+                                color: '#9ca3af',
+                                fontSize: '11px',
+                                cursor: 'pointer',
+                                maxWidth: 200,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}
+                              title={doc.filename}
+                            >
+                              📄 {doc.filename || 'Document'}
+                            </button>
+                          ))}
+                          {unique.length > 5 && (
+                            <span style={{ fontSize: '11px', color: '#6b7280', padding: '3px 6px', alignSelf: 'center' }}>
+                              +{unique.length - 5} more
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
                     <button

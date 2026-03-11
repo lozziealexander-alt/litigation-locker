@@ -98,9 +98,14 @@ function assignEventsToThreads(events) {
       }
       if (matches) {
         matchedThreads.push(`${thread.name} (${matchReason})`);
-        if (!assignments[thread.id]) assignments[thread.id] = { thread, events: [], documents: new Set() };
+        if (!assignments[thread.id]) assignments[thread.id] = { thread, events: [], documents: new Map() };
         assignments[thread.id].events.push(evt);
-        (evt.documents || []).forEach(d => assignments[thread.id].documents.add(d.id));
+        // Store full doc objects keyed by id to deduplicate across events
+        (evt.documents || []).forEach(d => {
+          if (d && d.id && !assignments[thread.id].documents.has(d.id)) {
+            assignments[thread.id].documents.set(d.id, d);
+          }
+        });
       }
     }
     if (matchedThreads.length > 0) {
@@ -108,7 +113,8 @@ function assignEventsToThreads(events) {
     }
   }
   console.groupEnd();
-  for (const id in assignments) assignments[id].documents = Array.from(assignments[id].documents);
+  // Convert Maps to Arrays of full doc objects
+  for (const id in assignments) assignments[id].documents = Array.from(assignments[id].documents.values());
   return assignments;
 }
 
@@ -292,16 +298,10 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
       setEscalation(connectionsResult.escalation || null);
     }
 
-    // Process events — enrich thread documents with full doc objects (for hover preview)
+    // Process events — assignEventsToThreads stores full doc objects directly from evt.documents
     const evts = eventsResult.success ? (eventsResult.events || []) : [];
     setEvents(evts);
-    const docLookup = new Map((docsResult.documents || []).map(d => [d.id, d]));
     const threadAssignments = assignEventsToThreads(evts);
-    for (const tid in threadAssignments) {
-      threadAssignments[tid].documents = threadAssignments[tid].documents
-        .map(docId => docLookup.get(docId) || { id: docId })
-        .filter(Boolean);
-    }
     setThreads(threadAssignments);
 
     // Run incident chain analysis (categorizer)

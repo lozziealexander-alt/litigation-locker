@@ -35,6 +35,7 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
   const [editContext, setEditContext] = useState('');
   const [previewData, setPreviewData] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
   // Date entries (multi-date timeline)
   const [dateEntries, setDateEntries] = useState([]);
   const [addingDateEntry, setAddingDateEntry] = useState(false);
@@ -74,6 +75,7 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
       loadNotifications(doc.id);
       setPreviewData(null);
       setShowPreview(false);
+      setPreviewError(null);
       setShowGroupPicker(false);
       setCreatingGroup(false);
       setShowActorPicker(false);
@@ -341,14 +343,18 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
       setShowPreview(true);
       return;
     }
+    setPreviewError(null);
     try {
       const result = await window.api.documents.getContent(doc.id);
       if (result.success) {
         setPreviewData({ data: result.data, mimeType: result.mimeType });
         setShowPreview(true);
+      } else {
+        setPreviewError(result.error || 'Content not available for this file.');
       }
     } catch (err) {
       console.error('[DocumentPanel] preview error:', err);
+      setPreviewError('Preview failed: ' + err.message);
     }
   }
 
@@ -448,6 +454,15 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
               <button style={styles.previewButton} onClick={handlePreview}>
                 {isImage ? '\uD83D\uDDBC\uFE0F' : '\uD83D\uDCC4'} View {isImage ? 'Image' : 'PDF'}
               </button>
+              {previewError && (
+                <div style={{
+                  marginTop: 8, fontSize: 12, color: colors.error || '#EF4444',
+                  background: '#FEF2F2', border: '1px solid #FECACA',
+                  borderRadius: 6, padding: '6px 10px', lineHeight: 1.5
+                }}>
+                  ⚠ {previewError}
+                </div>
+              )}
             </div>
           )}
 
