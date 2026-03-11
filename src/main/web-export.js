@@ -6,7 +6,6 @@
  */
 const crypto = require('crypto');
 const db = require('./database/init');
-const { decrypt } = require('./crypto/vault');
 
 // PBKDF2 + AES-GCM parameters (must match web-api.js decryption)
 const PBKDF2_ITERATIONS = 100000;
@@ -23,21 +22,41 @@ function exportCaseData(caseDb, caseId, caseName, caseKey = null) {
 
   // Documents — strip encrypted_content blob (too large), but decrypt image
   // files into base64 when a caseKey is available so the web viewer can preview them.
-  const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // skip images > 5 MB encrypted
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // skip individual images > 5 MB encrypted
+  const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024; // cap total image payload at 20 MB
+  let totalImageBytes = 0;
+
+  // Lazy-require vault decrypt so a module-load failure can't crash the export
+  let vaultDecrypt = null;
+  if (caseKey) {
+    try {
+      vaultDecrypt = require('./crypto/vault').decrypt;
+    } catch (e) {
+      console.warn('[WebExport] Could not load vault decrypt, images will be excluded:', e.message);
+    }
+  }
+
   data.documents = caseDb.prepare(`
     SELECT * FROM documents ORDER BY document_date
   `).all().map(doc => {
     const encContent = doc.encrypted_content;
     delete doc.encrypted_content;
 
-    if (caseKey && doc.file_type && doc.file_type.startsWith('image/') && encContent) {
+    if (vaultDecrypt && caseKey && doc.file_type && doc.file_type.startsWith('image/') && encContent) {
       try {
-        if (encContent.length <= MAX_IMAGE_BYTES) {
-          const decrypted = decrypt(encContent, caseKey);
+        if (
+          Buffer.isBuffer(encContent) &&
+          encContent.length > 32 &&            // must have at least IV + authTag
+          encContent.length <= MAX_IMAGE_BYTES &&
+          totalImageBytes + encContent.length <= MAX_TOTAL_IMAGE_BYTES
+        ) {
+          const decrypted = vaultDecrypt(encContent, caseKey);
           doc.content_b64 = decrypted.toString('base64');
+          totalImageBytes += encContent.length;
         }
       } catch (e) {
-        // Decryption failure — skip; don't abort the whole export
+        // Decryption failure — skip this image; don't abort the whole export
+        console.warn('[WebExport] Image decrypt failed for doc', doc.id, ':', e.message);
       }
     }
     return doc;

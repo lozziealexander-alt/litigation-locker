@@ -4650,6 +4650,7 @@ function registerIpcHandlers() {
         return { success: false, error: 'Password must be at least 4 characters' };
       }
 
+      const path = require('path');
       const { exportForWeb } = require('./web-export');
 
       // Get case name from master db
@@ -4657,7 +4658,15 @@ function registerIpcHandlers() {
         ? (db.getMasterDb().prepare('SELECT name FROM cases WHERE id = ?').get(currentCaseId) || {}).name || 'Case'
         : 'Case';
 
-      const bundle = exportForWeb(currentCaseDb, currentCaseId, caseName, password, keyManager.deriveCaseKey(currentCaseId));
+      // Derive case key defensively — failure means images won't be included, but export still works
+      let exportCaseKey = null;
+      try {
+        exportCaseKey = keyManager.deriveCaseKey(currentCaseId);
+      } catch (keyErr) {
+        console.warn('[WebExport] Could not derive case key, images will be excluded:', keyErr.message);
+      }
+
+      const bundle = exportForWeb(currentCaseDb, currentCaseId, caseName, password, exportCaseKey);
       const bundleJson = JSON.stringify(bundle);
 
       // Also deploy directly to docs/ for GitHub Pages
