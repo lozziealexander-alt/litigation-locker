@@ -15378,9 +15378,13 @@
         }
         if (matches) {
           matchedThreads.push(`${thread.name} (${matchReason})`);
-          if (!assignments[thread.id]) assignments[thread.id] = { thread, events: [], documents: /* @__PURE__ */ new Set() };
+          if (!assignments[thread.id]) assignments[thread.id] = { thread, events: [], documents: /* @__PURE__ */ new Map() };
           assignments[thread.id].events.push(evt);
-          (evt.documents || []).forEach((d) => assignments[thread.id].documents.add(d.id));
+          (evt.documents || []).forEach((d) => {
+            if (d && d.id && !assignments[thread.id].documents.has(d.id)) {
+              assignments[thread.id].documents.set(d.id, d);
+            }
+          });
         }
       }
       if (matchedThreads.length > 0) {
@@ -15388,7 +15392,7 @@
       }
     }
     console.groupEnd();
-    for (const id in assignments) assignments[id].documents = Array.from(assignments[id].documents);
+    for (const id in assignments) assignments[id].documents = Array.from(assignments[id].documents.values());
     return assignments;
   }
   function calculateThreadStrength(assignment) {
@@ -15549,11 +15553,7 @@
         }
         const evts = eventsResult.success ? eventsResult.events || [] : [];
         setEvents(evts);
-        const docLookup = new Map((docsResult.documents || []).map((d) => [d.id, d]));
         const threadAssignments = assignEventsToThreads(evts);
-        for (const tid in threadAssignments) {
-          threadAssignments[tid].documents = threadAssignments[tid].documents.map((docId) => docLookup.get(docId) || { id: docId }).filter(Boolean);
-        }
         setThreads(threadAssignments);
         try {
           const chainResult = await window.api.categorizer.analyzeDocuments();
@@ -16986,7 +16986,7 @@
   function ctDesc(type) {
     return (CONNECTION_TYPE_LABELS[type] || {}).desc || "";
   }
-  function Connections() {
+  function Connections({ onSelectDocument }) {
     const [connections, setConnections] = (0, import_react10.useState)([]);
     const [suggestions, setSuggestions] = (0, import_react10.useState)([]);
     const [events, setEvents] = (0, import_react10.useState)([]);
@@ -16996,6 +16996,15 @@
     const [editModal, setEditModal] = (0, import_react10.useState)(null);
     const [editConnectionModal, setEditConnectionModal] = (0, import_react10.useState)(null);
     const [showDismissed, setShowDismissed] = (0, import_react10.useState)(false);
+    const docsByEventId = import_react10.default.useMemo(() => {
+      const map = /* @__PURE__ */ new Map();
+      for (const evt of events) {
+        if (Array.isArray(evt.documents) && evt.documents.length > 0) {
+          map.set(String(evt.id), evt.documents);
+        }
+      }
+      return map;
+    }, [events]);
     const loadData = (0, import_react10.useCallback)(async () => {
       try {
         setLoading(true);
@@ -17370,6 +17379,40 @@ Found ${result.count} new suggestions based on legal precedents.`);
         borderRadius: "6px",
         marginTop: "12px"
       } }, conn.description),
+      onSelectDocument && (() => {
+        const srcDocs = docsByEventId.get(String(conn.source_id)) || [];
+        const tgtDocs = docsByEventId.get(String(conn.target_id)) || [];
+        const seen = /* @__PURE__ */ new Set();
+        const unique = [...srcDocs, ...tgtDocs].filter((d) => {
+          if (seen.has(d.id)) return false;
+          seen.add(d.id);
+          return true;
+        });
+        if (!unique.length) return null;
+        return /* @__PURE__ */ import_react10.default.createElement("div", { style: { marginTop: 12 } }, /* @__PURE__ */ import_react10.default.createElement("div", { style: { fontSize: "10px", color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 } }, "Related Documents"), /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 5 } }, unique.slice(0, 5).map((doc) => /* @__PURE__ */ import_react10.default.createElement(
+          "button",
+          {
+            key: doc.id,
+            onClick: () => onSelectDocument(doc),
+            style: {
+              padding: "3px 10px",
+              background: "transparent",
+              border: "1px solid #3d4450",
+              borderRadius: 4,
+              color: "#9ca3af",
+              fontSize: "11px",
+              cursor: "pointer",
+              maxWidth: 200,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap"
+            },
+            title: doc.filename
+          },
+          "\u{1F4C4} ",
+          doc.filename || "Document"
+        )), unique.length > 5 && /* @__PURE__ */ import_react10.default.createElement("span", { style: { fontSize: "11px", color: "#6b7280", padding: "3px 6px", alignSelf: "center" } }, "+", unique.length - 5, " more")));
+      })(),
       /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "flex", gap: "8px", marginTop: "12px" } }, /* @__PURE__ */ import_react10.default.createElement(
         "button",
         {
@@ -18012,6 +18055,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
     const [versions, setVersions] = (0, import_react11.useState)([]);
     const [showVersions, setShowVersions] = (0, import_react11.useState)(false);
     const [exportStatus, setExportStatus] = (0, import_react11.useState)("");
+    const [events, setEvents] = (0, import_react11.useState)([]);
     const s = getStyles5();
     (0, import_react11.useEffect)(() => {
       loadLatest();
@@ -18019,8 +18063,18 @@ Found ${result.count} new suggestions based on legal precedents.`);
     async function loadLatest() {
       setIsLoading(true);
       try {
-        const res = await window.api.brief.latest();
-        if (res.success && res.brief) setBrief(res.brief);
+        const [briefRes, caseRes] = await Promise.all([
+          window.api.brief.latest(),
+          window.api.cases.current().catch(() => ({}))
+        ]);
+        if (briefRes.success && briefRes.brief) setBrief(briefRes.brief);
+        if (caseRes?.caseId) {
+          try {
+            const eventsRes = await window.api.events.list(caseRes.caseId);
+            if (eventsRes.success) setEvents(eventsRes.events || []);
+          } catch (_) {
+          }
+        }
       } catch (e) {
         console.error("[CaseOverview] loadLatest error:", e);
       }
@@ -18082,7 +18136,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
         disabled: isGenerating
       },
       isGenerating ? "\u23F3 Generating..." : brief ? "\u{1F504} Regenerate" : "\u2728 Generate Overview"
-    ))), isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.progressBar }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.progressInner }), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.progressText }, progress)), genError && !isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.errorBanner }, /* @__PURE__ */ import_react11.default.createElement("span", null, "\u26A0 ", genError), /* @__PURE__ */ import_react11.default.createElement("button", { style: s.errorDismiss, onClick: () => setGenError(null) }, "\u2715")), showVersions && versions.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.versionDrawer }, /* @__PURE__ */ import_react11.default.createElement("strong", { style: { color: colors.textPrimary } }, "Previous Overviews"), versions.map((v) => /* @__PURE__ */ import_react11.default.createElement("div", { key: v.id, style: s.versionRow }, /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: colors.textSecondary } }, formatDate2(v.generated_at)), /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: strengthColor(v.strength_score || 0) } }, (v.strength_score || 0).toFixed(1), "/10")))), !brief && !isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.empty }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.emptyIcon }, "\u2696\uFE0F"), /* @__PURE__ */ import_react11.default.createElement("h2", { style: s.emptyTitle }, "No overview yet"), /* @__PURE__ */ import_react11.default.createElement("p", { style: s.emptyText }, "Click ", /* @__PURE__ */ import_react11.default.createElement("strong", null, "Generate Overview"), " to auto-build your case summary from all evidence, events, and actors.")), brief && !isGenerating && /* @__PURE__ */ import_react11.default.createElement(import_react11.default.Fragment, null, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.tabBar }, TABS.map((tab) => /* @__PURE__ */ import_react11.default.createElement(
+    ))), isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.progressBar }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.progressInner }), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.progressText }, progress)), genError && !isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.errorBanner }, /* @__PURE__ */ import_react11.default.createElement("span", null, "\u26A0 ", genError), /* @__PURE__ */ import_react11.default.createElement("button", { style: s.errorDismiss, onClick: () => setGenError(null) }, "\u2715")), showVersions && versions.length > 0 && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.versionDrawer }, /* @__PURE__ */ import_react11.default.createElement("strong", { style: { color: colors.textPrimary } }, "Previous Overviews"), versions.map((v) => /* @__PURE__ */ import_react11.default.createElement("div", { key: v.id, style: s.versionRow }, /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: colors.textSecondary } }, formatDate2(v.generated_at)), /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: strengthColor(v.strength_score || 0) } }, (v.strength_score || 0).toFixed(1), "/10")))), !brief && !isGenerating && /* @__PURE__ */ import_react11.default.createElement("div", { style: { flex: 1, minHeight: 0, overflowY: "auto", padding: "32px 24px" } }, /* @__PURE__ */ import_react11.default.createElement(HowToUse, null)), brief && !isGenerating && /* @__PURE__ */ import_react11.default.createElement(import_react11.default.Fragment, null, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.tabBar }, TABS.map((tab) => /* @__PURE__ */ import_react11.default.createElement(
       "button",
       {
         key: tab.id,
@@ -18106,12 +18160,13 @@ Found ${result.count} new suggestions based on legal precedents.`);
     const ringR = (ringSize - strokeW) / 2;
     const circumference = 2 * Math.PI * ringR;
     const dashOffset = circumference - score / 10 * circumference;
+    const statVal = (n) => n != null && n > 0 ? n : "\u2014";
     const stats = [
       { label: "Time Span", value: ex.timeSpan || "No dates" },
       { label: "Duration", value: ex.timeSpanDays > 0 ? `${ex.timeSpanDays} days` : "\u2014" },
-      { label: "Documents", value: ex.counts?.documents ?? 0 },
-      { label: "Events", value: ex.counts?.events ?? 0 },
-      { label: "Actors", value: ex.counts?.actors ?? 0 }
+      { label: "Documents", value: statVal(ex.counts?.documents) },
+      { label: "Events", value: statVal(ex.counts?.events) },
+      { label: "Actors", value: statVal(ex.counts?.actors) }
     ];
     return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.section }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.strengthHero }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { position: "relative", width: ringSize, height: ringSize, flexShrink: 0 } }, /* @__PURE__ */ import_react11.default.createElement("svg", { width: ringSize, height: ringSize, style: { transform: "rotate(-90deg)" } }, /* @__PURE__ */ import_react11.default.createElement(
       "circle",
@@ -18214,6 +18269,17 @@ Found ${result.count} new suggestions based on legal precedents.`);
       paras.push("No case data available yet. Add events, documents, and tag them with claim types to generate the narrative summary.");
     }
     return paras;
+  }
+  function HowToUse() {
+    const s = getStyles5();
+    return /* @__PURE__ */ import_react11.default.createElement("div", { style: { maxWidth: 680, margin: "0 auto" } }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { textAlign: "center", marginBottom: 36 } }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { fontSize: "2.5em", marginBottom: 10 } }, "\u2696\uFE0F"), /* @__PURE__ */ import_react11.default.createElement("h2", { style: { margin: "0 0 8px", fontSize: typography.fontSize.xl, color: colors.textPrimary, fontWeight: typography.fontWeight.semibold } }, "Welcome to Litigation Locker"), /* @__PURE__ */ import_react11.default.createElement("p", { style: { margin: "0 auto", color: colors.textMuted, fontSize: typography.fontSize.sm, maxWidth: 460 } }, "Your secure case documentation tool. Follow these steps to build a record that's ready for attorney review.")), /* @__PURE__ */ import_react11.default.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } }, HOW_TO_STEPS.map((step, i) => /* @__PURE__ */ import_react11.default.createElement("div", { key: i, style: {
+      display: "flex",
+      gap: 16,
+      padding: "16px 20px",
+      background: colors.surface,
+      borderRadius: radius.md,
+      border: `1px solid ${colors.border}`
+    } }, /* @__PURE__ */ import_react11.default.createElement("span", { style: { fontSize: "1.4em", flexShrink: 0, marginTop: 1 } }, step.icon), /* @__PURE__ */ import_react11.default.createElement("div", null, /* @__PURE__ */ import_react11.default.createElement("div", { style: { fontWeight: typography.fontWeight.semibold, color: colors.textPrimary, marginBottom: 4, fontSize: typography.fontSize.sm } }, i + 1, ". ", step.title), /* @__PURE__ */ import_react11.default.createElement("div", { style: { fontSize: typography.fontSize.sm, color: colors.textSecondary, lineHeight: 1.65 } }, step.desc))))), /* @__PURE__ */ import_react11.default.createElement("p", { style: { textAlign: "center", color: colors.textMuted, fontSize: typography.fontSize.xs, marginTop: 24 } }, "Navigate using the sidebar on the left"));
   }
   function CausalLinks({ onNavigateToConnections }) {
     const [connections, setConnections] = (0, import_react11.useState)([]);
@@ -18507,6 +18573,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
       // Content
       content: {
         flex: 1,
+        minHeight: 0,
         overflowY: "auto",
         padding: spacing.xl
       },
@@ -18807,7 +18874,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
       emptyStateText: { color: colors.textMuted, fontSize: typography.fontSize.sm }
     };
   }
-  var import_react11, TABS, CONNECTION_PRECEDENTS;
+  var import_react11, TABS, HOW_TO_STEPS, CONNECTION_PRECEDENTS;
   var init_LawyerBrief = __esm({
     "src/renderer/pages/LawyerBrief.jsx"() {
       import_react11 = __toESM(require_react());
@@ -18817,6 +18884,13 @@ Found ${result.count} new suggestions based on legal precedents.`);
         { id: "causal", label: "Causal Links" },
         { id: "actors", label: "Key People" },
         { id: "gaps", label: "Red Flags" }
+      ];
+      HOW_TO_STEPS = [
+        { icon: "\u{1F4C5}", title: "Add Events to your Timeline", desc: "Record every incident, meeting, email, or decision with dates and descriptions. Click the Timeline tab, then the + button to add your first event." },
+        { icon: "\u{1F4CE}", title: "Upload Supporting Documents", desc: "Drag and drop files onto the app or use File \u2192 Import to attach emails, screenshots, performance reviews, and other evidence." },
+        { icon: "\u{1F465}", title: "Tag the People Involved", desc: "Go to the People tab and add each person \u2014 managers, HR contacts, colleagues. Label them as bad actors, witnesses, or bystanders." },
+        { icon: "\u{1F517}", title: "Review Connections", desc: "Visit the Connections page and run Auto-Detect to find legal patterns \u2014 retaliation chains, escalation, temporal clusters." },
+        { icon: "\u2696\uFE0F", title: "Generate your Case Overview", desc: "Once you have events and documents logged, click Generate Overview above. You'll get a full legal summary with case strength scoring." }
       ];
       CONNECTION_PRECEDENTS = {
         // Core retaliation patterns
@@ -18867,6 +18941,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
     const [editContext, setEditContext] = (0, import_react12.useState)("");
     const [previewData, setPreviewData] = (0, import_react12.useState)(null);
     const [showPreview, setShowPreview] = (0, import_react12.useState)(false);
+    const [previewError, setPreviewError] = (0, import_react12.useState)(null);
     const [dateEntries, setDateEntries] = (0, import_react12.useState)([]);
     const [addingDateEntry, setAddingDateEntry] = (0, import_react12.useState)(false);
     const [newEntryDate, setNewEntryDate] = (0, import_react12.useState)("");
@@ -18900,6 +18975,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
         loadNotifications(doc.id);
         setPreviewData(null);
         setShowPreview(false);
+        setPreviewError(null);
         setShowGroupPicker(false);
         setCreatingGroup(false);
         setShowActorPicker(false);
@@ -19140,14 +19216,18 @@ Found ${result.count} new suggestions based on legal precedents.`);
         setShowPreview(true);
         return;
       }
+      setPreviewError(null);
       try {
         const result = await window.api.documents.getContent(doc.id);
         if (result.success) {
           setPreviewData({ data: result.data, mimeType: result.mimeType });
           setShowPreview(true);
+        } else {
+          setPreviewError(result.error || "Content not available for this file.");
         }
       } catch (err) {
         console.error("[DocumentPanel] preview error:", err);
+        setPreviewError("Preview failed: " + err.message);
       }
     }
     if (!doc) return null;
@@ -19238,7 +19318,16 @@ Found ${result.count} new suggestions based on legal precedents.`);
       },
       "Next ",
       "\u2192"
-    )), canPreview && /* @__PURE__ */ import_react12.default.createElement("div", { style: styles5.previewButtonRow }, /* @__PURE__ */ import_react12.default.createElement("button", { style: styles5.previewButton, onClick: handlePreview }, isImage ? "\u{1F5BC}\uFE0F" : "\u{1F4C4}", " View ", isImage ? "Image" : "PDF")), /* @__PURE__ */ import_react12.default.createElement("div", { style: styles5.section }, /* @__PURE__ */ import_react12.default.createElement("h3", { style: styles5.sectionTitle }, "Evidence Type"), /* @__PURE__ */ import_react12.default.createElement(
+    )), canPreview && /* @__PURE__ */ import_react12.default.createElement("div", { style: styles5.previewButtonRow }, /* @__PURE__ */ import_react12.default.createElement("button", { style: styles5.previewButton, onClick: handlePreview }, isImage ? "\u{1F5BC}\uFE0F" : "\u{1F4C4}", " View ", isImage ? "Image" : "PDF"), previewError && /* @__PURE__ */ import_react12.default.createElement("div", { style: {
+      marginTop: 8,
+      fontSize: 12,
+      color: colors.error || "#EF4444",
+      background: "#FEF2F2",
+      border: "1px solid #FECACA",
+      borderRadius: 6,
+      padding: "6px 10px",
+      lineHeight: 1.5
+    } }, "\u26A0 ", previewError)), /* @__PURE__ */ import_react12.default.createElement("div", { style: styles5.section }, /* @__PURE__ */ import_react12.default.createElement("h3", { style: styles5.sectionTitle }, "Evidence Type"), /* @__PURE__ */ import_react12.default.createElement(
       "select",
       {
         style: styles5.typeSelect,
@@ -21358,7 +21447,7 @@ This cannot be undone.`)) {
     const [selectedDocument, setSelectedDocument] = (0, import_react15.useState)(null);
     const [selectedEvent, setSelectedEvent] = (0, import_react15.useState)(null);
     const [selectedActor, setSelectedActor] = (0, import_react15.useState)(null);
-    const [currentPage, setCurrentPage] = (0, import_react15.useState)("timeline");
+    const [currentPage, setCurrentPage] = (0, import_react15.useState)("brief");
     const [timelineKey, setTimelineKey] = (0, import_react15.useState)(0);
     const [peopleKey, setPeopleKey] = (0, import_react15.useState)(0);
     const [threadsKey, setThreadsKey] = (0, import_react15.useState)(0);
@@ -21513,6 +21602,21 @@ This cannot be undone.`)) {
       {
         style: {
           ...styles5.caseButton,
+          ...currentPage === "brief" ? styles5.navButtonActive : {}
+        },
+        onClick: () => {
+          setBriefStale(false);
+          setCurrentPage("brief");
+        }
+      },
+      /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.caseIcon }, "\u2696\uFE0F"),
+      /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.caseName }, "Case Overview"),
+      briefStale && /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.staleDot })
+    ), /* @__PURE__ */ import_react15.default.createElement(
+      "button",
+      {
+        style: {
+          ...styles5.caseButton,
           ...currentPage === "timeline" ? styles5.navButtonActive : {}
         },
         onClick: () => setCurrentPage("timeline")
@@ -21555,21 +21659,6 @@ This cannot be undone.`)) {
       },
       /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.caseIcon }, "\u26A1"),
       /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.caseName }, "Connections")
-    ), /* @__PURE__ */ import_react15.default.createElement(
-      "button",
-      {
-        style: {
-          ...styles5.caseButton,
-          ...currentPage === "brief" ? styles5.navButtonActive : {}
-        },
-        onClick: () => {
-          setBriefStale(false);
-          setCurrentPage("brief");
-        }
-      },
-      /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.caseIcon }, "\u2696\uFE0F"),
-      /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.caseName }, "Case Overview"),
-      briefStale && /* @__PURE__ */ import_react15.default.createElement("span", { style: styles5.staleDot })
     ), /* @__PURE__ */ import_react15.default.createElement(
       "button",
       {
@@ -21640,7 +21729,7 @@ This cannot be undone.`)) {
         key: peopleKey,
         onSelectActor: setSelectedActor
       }
-    ), currentPage === "connections" && /* @__PURE__ */ import_react15.default.createElement(Connections, null), currentPage === "settings" && /* @__PURE__ */ import_react15.default.createElement(Settings, null), currentPage === "brief" && /* @__PURE__ */ import_react15.default.createElement(
+    ), currentPage === "connections" && /* @__PURE__ */ import_react15.default.createElement(Connections, { onSelectDocument: setSelectedDocument }), currentPage === "settings" && /* @__PURE__ */ import_react15.default.createElement(Settings, null), currentPage === "brief" && /* @__PURE__ */ import_react15.default.createElement(
       LawyerBrief,
       {
         onNavigateToThread: (threadId) => {
