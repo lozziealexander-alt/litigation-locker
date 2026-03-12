@@ -359,7 +359,10 @@ function CaseSummary({ brief, onNavigateToThread }) {
                 <div style={s.claimLeft}>
                   <div>
                     <div style={s.claimName}>{thread.name}</div>
-                    <div style={s.claimMeta}>{thread.eventCount} events · {thread.docCount} docs</div>
+                    <div style={s.claimMeta}>{[
+                      thread.eventCount > 0 ? `${thread.eventCount} event${thread.eventCount !== 1 ? 's' : ''}` : null,
+                      thread.docCount > 0 ? `${thread.docCount} doc${thread.docCount !== 1 ? 's' : ''}` : null
+                    ].filter(Boolean).join(' · ') || 'No evidence linked'}</div>
                   </div>
                 </div>
                 <div style={s.claimRight}>
@@ -883,8 +886,8 @@ function ActorCard({ actor }) {
         </div>
       </div>
       <div style={s.actorStats}>
-        <span>📁 {actor.eventCount} events</span>
-        <span>📄 {actor.docCount} docs</span>
+        {(actor.eventCount > 0) && <span>📁 {actor.eventCount} event{actor.eventCount !== 1 ? 's' : ''}</span>}
+        {(actor.docCount > 0) && <span>📄 {actor.docCount} doc{actor.docCount !== 1 ? 's' : ''}</span>}
         {actor.reliabilityLabel && <span>🔍 {actor.reliabilityLabel}</span>}
         {actor.still_employed === 'yes' && <span style={{ color: '#16A34A' }}>✓ Still employed</span>}
         {actor.still_employed === 'no'  && <span style={{ color: '#DC2626' }}>✗ No longer employed</span>}

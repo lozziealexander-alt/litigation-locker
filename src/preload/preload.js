@@ -50,7 +50,8 @@ contextBridge.exposeInMainWorld('api', {
     updateDocumentSubtype: (docId, subtype) => ipcRenderer.invoke('documents:updateDocumentSubtype', docId, subtype),
     delete: (docId) => ipcRenderer.invoke('documents:delete', docId),
     copy: (docId) => ipcRenderer.invoke('documents:copy', docId),
-    open: (docId) => ipcRenderer.invoke('documents:open', docId)
+    open: (docId) => ipcRenderer.invoke('documents:open', docId),
+    getTempPath: (docId) => ipcRenderer.invoke('documents:getTempPath', docId)
   },
 
   // Group operations (document linking)

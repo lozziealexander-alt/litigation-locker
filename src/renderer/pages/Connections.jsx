@@ -278,7 +278,11 @@ export default function Connections({ onSelectDocument }) {
         <div>
           <h2 style={{ margin: 0, fontSize: '18px' }}>Connections & Precedent Intelligence</h2>
           <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#8b92a8' }}>
-            {events.length} events &bull; {connections.length} connections &bull; {pendingSuggestions.length} pending suggestions
+            {[
+              events.length > 0 ? `${events.length} event${events.length !== 1 ? 's' : ''}` : null,
+              connections.length > 0 ? `${connections.length} connection${connections.length !== 1 ? 's' : ''}` : null,
+              pendingSuggestions.length > 0 ? `${pendingSuggestions.length} pending` : null
+            ].filter(Boolean).join(' • ') || 'No events yet'}
           </p>
         </div>
 

@@ -347,7 +347,17 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
     try {
       const result = await window.api.documents.getContent(doc.id);
       if (result.success) {
-        setPreviewData({ data: result.data, mimeType: result.mimeType });
+        if (result.mimeType === 'application/pdf') {
+          // Blob URLs don't render PDFs reliably in Electron iframes — use a real temp file instead
+          const tmp = await window.api.documents.getTempPath(doc.id);
+          if (!tmp.success) {
+            setPreviewError(tmp.error || 'Could not create preview file.');
+            return;
+          }
+          setPreviewData({ filePath: tmp.path, mimeType: result.mimeType });
+        } else {
+          setPreviewData({ data: result.data, mimeType: result.mimeType });
+        }
         setShowPreview(true);
       } else {
         setPreviewError(result.error || 'Content not available for this file.');
@@ -895,15 +905,11 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
                   style={styles.previewImage}
                 />
               ) : isPdf ? (
-                <object
-                  data={`data:application/pdf;base64,${previewData.data}`}
-                  type="application/pdf"
+                <iframe
+                  src={`file://${previewData.filePath}`}
                   style={styles.previewPdf}
-                >
-                  <p style={styles.previewFallback}>
-                    PDF preview not available.
-                  </p>
-                </object>
+                  title={displayDoc.filename}
+                />
               ) : null}
             </div>
           </div>

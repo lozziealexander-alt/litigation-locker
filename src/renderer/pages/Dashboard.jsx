@@ -697,12 +697,20 @@ export default function Dashboard({ onNavigateToTimeline, onNavigateToPeople, on
                 </div>
 
                 <div style={styles.threadStats}>
-                  <span style={styles.threadStat}><strong>{assignment.events.length}</strong> event{assignment.events.length !== 1 ? 's' : ''}</span>
-                  <span style={styles.threadStatDivider}>·</span>
-                  <span style={styles.threadStat}><strong>{assignment.documents.length}</strong> doc{assignment.documents.length !== 1 ? 's' : ''}</span>
+                  {assignment.events.length > 0 && (
+                    <span style={styles.threadStat}><strong>{assignment.events.length}</strong> event{assignment.events.length !== 1 ? 's' : ''}</span>
+                  )}
+                  {assignment.events.length > 0 && assignment.documents.length > 0 && (
+                    <span style={styles.threadStatDivider}>·</span>
+                  )}
+                  {assignment.documents.length > 0 && (
+                    <span style={styles.threadStat}><strong>{assignment.documents.length}</strong> doc{assignment.documents.length !== 1 ? 's' : ''}</span>
+                  )}
                   {thread.precedents.length > 0 && (
                     <>
-                      <span style={styles.threadStatDivider}>·</span>
+                      {(assignment.events.length > 0 || assignment.documents.length > 0) && (
+                        <span style={styles.threadStatDivider}>·</span>
+                      )}
                       <span style={styles.threadPrecedent}>⚖️ {thread.precedents[0]}</span>
                     </>
                   )}

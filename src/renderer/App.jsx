@@ -77,6 +77,41 @@ export default function App() {
     };
   }, [isReadOnly, activeCase]);
 
+  // Global drag-and-drop: drop files anywhere to ingest them
+  useEffect(() => {
+    if (isReadOnly || !activeCase) return;
+    const handleDrop = async (e) => {
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer?.files || []);
+      if (files.length === 0) return;
+      const paths = files.map(f => {
+        try { return window.api.getPathForFile(f); }
+        catch (_) { return f.path || ''; }
+      }).filter(Boolean);
+      if (paths.length === 0) return;
+      try {
+        const res = await window.api.documents.ingest(paths);
+        const added = res?.documents?.length ?? 0;
+        const errors = res?.errors?.length ?? 0;
+        const dupes = res?.nearDuplicates?.length ?? 0;
+        let msg = `${added} document${added !== 1 ? 's' : ''} added.`;
+        if (dupes) msg += ` ${dupes} near-duplicate${dupes !== 1 ? 's' : ''} detected.`;
+        if (errors) msg += ` ${errors} skipped (duplicate or error).`;
+        setImportToast(msg);
+        setTimeout(() => setImportToast(null), 4000);
+        setCurrentPage('timeline');
+        setTimelineKey(k => k + 1);
+        setThreadsKey(k => k + 1);
+        markBriefStale();
+      } catch (err) {
+        setImportToast('Import failed: ' + (err?.message || 'Unknown error'));
+        setTimeout(() => setImportToast(null), 5000);
+      }
+    };
+    document.addEventListener('drop', handleDrop);
+    return () => document.removeEventListener('drop', handleDrop);
+  }, [isReadOnly, activeCase]);
+
   // Keyboard shortcut: Cmd/Ctrl + B → open lawyer brief
   useEffect(() => {
     function handleKey(e) {

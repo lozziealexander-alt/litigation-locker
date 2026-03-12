@@ -62,7 +62,13 @@ export default function Settings() {
     const r = await window.api.export.webVault(webPassword);
     if (r.success) {
       setWebStatus('done');
-      setWebMsg('Saved to: ' + r.path);
+      if (r.gitPushed) {
+        setWebMsg('✓ Pushed to GitHub! Your web viewer is live.');
+      } else if (r.gitError) {
+        setWebMsg(`Exported to docs/ but git push failed: ${r.gitError.split('\n')[0]}`);
+      } else {
+        setWebMsg('Exported to docs/vault.enc.json');
+      }
       setWebPassword('');
     } else {
       setWebStatus('error');
@@ -206,7 +212,7 @@ export default function Settings() {
             </span>
           )}
           <span style={s.hint}>
-            The vault is automatically deployed to docs/. Commit and push to update your GitHub Pages site.
+            Exports the vault and automatically pushes to GitHub Pages. Your web viewer updates instantly.
           </span>
         </div>
       </div>

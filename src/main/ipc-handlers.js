@@ -585,6 +585,28 @@ function registerIpcHandlers() {
     }
   });
 
+  // Returns the file:// path for in-app preview (used for PDFs in iframe)
+  ipcMain.handle('documents:getTempPath', async (event, docId) => {
+    try {
+      if (!currentCaseDb) return { success: false, error: 'No case is open' };
+      const row = currentCaseDb.prepare(
+        'SELECT encrypted_content, file_type, filename FROM documents WHERE id = ?'
+      ).get(docId);
+      if (!row) return { success: false, error: 'Document not found' };
+      const { decrypt } = require('./crypto/vault');
+      const caseKey = keyManager.deriveCaseKey(currentCaseId);
+      const decrypted = decrypt(row.encrypted_content, caseKey);
+      const os = require('os');
+      const path = require('path');
+      const ext = path.extname(row.filename) || '.bin';
+      const tmpPath = path.join(os.tmpdir(), `ll-doc-${docId}${ext}`);
+      fs.writeFileSync(tmpPath, decrypted);
+      return { success: true, path: tmpPath };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   // ==================== RECLASSIFY ====================
 
   ipcMain.handle('documents:reclassify', async () => {
@@ -4671,9 +4693,44 @@ function registerIpcHandlers() {
 
       // Also deploy directly to docs/ for GitHub Pages
       const docsDir = path.join(__dirname, '..', '..', 'docs');
+      const repoDir = path.join(__dirname, '..', '..');
+      let gitPushed = false;
+      let gitError = null;
       if (fs.existsSync(docsDir)) {
         fs.writeFileSync(path.join(docsDir, 'vault.enc.json'), bundleJson, 'utf8');
         console.log('[WebExport] Vault deployed to docs/vault.enc.json');
+
+        // Auto-push to git (execFileSync avoids shell injection)
+        try {
+          const { execFileSync } = require('child_process');
+          const dateStr = new Date().toISOString().slice(0, 10);
+          execFileSync('git', ['add', 'docs/vault.enc.json'], { cwd: repoDir, timeout: 10000 });
+          try {
+            execFileSync('git', ['commit', '-m', `Update web vault export ${dateStr}`], { cwd: repoDir, timeout: 10000 });
+          } catch (commitErr) {
+            // "nothing to commit" is not an error
+            if (!commitErr.stderr?.toString().includes('nothing to commit') &&
+                !commitErr.stdout?.toString().includes('nothing to commit')) {
+              throw commitErr;
+            }
+          }
+          execFileSync('git', ['push'], { cwd: repoDir, timeout: 30000 });
+          gitPushed = true;
+          console.log('[WebExport] Auto-pushed to git');
+        } catch (gitErr) {
+          gitError = gitErr.stderr?.toString() || gitErr.message || String(gitErr);
+          console.warn('[WebExport] Git push failed:', gitError);
+        }
+      }
+
+      // docs/ is the primary destination — skip save dialog
+      if (fs.existsSync(docsDir)) {
+        return {
+          success: true,
+          path: path.join(docsDir, 'vault.enc.json'),
+          gitPushed,
+          gitError: gitError || undefined
+        };
       }
 
       const result = await dialog.showSaveDialog({
@@ -4683,15 +4740,11 @@ function registerIpcHandlers() {
       });
 
       if (result.canceled || !result.filePath) {
-        // Still deployed to docs/ even if user cancels the save dialog
-        if (fs.existsSync(docsDir)) {
-          return { success: true, path: path.join(docsDir, 'vault.enc.json') };
-        }
         return { success: false, error: 'Export cancelled' };
       }
 
       fs.writeFileSync(result.filePath, bundleJson, 'utf8');
-      return { success: true, path: result.filePath };
+      return { success: true, path: result.filePath, gitPushed: false };
     } catch (err) {
       console.error('[WebExport] Failed:', err);
       return { success: false, error: err.message };

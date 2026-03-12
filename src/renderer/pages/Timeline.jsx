@@ -222,7 +222,9 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
         <div>
           <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Timeline</h2>
           <p style={{ margin: '2px 0 0', fontSize: 12, color: '#888', whiteSpace: 'nowrap' }}>
-            {timelineItems.length} items &nbsp;·&nbsp; <span style={{ color: '#e74c3c' }}>● {moments} moments</span> &nbsp;·&nbsp; <span style={{ color: '#2196f3' }}>● {docCount} documents</span>
+            {timelineItems.length} items
+            {moments > 0 && <>&nbsp;·&nbsp; <span style={{ color: '#e74c3c' }}>● {moments} moment{moments !== 1 ? 's' : ''}</span></>}
+            {docCount > 0 && <>&nbsp;·&nbsp; <span style={{ color: '#2196f3' }}>● {docCount} document{docCount !== 1 ? 's' : ''}</span></>}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -340,7 +342,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
 
         {(selectedPeriod ? selectedItems : filteredItems).map(item => {
           const isMoment = item._type === 'moment';
-          const isContext = isMoment && item.is_context_event;
+          const isContext = isMoment && !!item.is_context_event;
           const typeColor = isContext ? '#6B7280' : isMoment ? '#e74c3c' : '#2196f3';
           const tags = isMoment ? (item.tags || []) : (item.evidence_type ? [item.evidence_type] : []);
           const isExpanded = expandedItems.has(item.id);
@@ -379,7 +381,7 @@ export default function Timeline({ onSelectDocument, onSelectEvent, onDataChange
                 <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
                   <div style={{ fontWeight: 500, fontSize: 13, color: isContext ? '#6B7280' : '#2c3e50', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
                     {item._label}
-                    {isContext && <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#e5e7eb', color: '#6B7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0 }}>Context</span>}
+                    {isContext ? <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#e5e7eb', color: '#6B7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0 }}>Context</span> : null}
                   </div>
                   <div style={{ fontSize: 11, color: '#aaa', marginTop: 2, whiteSpace: 'nowrap' }}>
                     {item._date ? new Date(item._date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'No date'}
