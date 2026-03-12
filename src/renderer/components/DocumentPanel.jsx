@@ -905,10 +905,9 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
                   style={styles.previewImage}
                 />
               ) : isPdf ? (
-                <iframe
+                <webview
                   src={`file://${previewData.filePath}`}
-                  style={styles.previewPdf}
-                  title={displayDoc.filename}
+                  style={{ width: '100%', height: '100%', border: 'none', borderRadius: 4 }}
                 />
               ) : null}
             </div>
