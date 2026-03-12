@@ -21,10 +21,10 @@ function exportCaseData(caseDb, caseId, caseName, caseKey = null) {
   const data = { caseId, caseName };
 
   // Documents — strip encrypted_content blob (too large), but decrypt image
-  // files into base64 when a caseKey is available so the web viewer can preview them.
-  const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // skip individual images > 5 MB encrypted
-  const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024; // cap total image payload at 20 MB
-  let totalImageBytes = 0;
+  // and PDF files into base64 when a caseKey is available so the web viewer can preview them.
+  const MAX_DOC_BYTES = 10 * 1024 * 1024; // skip individual files > 10 MB encrypted
+  const MAX_TOTAL_DOC_BYTES = 30 * 1024 * 1024; // cap total content payload at 30 MB
+  let totalDocBytes = 0;
 
   // Lazy-require vault decrypt so a module-load failure can't crash the export
   let vaultDecrypt = null;
@@ -32,9 +32,11 @@ function exportCaseData(caseDb, caseId, caseName, caseKey = null) {
     try {
       vaultDecrypt = require('./crypto/vault').decrypt;
     } catch (e) {
-      console.warn('[WebExport] Could not load vault decrypt, images will be excluded:', e.message);
+      console.warn('[WebExport] Could not load vault decrypt, previews will be excluded:', e.message);
     }
   }
+
+  const PREVIEWABLE = (mime) => mime && (mime.startsWith('image/') || mime === 'application/pdf');
 
   data.documents = caseDb.prepare(`
     SELECT * FROM documents ORDER BY document_date
@@ -42,21 +44,21 @@ function exportCaseData(caseDb, caseId, caseName, caseKey = null) {
     const encContent = doc.encrypted_content;
     delete doc.encrypted_content;
 
-    if (vaultDecrypt && caseKey && doc.file_type && doc.file_type.startsWith('image/') && encContent) {
+    if (vaultDecrypt && caseKey && PREVIEWABLE(doc.file_type) && encContent) {
       try {
         if (
           Buffer.isBuffer(encContent) &&
           encContent.length > 32 &&            // must have at least IV + authTag
-          encContent.length <= MAX_IMAGE_BYTES &&
-          totalImageBytes + encContent.length <= MAX_TOTAL_IMAGE_BYTES
+          encContent.length <= MAX_DOC_BYTES &&
+          totalDocBytes + encContent.length <= MAX_TOTAL_DOC_BYTES
         ) {
           const decrypted = vaultDecrypt(encContent, caseKey);
           doc.content_b64 = decrypted.toString('base64');
-          totalImageBytes += encContent.length;
+          totalDocBytes += encContent.length;
         }
       } catch (e) {
-        // Decryption failure — skip this image; don't abort the whole export
-        console.warn('[WebExport] Image decrypt failed for doc', doc.id, ':', e.message);
+        // Decryption failure — skip this doc; don't abort the whole export
+        console.warn('[WebExport] Decrypt failed for doc', doc.id, ':', e.message);
       }
     }
     return doc;
