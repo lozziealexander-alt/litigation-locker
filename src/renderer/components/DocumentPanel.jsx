@@ -348,7 +348,6 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
       const result = await window.api.documents.getContent(doc.id);
       if (result.success) {
         if (result.mimeType === 'application/pdf') {
-          // Blob URLs don't render PDFs reliably in Electron iframes — use a real temp file instead
           const tmp = await window.api.documents.getTempPath(doc.id);
           if (!tmp.success) {
             setPreviewError(tmp.error || 'Could not create preview file.');
@@ -905,9 +904,10 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
                   style={styles.previewImage}
                 />
               ) : isPdf ? (
-                <webview
+                <iframe
                   src={`file://${previewData.filePath}`}
-                  style={{ width: '100%', height: '100%', border: 'none', borderRadius: 4 }}
+                  style={styles.previewPdf}
+                  title={displayDoc.filename}
                 />
               ) : null}
             </div>

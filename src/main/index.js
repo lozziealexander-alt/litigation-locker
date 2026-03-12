@@ -18,8 +18,7 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
-      nodeIntegration: false,
-      webviewTag: true    // needed for inline PDF preview
+      nodeIntegration: false
     },
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1a1a2e'
@@ -69,9 +68,7 @@ app.on('will-quit', async () => {
 // Security: Prevent navigation to external URLs (allow file: for local loads)
 app.on('web-contents-created', (event, contents) => {
   contents.on('will-navigate', (event, navigationUrl) => {
-    // Allow file: and blob: URLs — used for PDF preview in webview/iframe
-    // Block everything else to prevent accidental external navigation (e.g. drop events)
-    if (navigationUrl.startsWith('file:') || navigationUrl.startsWith('blob:')) return;
+    // Block all navigations — drops are handled by the renderer's JS, not navigation
     event.preventDefault();
   });
 

@@ -575,7 +575,7 @@ function registerIpcHandlers() {
       const decrypted = decrypt(row.encrypted_content, caseKey);
       const os = require('os');
       const path = require('path');
-      const ext = path.extname(row.filename) || '.bin';
+      const ext = row.file_type === 'application/pdf' ? '.pdf' : (path.extname(row.filename) || '.bin');
       const tmpPath = path.join(os.tmpdir(), `ll-doc-${docId}${ext}`);
       fs.writeFileSync(tmpPath, decrypted);
       await shell.openPath(tmpPath);
@@ -598,8 +598,11 @@ function registerIpcHandlers() {
       const decrypted = decrypt(row.encrypted_content, caseKey);
       const os = require('os');
       const path = require('path');
-      const ext = path.extname(row.filename) || '.bin';
+      // Always use .pdf for PDF mime type — filenames often lack extensions and
+      // Chromium uses the file extension to decide whether to display or download.
+      const ext = row.file_type === 'application/pdf' ? '.pdf' : (path.extname(row.filename) || '.bin');
       const tmpPath = path.join(os.tmpdir(), `ll-doc-${docId}${ext}`);
+      console.log('[documents:getTempPath] writing', tmpPath, 'size:', decrypted.length);
       fs.writeFileSync(tmpPath, decrypted);
       return { success: true, path: tmpPath };
     } catch (err) {
