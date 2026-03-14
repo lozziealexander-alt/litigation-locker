@@ -13768,7 +13768,7 @@
     const selectedItems = selectedPeriod ? groupedItems[selectedPeriod] || [] : [];
     const moments = timelineItems.filter((i) => i._type === "moment").length;
     const docCount = timelineItems.filter((i) => i._type === "document").length;
-    return /* @__PURE__ */ import_react4.default.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", background: "#f8f9fa", fontFamily: "system-ui, sans-serif" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { padding: "14px 24px", borderBottom: "1px solid #e0e0e0", background: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 } }, /* @__PURE__ */ import_react4.default.createElement("div", null, /* @__PURE__ */ import_react4.default.createElement("h2", { style: { margin: 0, fontSize: 20, fontWeight: 600 } }, "Timeline"), /* @__PURE__ */ import_react4.default.createElement("p", { style: { margin: "2px 0 0", fontSize: 12, color: "#888", whiteSpace: "nowrap" } }, timelineItems.length, " items \xA0\xB7\xA0 ", /* @__PURE__ */ import_react4.default.createElement("span", { style: { color: "#e74c3c" } }, "\u25CF ", moments, " moments"), " \xA0\xB7\xA0 ", /* @__PURE__ */ import_react4.default.createElement("span", { style: { color: "#2196f3" } }, "\u25CF ", docCount, " documents"))), /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", border: "1px solid #ddd", borderRadius: 6, overflow: "hidden" } }, VIEW_MODES.map((m) => /* @__PURE__ */ import_react4.default.createElement("button", { key: m.key, onClick: () => setViewMode(m.key), style: {
+    return /* @__PURE__ */ import_react4.default.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", background: "#f8f9fa", fontFamily: "system-ui, sans-serif" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { padding: "14px 24px", borderBottom: "1px solid #e0e0e0", background: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 } }, /* @__PURE__ */ import_react4.default.createElement("div", null, /* @__PURE__ */ import_react4.default.createElement("h2", { style: { margin: 0, fontSize: 20, fontWeight: 600 } }, "Timeline"), /* @__PURE__ */ import_react4.default.createElement("p", { style: { margin: "2px 0 0", fontSize: 12, color: "#888", whiteSpace: "nowrap" } }, timelineItems.length, " items", moments > 0 && /* @__PURE__ */ import_react4.default.createElement(import_react4.default.Fragment, null, "\xA0\xB7\xA0 ", /* @__PURE__ */ import_react4.default.createElement("span", { style: { color: "#e74c3c" } }, "\u25CF ", moments, " moment", moments !== 1 ? "s" : "")), docCount > 0 && /* @__PURE__ */ import_react4.default.createElement(import_react4.default.Fragment, null, "\xA0\xB7\xA0 ", /* @__PURE__ */ import_react4.default.createElement("span", { style: { color: "#2196f3" } }, "\u25CF ", docCount, " document", docCount !== 1 ? "s" : "")))), /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", border: "1px solid #ddd", borderRadius: 6, overflow: "hidden" } }, VIEW_MODES.map((m) => /* @__PURE__ */ import_react4.default.createElement("button", { key: m.key, onClick: () => setViewMode(m.key), style: {
       padding: "5px 12px",
       border: "none",
       fontSize: 12,
@@ -13855,7 +13855,7 @@
       color: "#888"
     } }, "Show all")), (selectedPeriod ? selectedItems : filteredItems).map((item) => {
       const isMoment = item._type === "moment";
-      const isContext = isMoment && item.is_context_event;
+      const isContext = isMoment && !!item.is_context_event;
       const typeColor = isContext ? "#6B7280" : isMoment ? "#e74c3c" : "#2196f3";
       const tags = isMoment ? item.tags || [] : item.evidence_type ? [item.evidence_type] : [];
       const isExpanded = expandedItems.has(item.id);
@@ -13883,7 +13883,7 @@
         alignItems: "center",
         justifyContent: "center",
         fontSize: 14
-      } }, isContext ? "\u25EF" : isMoment ? "\u{1F534}" : "\u{1F4C4}"), /* @__PURE__ */ import_react4.default.createElement("div", { style: { flex: 1, minWidth: 0, overflow: "hidden" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontWeight: 500, fontSize: 13, color: isContext ? "#6B7280" : "#2c3e50", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6 } }, item._label, isContext && /* @__PURE__ */ import_react4.default.createElement("span", { style: { fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#e5e7eb", color: "#6B7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, flexShrink: 0 } }, "Context")), /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontSize: 11, color: "#aaa", marginTop: 2, whiteSpace: "nowrap" } }, item._date ? new Date(item._date).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "No date", !isMoment && item.file_size ? ` \xB7 ${(item.file_size / 1024).toFixed(0)} KB` : ""), !isExpanded && tags.length > 0 && /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" } }, tags.slice(0, 4).map((tag) => /* @__PURE__ */ import_react4.default.createElement("span", { key: tag, style: {
+      } }, isContext ? "\u25EF" : isMoment ? "\u{1F534}" : "\u{1F4C4}"), /* @__PURE__ */ import_react4.default.createElement("div", { style: { flex: 1, minWidth: 0, overflow: "hidden" } }, /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontWeight: 500, fontSize: 13, color: isContext ? "#6B7280" : "#2c3e50", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6 } }, item._label, isContext ? /* @__PURE__ */ import_react4.default.createElement("span", { style: { fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#e5e7eb", color: "#6B7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, flexShrink: 0 } }, "Context") : null), /* @__PURE__ */ import_react4.default.createElement("div", { style: { fontSize: 11, color: "#aaa", marginTop: 2, whiteSpace: "nowrap" } }, item._date ? new Date(item._date).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "No date", !isMoment && item.file_size ? ` \xB7 ${(item.file_size / 1024).toFixed(0)} KB` : ""), !isExpanded && tags.length > 0 && /* @__PURE__ */ import_react4.default.createElement("div", { style: { display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" } }, tags.slice(0, 4).map((tag) => /* @__PURE__ */ import_react4.default.createElement("span", { key: tag, style: {
         padding: "1px 6px",
         fontSize: 10,
         borderRadius: 3,
@@ -15839,7 +15839,7 @@
       const assignment = threads[thread.id] || { events: [], documents: [] };
       const strength = calculateThreadStrength(assignment);
       const gaps2 = getThreadGaps(assignment, thread);
-      return /* @__PURE__ */ import_react8.default.createElement("div", { key: thread.id, style: styles3.threadCard }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadCardHeader }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.threadDot, backgroundColor: thread.color } }), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadHeaderText }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadName }, thread.name), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadDesc }, thread.description)), /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.threadStrengthPill, borderColor: thread.color, color: thread.color } }, strength, "%")), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.strengthBarBg }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.strengthBarFill, width: `${strength}%`, backgroundColor: thread.color } })), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadStats }, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStat }, /* @__PURE__ */ import_react8.default.createElement("strong", null, assignment.events.length), " event", assignment.events.length !== 1 ? "s" : ""), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStatDivider }, "\xB7"), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStat }, /* @__PURE__ */ import_react8.default.createElement("strong", null, assignment.documents.length), " doc", assignment.documents.length !== 1 ? "s" : ""), thread.precedents.length > 0 && /* @__PURE__ */ import_react8.default.createElement(import_react8.default.Fragment, null, /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStatDivider }, "\xB7"), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadPrecedent }, "\u2696\uFE0F ", thread.precedents[0]))), assignment.documents.length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: { marginTop: spacing.xs } }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { fontSize: typography.fontSize.xs, color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: spacing.xs } }, "Key Evidence (", assignment.documents.length, ")"), /* @__PURE__ */ import_react8.default.createElement("div", { style: { display: "flex", flexDirection: "column", gap: spacing.xs, maxHeight: 160, overflowY: "auto" } }, assignment.documents.map((doc) => /* @__PURE__ */ import_react8.default.createElement(DocPreviewItem, { key: doc.id || doc, doc, onSelectDocument })))), gaps2.length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadGaps }, gaps2.slice(0, 2).map((gap, i) => /* @__PURE__ */ import_react8.default.createElement("div", { key: i, style: styles3.threadGap }, "\u26A0 ", gap))), assignment.events.length === 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadEmpty }, "No events tagged for this thread yet"));
+      return /* @__PURE__ */ import_react8.default.createElement("div", { key: thread.id, style: styles3.threadCard }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadCardHeader }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.threadDot, backgroundColor: thread.color } }), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadHeaderText }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadName }, thread.name), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadDesc }, thread.description)), /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.threadStrengthPill, borderColor: thread.color, color: thread.color } }, strength, "%")), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.strengthBarBg }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.strengthBarFill, width: `${strength}%`, backgroundColor: thread.color } })), /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadStats }, assignment.events.length > 0 && /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStat }, /* @__PURE__ */ import_react8.default.createElement("strong", null, assignment.events.length), " event", assignment.events.length !== 1 ? "s" : ""), assignment.events.length > 0 && assignment.documents.length > 0 && /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStatDivider }, "\xB7"), assignment.documents.length > 0 && /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStat }, /* @__PURE__ */ import_react8.default.createElement("strong", null, assignment.documents.length), " doc", assignment.documents.length !== 1 ? "s" : ""), thread.precedents.length > 0 && /* @__PURE__ */ import_react8.default.createElement(import_react8.default.Fragment, null, (assignment.events.length > 0 || assignment.documents.length > 0) && /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadStatDivider }, "\xB7"), /* @__PURE__ */ import_react8.default.createElement("span", { style: styles3.threadPrecedent }, "\u2696\uFE0F ", thread.precedents[0]))), assignment.documents.length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: { marginTop: spacing.xs } }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { fontSize: typography.fontSize.xs, color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: spacing.xs } }, "Key Evidence (", assignment.documents.length, ")"), /* @__PURE__ */ import_react8.default.createElement("div", { style: { display: "flex", flexDirection: "column", gap: spacing.xs, maxHeight: 160, overflowY: "auto" } }, assignment.documents.map((doc) => /* @__PURE__ */ import_react8.default.createElement(DocPreviewItem, { key: doc.id || doc, doc, onSelectDocument })))), gaps2.length > 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadGaps }, gaps2.slice(0, 2).map((gap, i) => /* @__PURE__ */ import_react8.default.createElement("div", { key: i, style: styles3.threadGap }, "\u26A0 ", gap))), assignment.events.length === 0 && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.threadEmpty }, "No events tagged for this thread yet"));
     })), selectedAlert && /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.overlay, onClick: () => setSelectedAlert(null) }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { ...styles3.overlayPanel, width: "650px" }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ import_react8.default.createElement("div", { style: styles3.overlayHeader }, /* @__PURE__ */ import_react8.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: spacing.sm } }, /* @__PURE__ */ import_react8.default.createElement("span", { style: {
       display: "inline-block",
       padding: `${spacing.xs} ${spacing.sm}`,
@@ -16800,7 +16800,13 @@
       const r = await window.api.export.webVault(webPassword);
       if (r.success) {
         setWebStatus("done");
-        setWebMsg("Saved to: " + r.path);
+        if (r.gitPushed) {
+          setWebMsg("\u2713 Pushed to GitHub! Your web viewer is live.");
+        } else if (r.gitError) {
+          setWebMsg(`Exported to docs/ but git push failed: ${r.gitError.split("\n")[0]}`);
+        } else {
+          setWebMsg("Exported to docs/vault.enc.json");
+        }
         setWebPassword("");
       } else {
         setWebStatus("error");
@@ -16882,7 +16888,7 @@
         disabled: webStatus === "working"
       },
       webStatus === "working" ? "Exporting..." : "Export for Web"
-    )), webStatus === "done" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#16A34A" } }, "\u2713", " ", webMsg), webStatus === "error" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#DC2626" } }, webMsg), /* @__PURE__ */ import_react9.default.createElement("span", { style: s.hint }, "The vault is automatically deployed to docs/. Commit and push to update your GitHub Pages site."))));
+    )), webStatus === "done" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#16A34A" } }, "\u2713", " ", webMsg), webStatus === "error" && /* @__PURE__ */ import_react9.default.createElement("span", { style: { ...s.hint, color: "#DC2626" } }, webMsg), /* @__PURE__ */ import_react9.default.createElement("span", { style: s.hint }, "Exports the vault and automatically pushes to GitHub Pages. Your web viewer updates instantly."))));
   }
   function getStyles4() {
     return {
@@ -17142,7 +17148,11 @@ Found ${result.count} new suggestions based on legal precedents.`);
       display: "flex",
       justifyContent: "space-between",
       alignItems: "center"
-    } }, /* @__PURE__ */ import_react10.default.createElement("div", null, /* @__PURE__ */ import_react10.default.createElement("h2", { style: { margin: 0, fontSize: "18px" } }, "Connections & Precedent Intelligence"), /* @__PURE__ */ import_react10.default.createElement("p", { style: { margin: "4px 0 0 0", fontSize: "13px", color: "#8b92a8" } }, events.length, " events \u2022 ", connections.length, " connections \u2022 ", pendingSuggestions.length, " pending suggestions")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ import_react10.default.createElement(
+    } }, /* @__PURE__ */ import_react10.default.createElement("div", null, /* @__PURE__ */ import_react10.default.createElement("h2", { style: { margin: 0, fontSize: "18px" } }, "Connections & Precedent Intelligence"), /* @__PURE__ */ import_react10.default.createElement("p", { style: { margin: "4px 0 0 0", fontSize: "13px", color: "#8b92a8" } }, [
+      events.length > 0 ? `${events.length} event${events.length !== 1 ? "s" : ""}` : null,
+      connections.length > 0 ? `${connections.length} connection${connections.length !== 1 ? "s" : ""}` : null,
+      pendingSuggestions.length > 0 ? `${pendingSuggestions.length} pending` : null
+    ].filter(Boolean).join(" \u2022 ") || "No events yet")), /* @__PURE__ */ import_react10.default.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ import_react10.default.createElement(
       "button",
       {
         onClick: handleAutoDetect,
@@ -18203,7 +18213,10 @@ Found ${result.count} new suggestions based on legal precedents.`);
           onClick: () => onNavigateToThread?.(thread.id),
           title: "Click to open this claim in Threads"
         },
-        /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimLeft }, /* @__PURE__ */ import_react11.default.createElement("div", null, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimName }, thread.name), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimMeta }, thread.eventCount, " events \xB7 ", thread.docCount, " docs"))),
+        /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimLeft }, /* @__PURE__ */ import_react11.default.createElement("div", null, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimName }, thread.name), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimMeta }, [
+          thread.eventCount > 0 ? `${thread.eventCount} event${thread.eventCount !== 1 ? "s" : ""}` : null,
+          thread.docCount > 0 ? `${thread.docCount} doc${thread.docCount !== 1 ? "s" : ""}` : null
+        ].filter(Boolean).join(" \xB7 ") || "No evidence linked"))),
         /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimRight }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.claimMeterWrap }, /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.claimMeter, width: `${thread.strength / 10 * 100}%`, background: tc } })), /* @__PURE__ */ import_react11.default.createElement("span", { style: { ...s.claimScore, color: tc } }, thread.strength, "/10"), /* @__PURE__ */ import_react11.default.createElement("span", { style: s.viewArrow }, "View \\u2192"))
       );
     })), brief.generatedAt && /* @__PURE__ */ import_react11.default.createElement("p", { style: s.metaLine }, "Generated ", formatDate2(brief.generatedAt), brief.isStale && /* @__PURE__ */ import_react11.default.createElement("span", { style: s.staleTag }, " \\u00b7 Outdated")));
@@ -18367,7 +18380,7 @@ Found ${result.count} new suggestions based on legal precedents.`);
   function ActorCard({ actor }) {
     const s = getStyles5();
     const cls = classificationLabel(actor.classification);
-    return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorCard }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorHeader }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorAvatar }, (actor.name || "?")[0].toUpperCase()), /* @__PURE__ */ import_react11.default.createElement("div", null, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorName }, actor.name), actor.role && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorRole }, actor.role)), /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.actorClassBadge, background: cls.color + "22", color: cls.color } }, cls.label)), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorStats }, /* @__PURE__ */ import_react11.default.createElement("span", null, "\u{1F4C1} ", actor.eventCount, " events"), /* @__PURE__ */ import_react11.default.createElement("span", null, "\u{1F4C4} ", actor.docCount, " docs"), actor.reliabilityLabel && /* @__PURE__ */ import_react11.default.createElement("span", null, "\u{1F50D} ", actor.reliabilityLabel), actor.still_employed === "yes" && /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: "#16A34A" } }, "\u2713 Still employed"), actor.still_employed === "no" && /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: "#DC2626" } }, "\u2717 No longer employed"), actor.would_they_help === "likely_helpful" && /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: "#16A34A" } }, "\u{1F44D} Likely helpful"), actor.would_they_help === "likely_hostile" && /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: "#DC2626" } }, "\u{1F44E} Likely hostile")));
+    return /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorCard }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorHeader }, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorAvatar }, (actor.name || "?")[0].toUpperCase()), /* @__PURE__ */ import_react11.default.createElement("div", null, /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorName }, actor.name), actor.role && /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorRole }, actor.role)), /* @__PURE__ */ import_react11.default.createElement("div", { style: { ...s.actorClassBadge, background: cls.color + "22", color: cls.color } }, cls.label)), /* @__PURE__ */ import_react11.default.createElement("div", { style: s.actorStats }, actor.eventCount > 0 && /* @__PURE__ */ import_react11.default.createElement("span", null, "\u{1F4C1} ", actor.eventCount, " event", actor.eventCount !== 1 ? "s" : ""), actor.docCount > 0 && /* @__PURE__ */ import_react11.default.createElement("span", null, "\u{1F4C4} ", actor.docCount, " doc", actor.docCount !== 1 ? "s" : ""), actor.reliabilityLabel && /* @__PURE__ */ import_react11.default.createElement("span", null, "\u{1F50D} ", actor.reliabilityLabel), actor.still_employed === "yes" && /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: "#16A34A" } }, "\u2713 Still employed"), actor.still_employed === "no" && /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: "#DC2626" } }, "\u2717 No longer employed"), actor.would_they_help === "likely_helpful" && /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: "#16A34A" } }, "\u{1F44D} Likely helpful"), actor.would_they_help === "likely_hostile" && /* @__PURE__ */ import_react11.default.createElement("span", { style: { color: "#DC2626" } }, "\u{1F44E} Likely hostile")));
   }
   function RedFlags({ brief }) {
     const s = getStyles5();
@@ -19220,7 +19233,22 @@ Found ${result.count} new suggestions based on legal precedents.`);
       try {
         const result = await window.api.documents.getContent(doc.id);
         if (result.success) {
-          setPreviewData({ data: result.data, mimeType: result.mimeType });
+          if (result.mimeType === "application/pdf") {
+            if (typeof window.api.documents.getTempPath === "function") {
+              const tmp = await window.api.documents.getTempPath(doc.id);
+              if (!tmp.success) {
+                setPreviewError(tmp.error || "Could not create preview file.");
+                return;
+              }
+              setPreviewData({ filePath: tmp.path, mimeType: result.mimeType });
+            } else {
+              const bytes = Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0));
+              const blob = new Blob([bytes], { type: "application/pdf" });
+              setPreviewData({ filePath: URL.createObjectURL(blob), mimeType: result.mimeType });
+            }
+          } else {
+            setPreviewData({ data: result.data, mimeType: result.mimeType });
+          }
           setShowPreview(true);
         } else {
           setPreviewError(result.error || "Content not available for this file.");
@@ -19589,13 +19617,12 @@ This cannot be undone.`)) {
         style: styles5.previewImage
       }
     ) : isPdf ? /* @__PURE__ */ import_react12.default.createElement(
-      "object",
+      "iframe",
       {
-        data: `data:application/pdf;base64,${previewData.data}`,
-        type: "application/pdf",
-        style: styles5.previewPdf
-      },
-      /* @__PURE__ */ import_react12.default.createElement("p", { style: styles5.previewFallback }, "PDF preview not available.")
+        src: previewData.filePath.startsWith("/") ? `file://${previewData.filePath}` : previewData.filePath,
+        style: styles5.previewPdf,
+        title: displayDoc.filename
+      }
     ) : null))));
   }
   function safeParseJSON(str) {
@@ -21496,6 +21523,42 @@ This cannot be undone.`)) {
         window.removeEventListener("import-files", handleImport);
         window.removeEventListener("add-moment", handleAddMoment);
       };
+    }, [isReadOnly, activeCase]);
+    (0, import_react15.useEffect)(() => {
+      if (isReadOnly || !activeCase) return;
+      const handleDrop = async (e) => {
+        e.preventDefault();
+        const files = Array.from(e.dataTransfer?.files || []);
+        if (files.length === 0) return;
+        const paths = files.map((f) => {
+          try {
+            return window.api.getPathForFile(f);
+          } catch (_) {
+            return f.path || "";
+          }
+        }).filter(Boolean);
+        if (paths.length === 0) return;
+        try {
+          const res = await window.api.documents.ingest(paths);
+          const added = res?.documents?.length ?? 0;
+          const errors = res?.errors?.length ?? 0;
+          const dupes = res?.nearDuplicates?.length ?? 0;
+          let msg = `${added} document${added !== 1 ? "s" : ""} added.`;
+          if (dupes) msg += ` ${dupes} near-duplicate${dupes !== 1 ? "s" : ""} detected.`;
+          if (errors) msg += ` ${errors} skipped (duplicate or error).`;
+          setImportToast(msg);
+          setTimeout(() => setImportToast(null), 4e3);
+          setCurrentPage("timeline");
+          setTimelineKey((k) => k + 1);
+          setThreadsKey((k) => k + 1);
+          markBriefStale();
+        } catch (err) {
+          setImportToast("Import failed: " + (err?.message || "Unknown error"));
+          setTimeout(() => setImportToast(null), 5e3);
+        }
+      };
+      document.addEventListener("drop", handleDrop);
+      return () => document.removeEventListener("drop", handleDrop);
     }, [isReadOnly, activeCase]);
     (0, import_react15.useEffect)(() => {
       function handleKey(e) {
