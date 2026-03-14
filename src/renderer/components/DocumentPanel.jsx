@@ -348,12 +348,20 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
       const result = await window.api.documents.getContent(doc.id);
       if (result.success) {
         if (result.mimeType === 'application/pdf') {
-          const tmp = await window.api.documents.getTempPath(doc.id);
-          if (!tmp.success) {
-            setPreviewError(tmp.error || 'Could not create preview file.');
-            return;
+          if (typeof window.api.documents.getTempPath === 'function') {
+            // Electron: write decrypted PDF to a .pdf temp file so Chromium's viewer engages
+            const tmp = await window.api.documents.getTempPath(doc.id);
+            if (!tmp.success) {
+              setPreviewError(tmp.error || 'Could not create preview file.');
+              return;
+            }
+            setPreviewData({ filePath: tmp.path, mimeType: result.mimeType });
+          } else {
+            // Web browser: convert base64 → Blob URL (works with browser's built-in PDF viewer)
+            const bytes = Uint8Array.from(atob(result.data), c => c.charCodeAt(0));
+            const blob = new Blob([bytes], { type: 'application/pdf' });
+            setPreviewData({ filePath: URL.createObjectURL(blob), mimeType: result.mimeType });
           }
-          setPreviewData({ filePath: tmp.path, mimeType: result.mimeType });
         } else {
           setPreviewData({ data: result.data, mimeType: result.mimeType });
         }
@@ -905,7 +913,7 @@ export default function DocumentPanel({ caseId, document: doc, onClose, onDocume
                 />
               ) : isPdf ? (
                 <iframe
-                  src={`file://${previewData.filePath}`}
+                  src={previewData.filePath.startsWith('/') ? `file://${previewData.filePath}` : previewData.filePath}
                   style={styles.previewPdf}
                   title={displayDoc.filename}
                 />

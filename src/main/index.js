@@ -18,7 +18,8 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      plugins: true
     },
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1a1a2e'
@@ -65,10 +66,13 @@ app.on('will-quit', async () => {
   await terminateOcr();
 });
 
-// Security: Prevent navigation to external URLs (allow file: for local loads)
+// Security: Prevent navigation to external URLs (allow file: and blob: for local loads / PDF preview)
 app.on('web-contents-created', (event, contents) => {
   contents.on('will-navigate', (event, navigationUrl) => {
-    // Block all navigations — drops are handled by the renderer's JS, not navigation
+    const url = new URL(navigationUrl);
+    // Allow file: (PDF temp files in iframes) and blob: (web vault PDF preview)
+    if (url.protocol === 'file:' || url.protocol === 'blob:') return;
+    // Block everything else (http, https, etc.)
     event.preventDefault();
   });
 

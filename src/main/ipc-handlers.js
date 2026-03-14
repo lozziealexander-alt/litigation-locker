@@ -81,6 +81,11 @@ function registerIpcHandlers() {
       await keyManager.unlock(passphrase, salt);
       db.storeSalt(salt);
       db.initMasterDb(keyManager.getMasterKey());
+      // Store a HMAC verification token so future unlocks can verify the passphrase
+      const { app: electronApp } = require('electron');
+      const crypto = require('crypto');
+      const verifyToken = crypto.createHmac('sha256', keyManager.getMasterKey()).update('vault-verify').digest();
+      fs.writeFileSync(require('path').join(electronApp.getPath('userData'), 'verify'), verifyToken);
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -97,6 +102,27 @@ function registerIpcHandlers() {
         return { success: false, error: 'Vault not set up' };
       }
       await keyManager.unlock(passphrase, salt);
+
+      // Verify passphrase against stored HMAC token (prevents silent wrong-key acceptance)
+      const { app: electronApp } = require('electron');
+      const crypto = require('crypto');
+      const path = require('path');
+      const verifyPath = path.join(electronApp.getPath('userData'), 'verify');
+      if (fs.existsSync(verifyPath)) {
+        const storedToken = fs.readFileSync(verifyPath);
+        const computedToken = crypto.createHmac('sha256', keyManager.getMasterKey()).update('vault-verify').digest();
+        if (!crypto.timingSafeEqual(storedToken, computedToken)) {
+          keyManager.lock(); // clear the wrong key from memory
+          console.error('[IPC] vault:unlock — passphrase HMAC mismatch (wrong passphrase)');
+          return { success: false, error: 'Invalid passphrase' };
+        }
+      } else {
+        // No verify token yet (vault created before this feature) — store one now for future unlocks
+        const verifyToken = crypto.createHmac('sha256', keyManager.getMasterKey()).update('vault-verify').digest();
+        fs.writeFileSync(verifyPath, verifyToken);
+        console.log('[IPC] vault:unlock — no verify token found, stored one for future verification');
+      }
+
       const masterDb = db.initMasterDb(keyManager.getMasterKey());
       console.log('[IPC] vault:unlock => success, masterDb:', !!masterDb);
       return { success: true };
@@ -501,7 +527,13 @@ function registerIpcHandlers() {
       };
     } catch (error) {
       console.error('[documents:getContent] decrypt FAILED:', error.message, 'docId:', docId);
-      return { success: false, error: error.message };
+      const isAuthError = error.message.includes('authenticate') || error.message.includes('Unsupported state');
+      return {
+        success: false,
+        error: isAuthError
+          ? 'Decryption failed — the vault may have been unlocked with an incorrect passphrase. Lock the vault and re-enter your passphrase to fix this.'
+          : error.message
+      };
     }
   });
 
@@ -4691,7 +4723,7 @@ function registerIpcHandlers() {
         console.warn('[WebExport] Could not derive case key, images will be excluded:', keyErr.message);
       }
 
-      const bundle = exportForWeb(currentCaseDb, currentCaseId, caseName, password, exportCaseKey);
+      const { bundle, overflowFiles } = await exportForWeb(currentCaseDb, currentCaseId, caseName, password, exportCaseKey);
       const bundleJson = JSON.stringify(bundle);
 
       // Also deploy directly to docs/ for GitHub Pages
@@ -4703,11 +4735,22 @@ function registerIpcHandlers() {
         fs.writeFileSync(path.join(docsDir, 'vault.enc.json'), bundleJson, 'utf8');
         console.log('[WebExport] Vault deployed to docs/vault.enc.json');
 
+        // Write overflow content files (large docs stored separately)
+        if (overflowFiles && overflowFiles.length > 0) {
+          const contentDir = path.join(docsDir, 'content');
+          if (!fs.existsSync(contentDir)) fs.mkdirSync(contentDir, { recursive: true });
+          for (const of_ of overflowFiles) {
+            const filePath = path.join(contentDir, `${of_.id}.enc`);
+            fs.writeFileSync(filePath, JSON.stringify(of_.encBundle), 'utf8');
+            console.log('[WebExport] Wrote overflow:', filePath);
+          }
+        }
+
         // Auto-push to git (execFileSync avoids shell injection)
         try {
           const { execFileSync } = require('child_process');
           const dateStr = new Date().toISOString().slice(0, 10);
-          execFileSync('git', ['add', 'docs/vault.enc.json'], { cwd: repoDir, timeout: 10000 });
+          execFileSync('git', ['add', 'docs/vault.enc.json', 'docs/content/'], { cwd: repoDir, timeout: 10000 });
           try {
             execFileSync('git', ['commit', '-m', `Update web vault export ${dateStr}`], { cwd: repoDir, timeout: 10000 });
           } catch (commitErr) {

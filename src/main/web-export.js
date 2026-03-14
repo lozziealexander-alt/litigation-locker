@@ -3,6 +3,10 @@
  *
  * Encryption uses AES-GCM with PBKDF2 key derivation, compatible with the
  * Web Crypto API so the browser-based viewer can decrypt client-side.
+ *
+ * Images are compressed with sharp for web preview (max 1600px, JPEG 75%).
+ * Documents whose compressed content exceeds OVERFLOW_THRESHOLD are exported
+ * as separate encrypted files in docs/content/ and loaded on demand.
  */
 const crypto = require('crypto');
 const db = require('./database/init');
@@ -13,18 +17,41 @@ const KEY_LENGTH = 32; // 256-bit
 const IV_LENGTH = 12;  // 96-bit for AES-GCM
 const SALT_LENGTH = 16;
 
+// Documents larger than this (after compression) go into separate overflow files
+const OVERFLOW_THRESHOLD = 5 * 1024 * 1024; // 5 MB
+
+/**
+ * Compress an image buffer for web preview using sharp.
+ * Returns a smaller JPEG/PNG buffer suitable for inline display.
+ */
+async function compressImage(buffer, mimeType) {
+  const sharp = require('sharp');
+  try {
+    let pipeline = sharp(buffer).rotate(); // auto-rotate based on EXIF
+    if (mimeType === 'image/png') {
+      // Keep PNG format but resize
+      pipeline = pipeline.resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+        .png({ quality: 80, compressionLevel: 9 });
+    } else {
+      // Convert everything else to JPEG
+      pipeline = pipeline.resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 75, mozjpeg: true });
+    }
+    return await pipeline.toBuffer();
+  } catch (e) {
+    console.warn('[WebExport] sharp compression failed, using original:', e.message);
+    return buffer; // fallback to original
+  }
+}
+
 /**
  * Export all data for the currently-open case database.
- * Returns a plain JS object matching the shapes expected by the renderer.
+ * Returns { data, overflowDocs } where overflowDocs are large documents
+ * that should be stored as separate encrypted files.
  */
-function exportCaseData(caseDb, caseId, caseName, caseKey = null) {
+async function exportCaseData(caseDb, caseId, caseName, caseKey = null) {
   const data = { caseId, caseName };
-
-  // Documents — strip encrypted_content blob (too large), but decrypt image
-  // and PDF files into base64 when a caseKey is available so the web viewer can preview them.
-  const MAX_DOC_BYTES = 10 * 1024 * 1024; // skip individual files > 10 MB encrypted
-  const MAX_TOTAL_DOC_BYTES = 30 * 1024 * 1024; // cap total content payload at 30 MB
-  let totalDocBytes = 0;
+  const overflowDocs = []; // { id, content_b64, mimeType }
 
   // Lazy-require vault decrypt so a module-load failure can't crash the export
   let vaultDecrypt = null;
@@ -38,31 +65,59 @@ function exportCaseData(caseDb, caseId, caseName, caseKey = null) {
 
   const PREVIEWABLE = (mime) => mime && (mime.startsWith('image/') || mime === 'application/pdf');
 
-  data.documents = caseDb.prepare(`
+  const allDocs = caseDb.prepare(`
     SELECT * FROM documents ORDER BY document_date
-  `).all().map(doc => {
+  `).all();
+
+  data.documents = [];
+  let inlineBytes = 0;
+
+  for (const doc of allDocs) {
     const encContent = doc.encrypted_content;
     delete doc.encrypted_content;
 
     if (vaultDecrypt && caseKey && PREVIEWABLE(doc.file_type) && encContent) {
       try {
-        if (
-          Buffer.isBuffer(encContent) &&
-          encContent.length > 32 &&            // must have at least IV + authTag
-          encContent.length <= MAX_DOC_BYTES &&
-          totalDocBytes + encContent.length <= MAX_TOTAL_DOC_BYTES
-        ) {
+        if (Buffer.isBuffer(encContent) && encContent.length > 32) {
           const decrypted = vaultDecrypt(encContent, caseKey);
-          doc.content_b64 = decrypted.toString('base64');
-          totalDocBytes += encContent.length;
+
+          // Compress images for web preview
+          let previewBuf = decrypted;
+          let previewMime = doc.file_type;
+          if (doc.file_type.startsWith('image/')) {
+            previewBuf = await compressImage(decrypted, doc.file_type);
+            // Update mime if we converted to JPEG
+            if (doc.file_type !== 'image/png') {
+              previewMime = 'image/jpeg';
+            }
+            console.log(`[WebExport] ${doc.filename}: ${(encContent.length/1024).toFixed(0)}KB → ${(previewBuf.length/1024).toFixed(0)}KB`);
+          }
+
+          const contentB64 = previewBuf.toString('base64');
+
+          if (previewBuf.length > OVERFLOW_THRESHOLD) {
+            // Large document → separate overflow file
+            overflowDocs.push({ id: doc.id, content_b64: contentB64, mimeType: previewMime });
+            doc.content_url = `content/${doc.id}.enc`;
+            console.log(`[WebExport] ${doc.filename}: overflow (${(previewBuf.length/1024/1024).toFixed(1)}MB) → ${doc.content_url}`);
+          } else {
+            // Small enough to inline
+            doc.content_b64 = contentB64;
+            if (previewMime !== doc.file_type) {
+              doc.preview_mime = previewMime;
+            }
+            inlineBytes += previewBuf.length;
+          }
         }
       } catch (e) {
         // Decryption failure — skip this doc; don't abort the whole export
         console.warn('[WebExport] Decrypt failed for doc', doc.id, ':', e.message);
       }
     }
-    return doc;
-  });
+    data.documents.push(doc);
+  }
+
+  console.log(`[WebExport] Inline content: ${(inlineBytes/1024/1024).toFixed(1)}MB, overflow files: ${overflowDocs.length}`);
 
   // Actors
   data.actors = caseDb.prepare(`
@@ -131,14 +186,14 @@ function exportCaseData(caseDb, caseId, caseName, caseKey = null) {
     SELECT incident_id, event_id, event_role FROM incident_events
   `).all();
 
-  // Timeline connections (include id so the Connections page can reference them)
+  // Timeline connections
   data.timelineConnections = caseDb.prepare(`
     SELECT id, source_id, source_type, target_id, target_type,
            connection_type, strength, days_between, description, auto_detected
     FROM timeline_connections
   `).all();
 
-  // Suggested connections (AI-detected, pending review)
+  // Suggested connections
   try {
     data.suggestedConnections = caseDb.prepare(`
       SELECT id, source_id, source_type, target_id, target_type,
@@ -202,23 +257,27 @@ function exportCaseData(caseDb, caseId, caseName, caseKey = null) {
       FROM context_documents
     `).all();
   } catch (e) {
-    // Table may not exist in older databases
     data.contextDocs = [];
   }
 
-  return data;
+  return { data, overflowDocs };
 }
 
 /**
  * Encrypt a JSON-serializable object with a password.
- * Returns { encrypted (base64), salt (base64), iv (base64) }
+ * Returns Promise<{ encrypted (base64), salt (base64), iv (base64) }>
+ * Uses async PBKDF2 so the main-process event loop is not blocked.
  */
-function encryptForWeb(data, password) {
+async function encryptForWeb(data, password) {
   const salt = crypto.randomBytes(SALT_LENGTH);
   const iv = crypto.randomBytes(IV_LENGTH);
 
-  // Derive key using PBKDF2 (same as Web Crypto will use to decrypt)
-  const key = crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, KEY_LENGTH, 'sha256');
+  // Async PBKDF2 — yields the event loop during the 100k iterations
+  const key = await new Promise((resolve, reject) => {
+    crypto.pbkdf2(password, salt, PBKDF2_ITERATIONS, KEY_LENGTH, 'sha256', (err, dk) => {
+      if (err) reject(err); else resolve(dk);
+    });
+  });
 
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   const json = JSON.stringify(data);
@@ -233,13 +292,25 @@ function encryptForWeb(data, password) {
 }
 
 /**
- * Full export pipeline: extract data → encrypt → return bundle.
+ * Full export pipeline: extract data → compress images → encrypt → return bundle + overflow files.
+ * Returns { bundle, overflowFiles: [{ id, encBundle }] }
  */
-function exportForWeb(caseDb, caseId, caseName, password, caseKey = null) {
-  const data = exportCaseData(caseDb, caseId, caseName, caseKey);
-  const bundle = encryptForWeb(data, password);
+async function exportForWeb(caseDb, caseId, caseName, password, caseKey = null) {
+  const { data, overflowDocs } = await exportCaseData(caseDb, caseId, caseName, caseKey);
+
+  // Encrypt main bundle
+  const bundle = await encryptForWeb(data, password);
   bundle.caseName = caseName;
-  return bundle;
+
+  // Encrypt each overflow document separately (same password, independent salt/iv)
+  const overflowFiles = [];
+  for (const od of overflowDocs) {
+    const encBundle = await encryptForWeb({ content_b64: od.content_b64, mimeType: od.mimeType }, password);
+    overflowFiles.push({ id: od.id, encBundle });
+    console.log(`[WebExport] Encrypted overflow: ${od.id} (${(JSON.stringify(encBundle).length/1024/1024).toFixed(1)}MB)`);
+  }
+
+  return { bundle, overflowFiles };
 }
 
 module.exports = { exportCaseData, encryptForWeb, exportForWeb };

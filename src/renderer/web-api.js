@@ -40,6 +40,7 @@ async function decryptVault(encryptedB64, saltB64, ivB64, password) {
 // ── State ───────────────────────────────────────────────────────────────────
 
 let _vault = null;  // Decrypted vault data
+let _password = null; // Stored for overflow file decryption
 
 // Helper: build lookup maps once after decryption
 let _tagsByEvent = {};
@@ -237,21 +238,37 @@ function buildApi() {
       updateDate: noopFalse,
       updateType: noopFalse,
       rename: noopFalse,
-      getContent: (docId) => {
+      getContent: async (docId) => {
         const doc = (v.documents || []).find(d => d.id === docId);
-        if (!doc) return Promise.resolve({ success: false, error: 'Document not found' });
+        if (!doc) return { success: false, error: 'Document not found' };
         // If vault contains decrypted binary content (exported with caseKey), serve it
+        const mime = doc.preview_mime || doc.file_type;
         if (doc.content_b64) {
-          return Promise.resolve({ success: true, data: doc.content_b64, mimeType: doc.file_type });
+          return { success: true, data: doc.content_b64, mimeType: mime };
         }
-        // Images and PDFs without stored content — returning false prevents the
-        // DocumentPanel from opening a preview with garbled/broken data
+        // If document has a content_url, fetch and decrypt the overflow file on demand
+        if (doc.content_url) {
+          try {
+            const resp = await fetch(doc.content_url);
+            if (!resp.ok) throw new Error('Fetch failed: ' + resp.status);
+            const encBundle = await resp.json();
+            const overflowData = await decryptVault(encBundle.encrypted, encBundle.salt, encBundle.iv, _password);
+            // Cache it so subsequent clicks don't re-fetch
+            doc.content_b64 = overflowData.content_b64;
+            if (overflowData.mimeType) doc.preview_mime = overflowData.mimeType;
+            return { success: true, data: overflowData.content_b64, mimeType: overflowData.mimeType || mime };
+          } catch (e) {
+            console.error('[web-api] overflow fetch failed:', e);
+            return { success: false, error: 'Failed to load document content: ' + e.message };
+          }
+        }
+        // Images and PDFs without stored content
         if (doc.file_type && (doc.file_type.startsWith('image/') || doc.file_type === 'application/pdf')) {
-          return Promise.resolve({ success: false, error: 'Content not available in read-only vault — re-export to include previews' });
+          return { success: false, error: 'Content not available in read-only vault — re-export to include previews' };
         }
         // Text-based documents — serve extracted text
         const text = doc.extracted_text || 'No text available.';
-        return Promise.resolve({ success: true, data: text, mimeType: 'text/plain' });
+        return { success: true, data: text, mimeType: 'text/plain' };
       },
       reclassify: noopFalse,
       addDateEntry: noopFalse,
@@ -644,6 +661,7 @@ window.__webViewerReady = (async function init() {
           _vault = await decryptVault(
             vaultBundle.encrypted, vaultBundle.salt, vaultBundle.iv, password
           );
+          _password = password; // Store for overflow file decryption
           buildLookups();
           buildApi();
           return { success: true };
